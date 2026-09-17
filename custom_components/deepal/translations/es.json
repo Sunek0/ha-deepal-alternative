@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Changan Deepal",
+        "description": "Selecciona la plataforma que usas en la app My Changan y pega los tokens que imprimen los ejemplos del SDK.",
+        "data": {
+          "platform": "Plataforma",
+          "access_token": "Access token",
+          "refresh_token": "Refresh token (internacional, opcional)",
+          "cac_token": "CAC token (internacional, opcional)",
+          "country": "Código de país de venta (internacional, p. ej. ES)",
+          "phone": "Teléfono (opcional)"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Autenticación fallida. Revisa el token de la plataforma seleccionada.",
+      "cannot_connect": "No se pudo contactar con la API de Changan Deepal."
+    },
+    "abort": {
+      "already_configured": "Esta cuenta ya está configurada."
+    }
+  }
+}
