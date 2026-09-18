@@ -6,7 +6,7 @@ from typing import Any
 
 _REDACTED = "[redacted]"
 _MAX_STRING_LENGTH = 500
-_SAFE_HEADER_KEYS = ("selectcountry", "appversion", "language")
+_SAFE_HEADER_KEYS = ("selectcountry", "appversion", "language", "x-os-version")
 
 _SENSITIVE_EXACT_KEYS = {
     "access_token",

@@ -85,7 +85,8 @@
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log redacted API traffic",
           "enable_mqtt_controls": "Enable experimental remote controls for MQTT vehicles (S05)",
-          "os_version": "Declared Android version (diagnostic)"
+          "os_version": "Declared Android version (diagnostic)",
+          "tsp_token_source": "TSP token source (diagnostic)"
         }
       }
     }

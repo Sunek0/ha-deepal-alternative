@@ -34,6 +34,7 @@ from .const import (
     CONF_CONTROL_PIN,
     CONF_DEVICE_ID,
     CONF_OS_VERSION,
+    CONF_TSP_TOKEN_SOURCE,
     CONF_USER_ID,
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
@@ -42,6 +43,7 @@ from .const import (
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_OS_VERSION,
+    DEFAULT_TSP_TOKEN_SOURCE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -502,6 +504,17 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=["15", "14", "13", "12", "11", "10", "9"],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_TSP_TOKEN_SOURCE,
+                    default=options.get(
+                        CONF_TSP_TOKEN_SOURCE, DEFAULT_TSP_TOKEN_SOURCE
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["cac", "cac_user_id", "ca_user_id"],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),

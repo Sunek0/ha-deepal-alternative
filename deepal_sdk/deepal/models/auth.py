@@ -11,6 +11,8 @@ class AuthToken(BaseModel):
     expires_in: Optional[int] = Field(default=None, description="Expiration time in seconds")
     refresh_token: Optional[str] = Field(default=None, description="Refresh token if available")
     cac_token: Optional[str] = Field(default=None, description="International CAC token if available")
+    ca_user_id: Optional[str] = Field(default=None, description="International CA user id if available")
+    cac_user_id: Optional[str] = Field(default=None, description="International CAC user id if available")
     user_id: Optional[str] = Field(default=None, description="User ID associated with token")
 
 
