@@ -130,17 +130,22 @@ la calefacción del volante (`cond.climate.steering_wheel_heater_on` / `steering
 
 ### Integración de Home Assistant
 
-En la integración elige la plataforma **International (Europe)** y pega los tokens Access, Refresh y
-CAC que imprimen los ejemplos de login. Las entradas internacionales son de solo lectura (sensores y
-binary sensors) salvo el control del clima, que se describe abajo; el resto de comandos remotos no
-está soportado todavía.
+Añade la integración y elige la plataforma **International (Europe)**: el flujo hace el login real
+en Home Assistant (código por email o SMS), genera el par de claves de firma y guarda los tokens,
+el `user_id` y el país. Si la sesión caduca, Home Assistant pedirá reautenticarse. En las opciones
+de la entrada puedes ajustar el intervalo de sondeo, el PIN de control remoto y el registro de
+tráfico API redactado (útil para diagnosticar).
+
+Los vehículos con backend MQTT (Deepal S05) usan la telemetría MQTT cuando la entrada tiene
+`user_id`; si el gateway CA rechaza la cuenta, la integración avisa y continúa con la condición
+REST. Los comandos remotos del S05 siguen en solo lectura por ahora.
 
 ### Control del clima (plataforma internacional)
 
-Para habilitar el control del aire acondicionado, vuelve a ejecutar el ejemplo de login y copia la
-**clave privada** que imprime en el campo "Login private key" de la integración (el PIN de control es
-opcional para el clima). Aparecerá una entidad `climate` por vehículo con encendido/apagado y
-temperatura objetivo entre 16 y 30 °C. El SDK también permite enviar el comando directamente:
+Para habilitar el control del aire acondicionado, el login debe haber generado la clave privada (el
+flujo de la integración lo hace automáticamente). Aparecerá una entidad `climate` por vehículo con
+encendido/apagado y temperatura objetivo entre 16 y 30 °C. El SDK también permite enviar el comando
+directamente:
 
 ```python
 await client.control_air_conditioner("CAR_ID", enabled=True, target_temp_c=22.0)
