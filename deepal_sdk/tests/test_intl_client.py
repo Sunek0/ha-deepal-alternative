@@ -446,7 +446,7 @@ async def test_get_vehicle_condition_defaults_for_missing_groups():
     assert condition.battery.soc_percentage is None
     assert condition.doors.locked is True
     assert condition.doors.driver_door_open is False
-    assert condition.climate.power_on is False
+    assert condition.climate.power_on is None
     assert condition.climate.steering_wheel_heater_on is False
     assert condition.climate.steering_wheel_heater_level == 0
     assert condition.windows.front_left_open is False
@@ -1389,3 +1389,44 @@ async def test_api_error_message_includes_gateway_code():
 
     assert "HW_1_1_01_001" in str(err.value)
     assert err.value.code == "HW_1_1_01_001"
+
+
+@pytest.mark.asyncio
+async def test_condition_without_ac_status_reports_unknown_power():
+    payload = {"hvac": {"remoteTemp": 250, "insideTemp": 270}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.climate.power_on is None
+    assert condition.climate.target_temperature_c == 25.0
+    assert condition.climate.inside_temperature_c == 27.0
+
+
+@pytest.mark.asyncio
+async def test_negative_seat_levels_are_normalized():
+    payload = {
+        "seat": {
+            "leftFront": {"heatStatus": -1, "ventStatus": -1},
+            "rightFront": {"heatStatus": 0, "ventStatus": 1},
+            "leftBack": {"level": -1},
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.seats.front_left.heating_level == 0
+    assert condition.seats.front_left.ventilation_level == 0
+    assert condition.seats.rear_left.heating_level == 0
+    assert condition.seats.front_right.ventilation_level == 1

@@ -511,6 +511,10 @@ class DeepalIntlClient:
             parsed = _as_float(value)
             return parsed / 10 if parsed is not None else None
 
+        def _level(value: Any) -> int:
+            level = _as_int(value)
+            return level if level is not None and level > 0 else 0
+
         charge_status = charge.get("chargeStatus")
         charge_connection = charge.get("chargeConStatus")
         if charge_status not in (None, 0):
@@ -609,8 +613,8 @@ class DeepalIntlClient:
             if heating is None:
                 heating = data.get("level")
             return SeatStatus(
-                heating_level=_as_int(heating) or 0,
-                ventilation_level=_as_int(data.get("ventStatus")) or 0,
+                heating_level=_level(heating),
+                ventilation_level=_level(data.get("ventStatus")),
             )
 
         seats_condition = SeatsCondition(
@@ -639,9 +643,12 @@ class DeepalIntlClient:
         )
 
         steering_heater = _as_int(status.get("steeringWheelHeater"))
+        ac_status = hvac.get("acStatus")
 
         climate = ClimateCondition(
-            power_on=hvac.get("acStatus") not in (None, 0),
+            power_on=(
+                ac_status not in (None, 0) if ac_status is not None else None
+            ),
             target_temperature_c=target_temp / 10 if target_temp is not None else None,
             inside_temperature_c=_tenths(hvac.get("insideTemp")),
             outside_temperature_c=_tenths(hvac.get("outsideTemp")),

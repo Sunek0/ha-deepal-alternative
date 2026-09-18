@@ -90,7 +90,9 @@ class SeatsCondition(BaseModel):
 
 class ClimateCondition(BaseModel):
     """AC and Climate status."""
-    power_on: bool = False
+    power_on: Optional[bool] = Field(
+        default=None, description="AC power state; None when the vehicle did not report it"
+    )
     target_temperature_c: Optional[float] = None
     inside_temperature_c: Optional[float] = None
     outside_temperature_c: Optional[float] = None
