@@ -175,6 +175,7 @@ class DeepalIntlClient:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.cac_token: Optional[str] = None
+        self.access_token_expires_at: Optional[int] = None
         self.user_id: Optional[str] = None
         self.control_pin: Optional[str] = None
         self.rc_token: Optional[str] = None
@@ -355,6 +356,7 @@ class DeepalIntlClient:
         self.access_token = str(data["token"])
         self.refresh_token = data.get("refreshToken")
         self.cac_token = data.get("cacToken")
+        self.access_token_expires_at = self._jwt_expiry(self.access_token)
         self.user_id = data.get("userId")
 
         return AuthToken(
@@ -426,6 +428,26 @@ class DeepalIntlClient:
         )
         return self._store_tokens(data)
 
+    @staticmethod
+    def _jwt_expiry(token: Optional[str]) -> Optional[int]:
+        """Return the ``exp`` claim of a JWT access token, if present."""
+        if not token or token.count(".") < 2:
+            return None
+        try:
+            payload_b64 = token.split(".")[1]
+            payload_b64 += "=" * (-len(payload_b64) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+            exp = payload.get("exp")
+            return int(exp) if exp is not None else None
+        except (ValueError, TypeError):
+            return None
+
+    def access_token_expires_soon(self, margin_seconds: int = 300) -> bool:
+        """Return whether the access token expires within the margin."""
+        if self.access_token_expires_at is None:
+            return False
+        return time.time() >= self.access_token_expires_at - margin_seconds
+
     async def refresh_tokens(self) -> AuthToken:
         """Refresh the international session tokens."""
         if not self.refresh_token:
@@ -442,6 +464,7 @@ class DeepalIntlClient:
         self.access_token = str(data["token"])
         self.refresh_token = data.get("refreshToken") or self.refresh_token
         self.cac_token = data.get("cacToken") or self.cac_token
+        self.access_token_expires_at = self._jwt_expiry(self.access_token)
         self.user_id = data.get("userId") or self.user_id
 
         return AuthToken(
