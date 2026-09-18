@@ -96,7 +96,7 @@ class DeepalCabinClimateEntity(
     def hvac_mode(self) -> HVACMode | None:
         """Return the current HVAC mode."""
         cond = self._condition
-        if not cond:
+        if not cond or cond.climate.power_on is None:
             return None
         return HVACMode.HEAT_COOL if cond.climate.power_on else HVACMode.OFF
 

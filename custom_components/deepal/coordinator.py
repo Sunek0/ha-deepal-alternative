@@ -31,6 +31,7 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 _PENDING_RESULT_CODES = (None, -100, 0, 1015)
+_CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 
 
 class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleCondition]]):
@@ -54,6 +55,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.client = client
         self.vehicles: list[Vehicle] = []
         self._command_in_progress = False
+        self._next_mqtt_refresh_at = 0.0
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -73,15 +75,54 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
             try:
-                return await self.client.s05_mqtt_condition(vehicle_id)
+                condition = await self.client.s05_mqtt_condition(vehicle_id)
+                return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
+                if getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES and (
+                    await self._async_refresh_session_for_mqtt(err)
+                ):
+                    try:
+                        condition = await self.client.s05_mqtt_condition(vehicle_id)
+                        return self._merge_condition(vehicle_id, condition)
+                    except DeepalAPIError as retry_err:
+                        err = retry_err
                 _LOGGER.warning(
                     "Deepal MQTT telemetry unavailable for %s (%s); using the "
                     "REST condition endpoint",
                     vehicle_id,
                     err,
                 )
-        return await self.client.get_vehicle_condition(vehicle_id)
+        condition = await self.client.get_vehicle_condition(vehicle_id)
+        return self._merge_condition(vehicle_id, condition)
+
+    async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
+        """Refresh the session once per hour when the CA gateway rejects it."""
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if now < self._next_mqtt_refresh_at:
+            return False
+        self._next_mqtt_refresh_at = now + 3600
+        if not getattr(self.client, "refresh_token", None):
+            return False
+        _LOGGER.warning(
+            "Deepal MQTT token rejected (%s); refreshing the session and retrying",
+            err,
+        )
+        return await self._async_refresh_tokens()
+
+    def _merge_condition(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> VehicleCondition:
+        """Keep the last known AC state when the vehicle omits it.
+
+        S05 condition payloads have no ``hvac.acStatus``; overwriting the state
+        with the parser default would turn the climate entity off after every
+        poll, discarding optimistic command feedback.
+        """
+        previous = (self.data or {}).get(vehicle_id)
+        if previous is not None and condition.climate.power_on is None:
+            condition.climate.power_on = previous.climate.power_on
+        return condition
 
     def _uses_mqtt(self, vehicle: Vehicle) -> bool:
         """Return whether this vehicle should use the MQTT telemetry path.
