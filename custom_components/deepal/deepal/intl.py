@@ -223,6 +223,9 @@ class DeepalIntlClient:
         }
         if self.access_token:
             headers["authorization"] = self._authorization_value()
+            if self.cac_token:
+                headers["X-Tsp-User-Token"] = self.cac_token
+                headers["X-VCS-User-Token"] = self.cac_token
         return headers
 
     def _authorization_value(self) -> str:
