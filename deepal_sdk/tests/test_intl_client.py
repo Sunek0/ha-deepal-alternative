@@ -11,8 +11,11 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from deepal import (
     DeepalAPIError,
     DeepalAuthError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalIntlClient,
+    DeepalRateLimitError,
 )
 from deepal.endpoints import (
     INTL_CHECK_CONTROL_CODE,
@@ -1021,3 +1024,51 @@ async def test_stale_rc_token_without_pin_propagates():
 
     assert counts["command"] == 1
     assert "check" not in counts
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_error_mapped():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"success": False, "code": "CAC_1_1_01_033", "msg": "too many requests"},
+        )
+
+    client = _client(handler)
+    with pytest.raises(DeepalRateLimitError):
+        await client.request_email_code(EMAIL)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_serial_decrypt_mismatch_raises_command_auth_error():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    _, other_public_key = _login_keypair()
+    client.private_key_pem, _ = _login_keypair()
+    serial = _encrypted_serial(other_public_key, "SN123")
+
+    with pytest.raises(DeepalCommandAuthError):
+        client.decrypt_serial_no(serial)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_prerequisites_raise_command_not_ready():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    with pytest.raises(DeepalCommandNotReady):
+        await client._signed_command(
+            "/intl-app-gw/intl-app-car-control/api/control/doors",
+            "car-1",
+            {"command": "lock"},
+        )
+
+    client.private_key_pem, _ = _login_keypair()
+    with pytest.raises(DeepalCommandNotReady):
+        await client._signed_command(
+            "/intl-app-gw/intl-app-car-control/api/control/doors",
+            "car-1",
+            {"command": "lock"},
+            require_rc_token=True,
+        )
+    await client.close()

@@ -7,6 +7,9 @@ from deepal.exceptions import (
     DeepalAuthError,
     DeepalAPIError,
     DeepalConnectionError,
+    DeepalRateLimitError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
 )
 from deepal.models import (
     AuthToken,
@@ -27,6 +30,9 @@ __all__ = [
     "DeepalAuthError",
     "DeepalAPIError",
     "DeepalConnectionError",
+    "DeepalRateLimitError",
+    "DeepalCommandAuthError",
+    "DeepalCommandNotReady",
     "AuthToken",
     "Vehicle",
     "VehicleCondition",
