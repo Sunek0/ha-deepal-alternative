@@ -24,6 +24,7 @@ from deepal.endpoints import (
     INTL_CONTROL_RESULT,
     INTL_GET_MY_CARS,
     INTL_GET_SERIAL_NO,
+    INTL_GET_SECURITY_CODE_STATUS,
     INTL_GET_VEHICLE_CONDITION,
     INTL_LOGIN_BY_EMAIL_CODE,
     INTL_LOGIN_BY_MOBILE_CODE,
@@ -193,9 +194,9 @@ class DeepalIntlClient:
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode()
-        pub_body = "".join(
+        pub_body = "\n".join(
             line for line in public_pem.splitlines() if "BEGIN" not in line and "END" not in line
-        )
+        ) + "\n"
         return private_pem, pub_body
 
     @staticmethod
@@ -280,6 +281,11 @@ class DeepalIntlClient:
         if payload.get("success") is False:
             code = payload.get("code")
             msg = payload.get("msg") or payload.get("message") or f"HTTP {response.status_code}"
+            if str(code) == "COMMON_1_1_01_001" and path.endswith("/serial-no/get"):
+                raise DeepalAuthError(
+                    "Remote command signing was rejected; log in again to register "
+                    "a new command-signing key."
+                )
             if _is_auth_failure(code):
                 raise DeepalAuthError(f"Authentication failed: {code} {msg}")
             raise DeepalAPIError(
@@ -790,7 +796,7 @@ class DeepalIntlClient:
         signature = private_key.sign(
             canonical.encode(), padding.PKCS1v15(), hashes.SHA256()
         )
-        return base64.b64encode(signature).decode()
+        return base64.encodebytes(signature).decode()
 
     async def get_serial_data(self, serial_type: str = "1") -> str:
         """Fetch the encrypted vehicle serial number used by signed commands."""
@@ -809,8 +815,20 @@ class DeepalIntlClient:
         ciphertext = base64.b64decode("".join(serial_data.split()))
         return private_key.decrypt(ciphertext, padding.PKCS1v15()).decode().strip()
 
+    async def get_security_code_status(self) -> dict[str, Any]:
+        """Fetch the control PIN status before exchanging it.
+
+        The official app always calls this immediately before ``check-code``
+        (live capture, changelog of BeauGiles/ha-deepal-cloud 0.3.4).
+        """
+        data = await self._request(
+            INTL_GET_SECURITY_CODE_STATUS, json_data={}, auth_required=True
+        )
+        return data if isinstance(data, dict) else {}
+
     async def check_control_code(self, control_pin: str) -> str:
         """Exchange the remote-control PIN for an rcToken."""
+        await self.get_security_code_status()
         data = await self._request(
             INTL_CHECK_CONTROL_CODE,
             json_data={"safeCode": self.encrypt_request_value(control_pin)},
@@ -832,10 +850,14 @@ class DeepalIntlClient:
     ) -> str:
         if not self.private_key_pem:
             raise DeepalAuthError("Login private key is required to sign commands.")
-        if require_rc_token and not self.rc_token:
-            if not self.control_pin:
+        reused_rc_token = False
+        if require_rc_token:
+            if self.rc_token:
+                reused_rc_token = True
+            elif self.control_pin:
+                await self.check_control_code(self.control_pin)
+            else:
                 raise DeepalAuthError("Control PIN is required for this command.")
-            await self.check_control_code(self.control_pin)
 
         serial_data = await self.get_serial_data(serial_type)
         serial_no = self.decrypt_serial_no(serial_data)
@@ -849,7 +871,27 @@ class DeepalIntlClient:
             signed_payload, omit_keys=sign_omit_keys
         )
 
-        data = await self._request(path, json_data=signed_payload, auth_required=True)
+        try:
+            data = await self._request(
+                path, json_data=signed_payload, auth_required=True
+            )
+        except (DeepalAPIError, DeepalAuthError):
+            # A cached rcToken is a session that expires (the official app asks
+            # for the control PIN again roughly weekly); the server only reveals
+            # it is stale when it rejects a command that reused it. Exchange a
+            # fresh token with the stored PIN and retry once.
+            if not (require_rc_token and reused_rc_token and self.control_pin):
+                raise
+            self.rc_token = None
+            await self.check_control_code(self.control_pin)
+            signed_payload["rcToken"] = self.rc_token or ""
+            signed_payload["sign"] = self.sign_payload(
+                signed_payload, omit_keys=sign_omit_keys
+            )
+            data = await self._request(
+                path, json_data=signed_payload, auth_required=True
+            )
+
         if not isinstance(data, dict) or not data.get("commandId"):
             raise DeepalAPIError("Control command did not return a commandId.")
         return str(data["commandId"])

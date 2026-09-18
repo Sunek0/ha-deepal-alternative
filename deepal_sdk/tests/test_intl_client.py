@@ -20,6 +20,7 @@ from deepal.endpoints import (
     INTL_CONTROL_AIR_CONDITIONER,
     INTL_CONTROL_RESULT,
     INTL_GET_MY_CARS,
+    INTL_GET_SECURITY_CODE_STATUS,
     INTL_GET_SERIAL_NO,
     INTL_GET_VEHICLE_CONDITION,
     INTL_LOGIN_BY_EMAIL_CODE,
@@ -95,6 +96,7 @@ async def test_login_with_email_code_returns_tokens():
     assert captured["body"]["authCode"] == CODE
     assert captured["body"]["salesCountry"] == "GB"
     assert captured["body"]["pubKey"]
+    assert captured["body"]["pubKey"].endswith("\n")
     assert EMAIL not in captured["body"]["email"]
     assert token.access_token == "test_token_123"
     assert token.refresh_token == "test_refresh_123"
@@ -662,10 +664,10 @@ async def test_control_air_conditioner_without_command_id_raises():
 
 @pytest.mark.asyncio
 async def test_check_control_code_returns_and_caches_rc_token():
-    captured = {}
+    captured = {"paths": []}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["path"] = request.url.path
+        captured["paths"].append(request.url.path)
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -677,7 +679,7 @@ async def test_check_control_code_returns_and_caches_rc_token():
     token = await client.check_control_code("1234")
     await client.close()
 
-    assert captured["path"] == INTL_CHECK_CONTROL_CODE
+    assert captured["paths"] == [INTL_GET_SECURITY_CODE_STATUS, INTL_CHECK_CONTROL_CODE]
     assert "1234" not in captured["body"]["safeCode"]
     assert token == "test_rc_123"
     assert client.rc_token == "test_rc_123"
@@ -891,3 +893,131 @@ async def test_s05_mqtt_condition_uses_normalized_params():
     assert condition.total_odometer_km == 12000
     assert condition.doors.locked is True
     assert condition.tires.front_left.pressure_bar == 2.4
+
+
+def test_sign_payload_uses_mime_base64():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.private_key_pem, public_key = _login_keypair()
+
+    signature = client.sign_payload({"a": 1})
+
+    assert "\n" in signature
+    public_key.verify(
+        base64.b64decode(signature),
+        b"a=1",
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_serial_no_signing_rejected_raises_auth_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "COMMON_1_1_01_001",
+                "msg": "sign verify failed",
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.private_key_pem, _ = _login_keypair()
+    with pytest.raises(DeepalAuthError):
+        await client.get_serial_data()
+    await client.close()
+
+
+def _stale_rc_token_handler(counts: dict):
+    private_pem, public_key = _login_keypair()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == INTL_GET_SERIAL_NO:
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": _encrypted_serial(public_key, "SN123"),
+                },
+            )
+        if path == INTL_GET_SECURITY_CODE_STATUS:
+            counts["status"] = counts.get("status", 0) + 1
+            return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
+        if path == INTL_CHECK_CONTROL_CODE:
+            counts["check"] = counts.get("check", 0) + 1
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"rcToken": "fresh-token"},
+                },
+            )
+        counts["command"] = counts.get("command", 0) + 1
+        if counts["command"] == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "success": False,
+                    "code": "COMMON_1_1_04_001",
+                    "msg": "rcToken expired",
+                },
+            )
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"commandId": "cmd-1"}}
+        )
+
+    return private_pem, handler
+
+
+@pytest.mark.asyncio
+async def test_stale_rc_token_is_re_exchanged_and_retried():
+    counts: dict = {}
+    private_pem, handler = _stale_rc_token_handler(counts)
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.rc_token = "stale-token"
+    client.control_pin = "1234"
+
+    command_id = await client._signed_command(
+        "/intl-app-gw/intl-app-car-control/api/control/doors",
+        "car-1",
+        {"command": "lock", "open": True},
+        require_rc_token=True,
+        sign_omit_keys={"command", "rcToken"},
+    )
+    await client.close()
+
+    assert command_id == "cmd-1"
+    assert counts["command"] == 2
+    assert counts["check"] == 1
+    assert counts["status"] == 1
+    assert client.rc_token == "fresh-token"
+
+
+@pytest.mark.asyncio
+async def test_stale_rc_token_without_pin_propagates():
+    counts: dict = {}
+    private_pem, handler = _stale_rc_token_handler(counts)
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.rc_token = "stale-token"
+
+    with pytest.raises(DeepalAPIError):
+        await client._signed_command(
+            "/intl-app-gw/intl-app-car-control/api/control/doors",
+            "car-1",
+            {"command": "lock", "open": True},
+            require_rc_token=True,
+            sign_omit_keys={"command", "rcToken"},
+        )
+    await client.close()
+
+    assert counts["command"] == 1
+    assert "check" not in counts
