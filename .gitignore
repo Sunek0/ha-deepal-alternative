@@ -4,6 +4,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-My Changan.apk
+My Changan*.apk
 alauncher/
+alauncher-*/
 extracted/
+extracted-*/
+ha-deepal/
+login.md
