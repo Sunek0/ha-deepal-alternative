@@ -15,6 +15,20 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 
 
+def _set_windows(condition: Any, is_open: bool) -> Any:
+    windows = condition.windows
+    windows.front_left_open = is_open
+    windows.front_right_open = is_open
+    windows.rear_left_open = is_open
+    windows.rear_right_open = is_open
+    return condition
+
+
+def _set_boot(condition: Any, is_open: bool) -> Any:
+    condition.doors.trunk_open = is_open
+    return condition
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -65,6 +79,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
         await self.async_send_command(
             lambda: self.client.control_windows(self._car_id, True),
             is_done=lambda: self.is_closed is False,
+            optimistic_update=lambda cond: _set_windows(cond, True),
         )
 
     async def async_close_cover(self, **kwargs: Any) -> None:
@@ -72,6 +87,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
         await self.async_send_command(
             lambda: self.client.control_windows(self._car_id, False),
             is_done=lambda: self.is_closed is True,
+            optimistic_update=lambda cond: _set_windows(cond, False),
         )
 
 
@@ -100,6 +116,7 @@ class DeepalBootCover(DeepalEntity, CoverEntity):
         await self.async_send_command(
             lambda: self.client.control_trunk(self._car_id, True),
             is_done=lambda: self.is_closed is False,
+            optimistic_update=lambda cond: _set_boot(cond, True),
         )
 
     async def async_close_cover(self, **kwargs: Any) -> None:
@@ -107,4 +124,5 @@ class DeepalBootCover(DeepalEntity, CoverEntity):
         await self.async_send_command(
             lambda: self.client.control_trunk(self._car_id, False),
             is_done=lambda: self.is_closed is True,
+            optimistic_update=lambda cond: _set_boot(cond, False),
         )

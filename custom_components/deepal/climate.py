@@ -137,12 +137,20 @@ class DeepalCabinClimateEntity(
                 "S05 MQTT vehicles are read-only; enable the experimental MQTT "
                 "controls option first"
             )
+
+        def _optimistic(condition: Any) -> Any:
+            condition.climate.power_on = enabled
+            if enabled:
+                condition.climate.target_temperature_c = temperature
+            return condition
+
         try:
             await self.coordinator.async_execute_command(
                 self._car_id,
                 lambda: self.coordinator.client.control_air_conditioner(
                     self._car_id, enabled, temperature
                 ),
+                optimistic_update=_optimistic,
             )
         except HomeAssistantError:
             raise

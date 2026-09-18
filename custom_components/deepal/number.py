@@ -12,6 +12,11 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 
 
+def _set_charge_limit(condition: Any, percentage: int) -> Any:
+    condition.battery.charge_limit_percent = percentage
+    return condition
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -53,5 +58,6 @@ class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Set the charge limit."""
         await self.async_send_command(
-            lambda: self.client.control_charge_limit(self._car_id, int(value))
+            lambda: self.client.control_charge_limit(self._car_id, int(value)),
+            optimistic_update=lambda cond: _set_charge_limit(cond, int(value)),
         )

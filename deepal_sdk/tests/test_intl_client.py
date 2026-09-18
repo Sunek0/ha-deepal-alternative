@@ -1367,3 +1367,25 @@ async def test_control_flashing_honking_does_not_require_rc_token():
         "seriralNo=SN123&type=3&vehicleId=car-1",
         public_key,
     )
+
+
+@pytest.mark.asyncio
+async def test_api_error_message_includes_gateway_code():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "HW_1_1_01_001",
+                "msg": "Operation failed",
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError) as err:
+        await client.get_vehicles()
+    await client.close()
+
+    assert "HW_1_1_01_001" in str(err.value)
+    assert err.value.code == "HW_1_1_01_001"

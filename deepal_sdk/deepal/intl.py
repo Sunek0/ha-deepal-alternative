@@ -323,17 +323,19 @@ class DeepalIntlClient:
                 )
             if _is_auth_failure(code):
                 raise DeepalAuthError(f"Authentication failed: {code} {msg}")
+            detail = f"{code} {msg}" if code is not None else msg
             raise DeepalAPIError(
-                f"API Error: {msg}",
+                f"API Error: {detail}",
                 status_code=response.status_code,
                 code=code,
             )
 
         if not response.is_success:
+            code = payload.get("code")
             raise DeepalAPIError(
-                f"API Error: HTTP {response.status_code}",
+                f"API Error: HTTP {response.status_code} ({code})",
                 status_code=response.status_code,
-                code=payload.get("code"),
+                code=code,
             )
 
         return payload.get("data")

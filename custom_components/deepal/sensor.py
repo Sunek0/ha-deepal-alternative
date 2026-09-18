@@ -441,6 +441,7 @@ class DeepalSensor(DeepalBaseSensor):
     """Extended international sensor driven by a description."""
 
     entity_description: DeepalSensorDescription
+    _attr_has_entity_name = False
 
     def __init__(
         self,

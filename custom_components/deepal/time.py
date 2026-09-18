@@ -94,6 +94,12 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
             start = _format_hhmm(value)
         else:
             end = _format_hhmm(value)
+
+        def _optimistic(condition: Any) -> Any:
+            condition.battery.charge_schedule_start = start
+            condition.battery.charge_schedule_end = end
+            return condition
+
         await self.async_send_command(
             lambda: self.client.control_charge_schedule(
                 self._car_id,
@@ -104,5 +110,6 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
                 cond.battery.charge_plan_type or 1,
                 cond.battery.charge_plan_time_format or 1,
                 cond.battery.charge_plan_time_zone or "GMT+08:00",
-            )
+            ),
+            optimistic_update=_optimistic,
         )
