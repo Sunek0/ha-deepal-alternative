@@ -19,6 +19,13 @@ INTL_REFRESH_TOKEN = "/intl-app-gw/intl-app-auth/api/auth/refresh-token"
 INTL_GET_MY_CARS = "/intl-app-gw/intl-app-user/api/car/vehicles"
 INTL_GET_VEHICLE_CONDITION = "/intl-app-gw/intl-app-car-condition/api/vehicle/condition"
 
+# International Control Endpoints
+INTL_GET_SERIAL_NO = "/intl-app-gw/intl-app-car-control/api/serial-no/get"
+INTL_CHECK_CONTROL_CODE = "/intl-app-gw/intl-app-car-control/api/security-code/check-code"
+INTL_CONTROL_AIR_CONDITIONER = "/intl-app-gw/intl-app-car-control/api/control/air-conditioner"
+INTL_CONDITION_INQUIRY = "/intl-app-gw/intl-app-car-control/api/control/condition-inquiry"
+INTL_CONTROL_RESULT = "/intl-app-gw/intl-app-car-control/api/control/control-result"
+
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"
 GET_CAR_STATUS = "/dae-terminal-mobile/api/v1/car/status"

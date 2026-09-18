@@ -16,16 +16,13 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
+    CONF_PRIVATE_KEY,
+    CONF_CONTROL_PIN,
     DEFAULT_COUNTRY,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-PLATFORMS: list[Platform] = [
-    Platform.SENSOR,
-    Platform.BINARY_SENSOR,
-]
 
 
 def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
@@ -37,9 +34,22 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
         client.access_token = entry.data[CONF_ACCESS_TOKEN]
         client.refresh_token = entry.data.get(CONF_REFRESH_TOKEN) or None
         client.cac_token = entry.data.get(CONF_CAC_TOKEN) or None
+        client.private_key_pem = entry.data.get(CONF_PRIVATE_KEY) or None
+        client.control_pin = entry.data.get(CONF_CONTROL_PIN) or None
         return client
 
     return DeepalClient(access_token=entry.data[CONF_ACCESS_TOKEN])
+
+
+def _platforms(entry: ConfigEntry) -> list[Platform]:
+    """Return the entity platforms for an entry."""
+    platforms = [Platform.SENSOR, Platform.BINARY_SENSOR]
+    if (
+        entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
+        and entry.data.get(CONF_PRIVATE_KEY)
+    ):
+        platforms.append(Platform.CLIMATE)
+    return platforms
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -55,14 +65,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, _platforms(entry))
 
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id)

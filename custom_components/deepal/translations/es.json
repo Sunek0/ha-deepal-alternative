@@ -9,6 +9,8 @@
           "access_token": "Access token",
           "refresh_token": "Refresh token (internacional, opcional)",
           "cac_token": "CAC token (internacional, opcional)",
+          "private_key": "Clave privada del login (internacional, para comandos remotos)",
+          "control_pin": "PIN de control remoto (internacional, opcional)",
           "country": "Código de país de venta (internacional, p. ej. ES)",
           "phone": "Teléfono (opcional)"
         }

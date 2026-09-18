@@ -124,11 +124,27 @@ async def main():
 asyncio.run(main())
 ```
 
+La condición internacional incluye además presión y alarma de neumáticos (`cond.tires`), nivel de calor y
+ventilación por asiento (`cond.seats`), posición de las ventanillas (`cond.windows`) y estado y nivel de
+la calefacción del volante (`cond.climate.steering_wheel_heater_on` / `steering_wheel_heater_level`).
+
 ### Integración de Home Assistant
 
 En la integración elige la plataforma **International (Europe)** y pega los tokens Access, Refresh y
 CAC que imprimen los ejemplos de login. Las entradas internacionales son de solo lectura (sensores y
-binary sensors); los comandos remotos de la plataforma internacional todavía no están soportados.
+binary sensors) salvo el control del clima, que se describe abajo; el resto de comandos remotos no
+está soportado todavía.
+
+### Control del clima (plataforma internacional)
+
+Para habilitar el control del aire acondicionado, vuelve a ejecutar el ejemplo de login y copia la
+**clave privada** que imprime en el campo "Login private key" de la integración (el PIN de control es
+opcional para el clima). Aparecerá una entidad `climate` por vehículo con encendido/apagado y
+temperatura objetivo entre 16 y 30 °C. El SDK también permite enviar el comando directamente:
+
+```python
+await client.control_air_conditioner("CAR_ID", enabled=True, target_temp_c=22.0)
+```
 
 ## Estructura del Proyecto
 

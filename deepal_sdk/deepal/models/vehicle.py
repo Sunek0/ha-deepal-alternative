@@ -48,11 +48,34 @@ class DoorsCondition(BaseModel):
     hood_open: bool = False
 
 
+class WindowsCondition(BaseModel):
+    """Vehicle window positions."""
+    front_left_open: bool = False
+    front_right_open: bool = False
+    rear_left_open: bool = False
+    rear_right_open: bool = False
+
+
+class SeatStatus(BaseModel):
+    """Heating and ventilation level of one seat."""
+    heating_level: int = 0
+    ventilation_level: int = 0
+
+
+class SeatsCondition(BaseModel):
+    """Per-position seat comfort status."""
+    front_left: SeatStatus = Field(default_factory=SeatStatus)
+    front_right: SeatStatus = Field(default_factory=SeatStatus)
+    rear_left: SeatStatus = Field(default_factory=SeatStatus)
+    rear_right: SeatStatus = Field(default_factory=SeatStatus)
+
+
 class ClimateCondition(BaseModel):
     """AC and Climate status."""
     power_on: bool = False
     target_temperature_c: Optional[float] = None
     steering_wheel_heater_on: bool = False
+    steering_wheel_heater_level: int = 0
     driver_seat_ventilation_level: int = 0
     driver_seat_heating_level: int = 0
 
@@ -64,6 +87,8 @@ class VehicleCondition(BaseModel):
     total_odometer_km: Optional[float] = Field(default=None, description="Total mileage (CdcTotMilg)")
     battery: BatteryCondition = Field(default_factory=BatteryCondition)
     doors: DoorsCondition = Field(default_factory=DoorsCondition)
+    windows: WindowsCondition = Field(default_factory=WindowsCondition)
+    seats: SeatsCondition = Field(default_factory=SeatsCondition)
     climate: ClimateCondition = Field(default_factory=ClimateCondition)
     tires: TiresCondition = Field(default_factory=TiresCondition)
     last_updated_timestamp: Optional[int] = Field(default=None, description="Unix timestamp of last report")

@@ -6,6 +6,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 
 from .deepal import DeepalClient, DeepalIntlClient, DeepalAuthError, DeepalError
 from .const import (
@@ -18,6 +19,8 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
+    CONF_PRIVATE_KEY,
+    CONF_CONTROL_PIN,
     DEFAULT_COUNTRY,
 )
 
@@ -40,6 +43,8 @@ def _build_client(user_input: dict[str, Any]) -> DeepalClient | DeepalIntlClient
         client.access_token = token
         client.refresh_token = (user_input.get(CONF_REFRESH_TOKEN) or "").strip() or None
         client.cac_token = (user_input.get(CONF_CAC_TOKEN) or "").strip() or None
+        client.private_key_pem = (user_input.get(CONF_PRIVATE_KEY) or "").strip() or None
+        client.control_pin = (user_input.get(CONF_CONTROL_PIN) or "").strip() or None
         return client
 
     return DeepalClient(access_token=token)
@@ -78,6 +83,8 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_ACCESS_TOKEN: token,
                         CONF_REFRESH_TOKEN: (user_input.get(CONF_REFRESH_TOKEN) or "").strip(),
                         CONF_CAC_TOKEN: (user_input.get(CONF_CAC_TOKEN) or "").strip(),
+                        CONF_PRIVATE_KEY: (user_input.get(CONF_PRIVATE_KEY) or "").strip(),
+                        CONF_CONTROL_PIN: (user_input.get(CONF_CONTROL_PIN) or "").strip(),
                         CONF_COUNTRY: user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
                         CONF_PHONE: phone,
                     },
@@ -95,6 +102,12 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_ACCESS_TOKEN): str,
                 vol.Optional(CONF_REFRESH_TOKEN, default=""): str,
                 vol.Optional(CONF_CAC_TOKEN, default=""): str,
+                vol.Optional(CONF_PRIVATE_KEY, default=""): selector.TextSelector(
+                    selector.TextSelectorConfig(multiline=True)
+                ),
+                vol.Optional(CONF_CONTROL_PIN, default=""): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
                 vol.Optional(CONF_COUNTRY, default=DEFAULT_COUNTRY): str,
                 vol.Optional(CONF_PHONE, default=""): str,
             }
