@@ -62,22 +62,26 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
-            if self._uses_mqtt(vehicle):
-                try:
-                    condition = await self.client.s05_mqtt_condition(vehicle.car_id)
-                except DeepalAPIError as err:
-                    _LOGGER.warning(
-                        "Deepal MQTT telemetry unavailable for %s (%s); using the "
-                        "REST condition endpoint",
-                        vehicle.car_id,
-                        err,
-                    )
-                    condition = await self.client.get_vehicle_condition(vehicle.car_id)
-            else:
-                condition = await self.client.get_vehicle_condition(vehicle.car_id)
-            data[vehicle.car_id] = condition
+            data[vehicle.car_id] = await self._async_fetch_condition(vehicle.car_id)
 
         return data
+
+    async def _async_fetch_condition(self, vehicle_id: str) -> VehicleCondition:
+        """Fetch one condition through MQTT when available, REST otherwise."""
+        vehicle = next(
+            (item for item in self.vehicles if item.car_id == vehicle_id), None
+        )
+        if vehicle is not None and self._uses_mqtt(vehicle):
+            try:
+                return await self.client.s05_mqtt_condition(vehicle_id)
+            except DeepalAPIError as err:
+                _LOGGER.warning(
+                    "Deepal MQTT telemetry unavailable for %s (%s); using the "
+                    "REST condition endpoint",
+                    vehicle_id,
+                    err,
+                )
+        return await self.client.get_vehicle_condition(vehicle_id)
 
     def _uses_mqtt(self, vehicle: Vehicle) -> bool:
         """Return whether this vehicle should use the MQTT telemetry path.
@@ -146,6 +150,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         send_command: Callable[[], Awaitable[str]],
         *,
         is_done: Callable[[], bool] | None = None,
+        optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None = None,
         timeout: float = 30.0,
         interval: float = 2.0,
     ) -> None:
@@ -163,6 +168,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             previous_last_updated = current.last_updated_timestamp if current else None
 
             command_id = await send_command()
+
+            if optimistic_update is not None and current is not None:
+                try:
+                    updated = optimistic_update(current.model_copy(deep=True))
+                    data = dict(self.data or {})
+                    data[vehicle_id] = updated
+                    self.async_set_updated_data(data)
+                except Exception:  # noqa: BLE001 - never break the command
+                    _LOGGER.exception("Deepal optimistic state update failed")
 
             try:
                 await self.client.control_condition_inquiry(vehicle_id)
@@ -202,7 +216,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         while True:
             result = await self.client.control_result(vehicle_id, command_id)
-            condition = await self.client.get_vehicle_condition(vehicle_id)
+            condition = await self._async_fetch_condition(vehicle_id)
 
             data = dict(self.data or {})
             data[vehicle_id] = condition

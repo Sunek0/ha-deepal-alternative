@@ -12,6 +12,11 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 
 
+def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
+    condition.battery.charge_schedule_enabled = enabled
+    return condition
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -67,5 +72,6 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
                 cond.battery.charge_plan_type or 1,
                 cond.battery.charge_plan_time_format or 1,
                 cond.battery.charge_plan_time_zone or "GMT+08:00",
-            )
+            ),
+            optimistic_update=lambda new: _set_schedule_enabled(new, enabled),
         )

@@ -338,6 +338,7 @@ class DeepalBinarySensor(DeepalBaseBinarySensor):
     """Extended international binary sensor driven by a description."""
 
     entity_description: DeepalBinarySensorDescription
+    _attr_has_entity_name = False
 
     def __init__(
         self,

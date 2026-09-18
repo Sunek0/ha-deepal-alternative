@@ -11,6 +11,11 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 
 
+def _set_locked(condition: Any, locked: bool) -> Any:
+    condition.doors.locked = locked
+    return condition
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -46,6 +51,7 @@ class DeepalDoorsLock(DeepalEntity, LockEntity):
         await self.async_send_command(
             lambda: self.client.control_doors(self._car_id, False),
             is_done=lambda: self.is_locked is True,
+            optimistic_update=lambda cond: _set_locked(cond, True),
         )
 
     async def async_unlock(self, **kwargs: Any) -> None:
@@ -53,4 +59,5 @@ class DeepalDoorsLock(DeepalEntity, LockEntity):
         await self.async_send_command(
             lambda: self.client.control_doors(self._car_id, True),
             is_done=lambda: self.is_locked is False,
+            optimistic_update=lambda cond: _set_locked(cond, False),
         )

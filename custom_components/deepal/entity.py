@@ -63,11 +63,15 @@ class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
         send_command: Callable[[], Awaitable[str]],
         *,
         is_done: Callable[[], bool] | None = None,
+        optimistic_update: Callable[[Any], Any] | None = None,
     ) -> None:
         """Send a signed command and wait for the vehicle to report the state."""
         try:
             await self.coordinator.async_execute_command(
-                self._car_id, send_command, is_done=is_done
+                self._car_id,
+                send_command,
+                is_done=is_done,
+                optimistic_update=optimistic_update,
             )
         except DeepalError as err:
             raise HomeAssistantError(f"Deepal command failed: {err}") from err

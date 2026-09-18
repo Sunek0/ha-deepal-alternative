@@ -1,6 +1,7 @@
 """Component for Changan Deepal integration."""
 
 import logging
+import secrets
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -19,6 +20,7 @@ from .const import (
     CONF_CAC_TOKEN,
     CONF_PRIVATE_KEY,
     CONF_CONTROL_PIN,
+    CONF_DEVICE_ID,
     CONF_USER_ID,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
@@ -49,6 +51,7 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
             or entry.data.get(CONF_CONTROL_PIN)
             or None
         )
+        client.device_id = entry.data.get(CONF_DEVICE_ID) or client.device_id
         return client
 
     return DeepalClient(access_token=entry.data[CONF_ACCESS_TOKEN])
@@ -77,6 +80,15 @@ def _platforms(entry: ConfigEntry) -> list[Platform]:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Changan Deepal from a config entry."""
+    if (
+        entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
+        and not entry.data.get(CONF_DEVICE_ID)
+    ):
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_DEVICE_ID: secrets.token_hex(16)},
+        )
+
     client = _build_client(entry)
     coordinator = DeepalDataUpdateCoordinator(
         hass,
