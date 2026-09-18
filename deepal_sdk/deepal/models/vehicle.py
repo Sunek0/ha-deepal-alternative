@@ -12,6 +12,9 @@ class Vehicle(BaseModel):
     car_name: Optional[str] = Field(default=None, description="Custom vehicle nickname")
     license_plate: Optional[str] = Field(default=None, description="License plate number")
     thumbnail_url: Optional[str] = Field(default=None, description="Image URL of the vehicle model")
+    protocol_type: Optional[str] = Field(
+        default=None, description="Backend telemetry protocol, 'MQTT' for MQTT-backed vehicles"
+    )
 
 
 class TireStatus(BaseModel):

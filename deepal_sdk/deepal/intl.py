@@ -1,9 +1,12 @@
 """Client for the Changan Deepal international gateway (email login)."""
 
+import asyncio
 import base64
 import json
 import logging
 import secrets
+import ssl
+import time
 from typing import Any, Optional
 
 import httpx
@@ -12,6 +15,9 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from deepal.endpoints import (
     INTL_BASE_URL,
+    INTL_CA_BASE_URL,
+    INTL_CA_GET_AUTH_TOKEN,
+    INTL_CA_GET_CONN_CONF,
     INTL_CHECK_CONTROL_CODE,
     INTL_CONDITION_INQUIRY,
     INTL_CONTROL_AIR_CONDITIONER,
@@ -43,6 +49,22 @@ from deepal.models import (
     Vehicle,
     VehicleCondition,
     WindowsCondition,
+)
+from deepal.mqtt import (
+    S05_SERVICE_CODES,
+    aes_cbc_decrypt,
+    build_connect_packet,
+    build_puback_packet,
+    build_publish_packet,
+    build_subscribe_packet,
+    condition_request_payload,
+    login_request_payload,
+    new_request_id,
+    normalize_s05_params,
+    parse_publish,
+    read_packet,
+    secret_from_login_payload,
+    topic_device_id,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -139,6 +161,7 @@ class DeepalIntlClient:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.cac_token: Optional[str] = None
+        self.user_id: Optional[str] = None
         self.control_pin: Optional[str] = None
         self.rc_token: Optional[str] = None
         self.public_key: Optional[str] = None
@@ -212,12 +235,13 @@ class DeepalIntlClient:
         path: str,
         json_data: Optional[dict[str, Any]] = None,
         auth_required: bool = False,
+        base_url: Optional[str] = None,
     ) -> Any:
         """Perform an HTTP request against the international gateway."""
         if auth_required and not self.access_token:
             raise DeepalAuthError("Access token is required for this operation.")
 
-        url = f"{self.base_url}{path}" if path.startswith("/") else path
+        url = f"{base_url or self.base_url}{path}" if path.startswith("/") else path
         body = json.dumps(json_data or {}, separators=(",", ":"), ensure_ascii=False)
 
         try:
@@ -285,6 +309,7 @@ class DeepalIntlClient:
         self.access_token = str(data["token"])
         self.refresh_token = data.get("refreshToken")
         self.cac_token = data.get("cacToken")
+        self.user_id = data.get("userId")
 
         return AuthToken(
             access_token=self.access_token,
@@ -371,6 +396,7 @@ class DeepalIntlClient:
         self.access_token = str(data["token"])
         self.refresh_token = data.get("refreshToken") or self.refresh_token
         self.cac_token = data.get("cacToken") or self.cac_token
+        self.user_id = data.get("userId") or self.user_id
 
         return AuthToken(
             access_token=self.access_token,
@@ -394,6 +420,7 @@ class DeepalIntlClient:
                     car_name=item.get("nickName") or item.get("carName"),
                     license_plate=item.get("licensePlate") or item.get("plateNumber"),
                     thumbnail_url=item.get("imgUrl"),
+                    protocol_type=item.get("protocolType") or item.get("protocol_type"),
                 )
             )
         return vehicles
@@ -420,6 +447,10 @@ class DeepalIntlClient:
         if not isinstance(raw, dict):
             raw = {}
 
+        return self.parse_condition(raw, vehicle_id)
+
+    def parse_condition(self, raw: dict[str, Any], vehicle_id: str) -> VehicleCondition:
+        """Map a raw condition payload into the shared vehicle model."""
         status = raw.get("vehicleStatus") or {}
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
@@ -542,6 +573,194 @@ class DeepalIntlClient:
             last_updated_timestamp=last_updated // 1000 if last_updated is not None else None,
             raw_data=raw,
         )
+
+    @staticmethod
+    def is_mqtt_vehicle(vehicle: Vehicle) -> bool:
+        """Return whether the vehicle reports telemetry over MQTT."""
+        return (vehicle.protocol_type or "").upper() == "MQTT"
+
+    async def get_mqtt_config(self, vehicle_id: str) -> dict[str, Any]:
+        """Fetch the CA gateway MQTT connection configuration for a vehicle."""
+        data = await self._request(
+            INTL_CA_GET_CONN_CONF,
+            json_data={
+                "deviceId": self.device_id,
+                "carId": vehicle_id,
+                "deviceType": 1,
+                "confTimestamp": 0,
+                "deviceTimestamp": str(int(time.time() * 1000)),
+            },
+            auth_required=True,
+            base_url=INTL_CA_BASE_URL,
+        )
+        if not isinstance(data, dict):
+            raise DeepalAPIError("Unexpected S05 MQTT configuration response.")
+        return data
+
+    async def get_mqtt_token(self) -> str:
+        """Exchange the account user id for an MQTT auth token."""
+        if not self.user_id:
+            raise DeepalAPIError(
+                "S05 MQTT telemetry requires the account user id; log in again."
+            )
+        data = await self._request(
+            INTL_CA_GET_AUTH_TOKEN,
+            json_data={"userId": self.user_id},
+            auth_required=True,
+            base_url=INTL_CA_BASE_URL,
+        )
+        if not isinstance(data, dict) or not data.get("authToken"):
+            raise DeepalAPIError("S05 MQTT auth response did not include authToken.")
+        return str(data["authToken"])
+
+    async def s05_mqtt_condition(self, vehicle_id: str) -> VehicleCondition:
+        """Fetch a live S05 condition snapshot over MQTT."""
+        config = await self.get_mqtt_config(vehicle_id)
+        token = await self.get_mqtt_token()
+        try:
+            params = await self._read_s05_params(config, token)
+        except (asyncio.TimeoutError, OSError, ssl.SSLError) as exc:
+            raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
+        if not params:
+            raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
+        return self.parse_condition(normalize_s05_params(params), vehicle_id)
+
+    async def _read_s05_params(
+        self, config: dict[str, Any], token: str
+    ) -> dict[str, Any]:
+        """Run one MQTT login + condition exchange and return the raw parameters."""
+        info = ((config.get("mqttConnectionInfos") or [None])[0]) or {}
+        cluster = ((info.get("clusterInfos") or [None])[0]) or {}
+        host = str(cluster.get("brokerUrl", "")).replace("ssl://", "")
+        port = int(cluster.get("brokerPort") or 8883)
+        topics: list[str] = []
+        login_topic: Optional[str] = None
+        login_did: Optional[str] = None
+        properties_topic: Optional[str] = None
+        device_did: Optional[str] = None
+
+        for topic_info in info.get("topicInfos") or []:
+            msg_type = topic_info.get("msgType")
+            for topic in topic_info.get("pubTopics") or []:
+                if msg_type == "loginout" and "/loginout/req" in topic:
+                    login_topic = topic
+                    login_did = topic_device_id(topic)
+                if msg_type == "properties" and "/properties/get/req" in topic:
+                    properties_topic = topic
+                    device_did = topic_device_id(topic)
+            for topic in topic_info.get("subTopics") or []:
+                if "/commands/" not in topic and "/set/" not in topic:
+                    topics.append(topic)
+                if device_did is None and "/properties/" in topic:
+                    device_did = topic_device_id(topic)
+
+        if not host or not login_topic or not login_did or not properties_topic or not device_did:
+            raise DeepalAPIError(
+                "S05 MQTT configuration did not include required topics."
+            )
+
+        context = ssl.create_default_context()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=context, server_hostname=host),
+            timeout=self.timeout,
+        )
+        try:
+            writer.write(build_connect_packet(login_did, login_did, token))
+            await writer.drain()
+            first, body = await asyncio.wait_for(
+                read_packet(reader), timeout=self.timeout
+            )
+            rc = body[1] if first == 0x20 and len(body) >= 2 else None
+            if rc != 0:
+                raise DeepalAPIError(f"S05 MQTT broker rejected connection: rc={rc}")
+
+            writer.write(build_subscribe_packet(1, sorted(set(topics))))
+            await writer.drain()
+            await asyncio.wait_for(read_packet(reader), timeout=self.timeout)
+
+            login_req_id = new_request_id(login_did)
+            writer.write(
+                build_publish_packet(
+                    login_topic, login_request_payload(login_did, login_req_id)
+                )
+            )
+            await writer.drain()
+
+            secret_key: Optional[str] = None
+            partial: dict[str, Any] = {}
+            requested = False
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(self.timeout, 20.0)
+
+            while loop.time() < deadline:
+                first, body = await asyncio.wait_for(
+                    read_packet(reader), timeout=max(1.0, deadline - loop.time())
+                )
+                if first >> 4 != 3:
+                    continue
+                topic, payload, packet_id = parse_publish(first, body)
+                if packet_id is not None:
+                    writer.write(build_puback_packet(packet_id))
+                    await writer.drain()
+
+                if not secret_key:
+                    secret_key = secret_from_login_payload(payload)
+                    if secret_key:
+                        req_id = new_request_id(device_did)
+                        writer.write(
+                            build_publish_packet(
+                                properties_topic,
+                                condition_request_payload(
+                                    device_did, login_did, secret_key, req_id
+                                ),
+                            )
+                        )
+                        await writer.drain()
+                        requested = True
+                    continue
+
+                params = self._s05_params_from_payload(payload, secret_key)
+                if not params:
+                    continue
+                if topic.endswith("/properties/get/res") and len(params) > 10:
+                    return params
+                partial.update(params)
+                if requested and len(partial) > 30:
+                    return partial
+
+            return partial
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, TimeoutError, ssl.SSLError):
+                pass
+
+    @staticmethod
+    def _s05_params_from_payload(
+        payload: dict[str, Any], secret_key: str
+    ) -> dict[str, Any]:
+        """Decrypt the ``rs``/``sers`` fields of one MQTT message into parameters."""
+        req_id = payload.get("r")
+        if not isinstance(req_id, str):
+            return {}
+        params: dict[str, Any] = {}
+        for field in ("rs", "sers"):
+            encrypted = payload.get(field)
+            if not isinstance(encrypted, str) or not encrypted:
+                continue
+            try:
+                items = aes_cbc_decrypt(encrypted, secret_key, req_id)
+            except (ValueError, json.JSONDecodeError, OSError):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("service_code") in S05_SERVICE_CODES and isinstance(
+                    item.get("params"), dict
+                ):
+                    params.update(item["params"])
+        return params
 
     def _load_private_key(self):
         if not self.private_key_pem:

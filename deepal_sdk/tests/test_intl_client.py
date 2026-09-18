@@ -328,6 +328,7 @@ async def test_get_vehicles_maps_international_fields():
             "nickName": "Mi coche",
             "licensePlate": "1234ABC",
             "imgUrl": "https://img.example/test.png",
+            "protocolType": "MQTT",
         }
     ]
 
@@ -348,6 +349,7 @@ async def test_get_vehicles_maps_international_fields():
     assert vehicle.car_name == "Mi coche"
     assert vehicle.license_plate == "1234ABC"
     assert vehicle.thumbnail_url == "https://img.example/test.png"
+    assert vehicle.protocol_type == "MQTT"
 
 
 @pytest.mark.asyncio
@@ -759,3 +761,111 @@ async def test_control_result_without_data_returns_empty_dict():
     await client.close()
 
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_and_token_use_ca_gateway():
+    captured = {"urls": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["urls"].append(str(request.url))
+        if request.url.path.endswith("/device/getConnConf"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"mqttConnectionInfos": []},
+                },
+            )
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"authToken": "tsp-token"}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    config = await client.get_mqtt_config("car-1")
+    token = await client.get_mqtt_token()
+    await client.close()
+
+    assert config == {"mqttConnectionInfos": []}
+    assert token == "tsp-token"
+    assert all("ca-m.iov.changanauto.com.de" in url for url in captured["urls"])
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_without_user_id_raises():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError):
+        await client.get_mqtt_token()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ca_gateway_error_exposes_code():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "APIGW_1_7_02_001",
+                "msg": "X-Tsp-User-Token is empty",
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError) as err:
+        await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert err.value.code == "APIGW_1_7_02_001"
+
+
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_uses_normalized_params():
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_params(config: dict, token: str) -> dict:
+        return {
+            "soc": 71,
+            "remainedPowerMile": 320,
+            "totalOdometer": 12000,
+            "driverDoor": 0,
+            "passengerDoor": 0,
+            "leftRearDoor": 0,
+            "rightRearDoor": 0,
+            "trunk": 0,
+            "driverDoorLock": 0,
+            "passengerDoorLock": 0,
+            "diverWindow": 0,
+            "passengerWindow": 0,
+            "leftRearWindow": 0,
+            "rightRearWindow": 0,
+            "lfTyrePressure": 240,
+            "rfTyrePressure": 241,
+            "lrTyrePressure": 242,
+            "rrTyrePressure": 243,
+        }
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._read_s05_params = fake_params
+    condition = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert condition.car_id == "car-1"
+    assert condition.battery.soc_percentage == 71
+    assert condition.battery.remaining_range_km == 320
+    assert condition.total_odometer_km == 12000
+    assert condition.doors.locked is True
+    assert condition.tires.front_left.pressure_bar == 2.4
