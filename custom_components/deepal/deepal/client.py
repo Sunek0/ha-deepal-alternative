@@ -64,8 +64,8 @@ class DeepalClient:
         headers = {
             "Content-Type": "application/json;charset=utf-8",
             "Timestamp": str(int(time.time())),
-            "Version": "1.11.0",
-            "User-Agent": "MyChangan/1.11.0 (Android; Deepal S05)",
+            "Version": "1.12.0",
+            "User-Agent": "MyChangan/1.12.0 (Android; Deepal S05)",
         }
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"

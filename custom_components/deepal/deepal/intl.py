@@ -49,9 +49,9 @@ logger = logging.getLogger("deepal_sdk")
 
 INTL_APP_ID = "ca"
 INTL_APP_TYPE = "Android"
-INTL_APP_VERSION = "V1.11.0"
+INTL_APP_VERSION = "V1.12.0"
 INTL_DEVICE_TYPE = "samsung"
-INTL_OS_VERSION = "9"
+INTL_OS_VERSION = "15"
 INTL_USER_AGENT = "okhttp/4.12.0"
 DEFAULT_COUNTRY = "GB"
 DEFAULT_LANGUAGE = "en_US"
