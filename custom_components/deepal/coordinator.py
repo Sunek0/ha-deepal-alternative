@@ -145,6 +145,19 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return False
         return True
 
+    async def _async_maybe_refresh_tokens(self) -> None:
+        """Refresh the session proactively when the token is close to expiry."""
+        client = self.client
+        if not isinstance(client, DeepalIntlClient):
+            return
+        if not getattr(client, "refresh_token", None):
+            return
+        expires_soon = getattr(client, "access_token_expires_soon", None)
+        if not callable(expires_soon) or not expires_soon():
+            return
+        _LOGGER.debug("Deepal access token close to expiry; refreshing proactively")
+        await self._async_refresh_tokens()
+
     async def _async_refresh_tokens(self) -> bool:
         """Refresh the international session and persist the new tokens."""
         refresh = getattr(self.client, "refresh_tokens", None)
@@ -171,6 +184,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
+        await self._async_maybe_refresh_tokens()
         try:
             return await self._async_fetch()
         except DeepalAuthError as err:

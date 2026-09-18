@@ -2,6 +2,7 @@
 
 import base64
 import json
+import time
 
 import httpx
 import pytest
@@ -1430,3 +1431,53 @@ async def test_negative_seat_levels_are_normalized():
     assert condition.seats.front_left.ventilation_level == 0
     assert condition.seats.rear_left.heating_level == 0
     assert condition.seats.front_right.ventilation_level == 1
+
+
+def _jwt_with_exp(exp: int) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"HS512"}').rstrip(b"=").decode()
+    payload = (
+        base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode())
+        .rstrip(b"=")
+        .decode()
+    )
+    return f"{header}.{payload}.signature"
+
+
+@pytest.mark.asyncio
+async def test_access_token_expiry_parsed_and_checked():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    expires = int(time.time()) + 3600
+
+    assert client._jwt_expiry("not-a-jwt") is None
+    assert client._jwt_expiry(_jwt_with_exp(expires)) == expires
+
+    client.access_token_expires_at = expires
+    assert client.access_token_expires_soon(300) is False
+
+    client.access_token_expires_at = int(time.time()) + 60
+    assert client.access_token_expires_soon(300) is True
+
+    client.access_token_expires_at = None
+    assert client.access_token_expires_soon(300) is False
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_login_stores_access_token_expiry():
+    expires = int(time.time()) + 3600
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"token": _jwt_with_exp(expires), "refreshToken": "r"},
+            },
+        )
+
+    client = _client(handler)
+    await client.login_with_email_code(EMAIL, CODE)
+    await client.close()
+
+    assert client.access_token_expires_at == expires
