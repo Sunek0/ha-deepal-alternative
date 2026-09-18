@@ -83,7 +83,8 @@
         "data": {
           "scan_interval": "Scan interval (seconds)",
           "control_pin": "Remote control PIN",
-          "enable_api_logging": "Log redacted API traffic"
+          "enable_api_logging": "Log redacted API traffic",
+          "enable_mqtt_controls": "Enable experimental remote controls for MQTT vehicles (S05)"
         }
       }
     }

@@ -36,6 +36,7 @@ from .const import (
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
+    CONF_ENABLE_MQTT_CONTROLS,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
 )
@@ -485,6 +486,10 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 vol.Optional(
                     CONF_ENABLE_API_LOGGING,
                     default=options.get(CONF_ENABLE_API_LOGGING, False),
+                ): bool,
+                vol.Optional(
+                    CONF_ENABLE_MQTT_CONTROLS,
+                    default=options.get(CONF_ENABLE_MQTT_CONTROLS, False),
                 ): bool,
             }
         )

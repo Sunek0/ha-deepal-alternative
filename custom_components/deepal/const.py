@@ -19,6 +19,7 @@ CONF_PRIVATE_KEY = "private_key"
 CONF_CONTROL_PIN = "control_pin"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
+CONF_ENABLE_MQTT_CONTROLS = "enable_mqtt_controls"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Changan Deepal"
