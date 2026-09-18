@@ -91,10 +91,29 @@ def test_normalize_s05_params_maps_telemetry():
         "remainedPowerMile": 210,
         "totalOdometer": 18300,
         "steeringWheelHeating": 2,
+        "engineStatus": 1,
+        "powerStatusFeedBack": 2,
+        "electronichandbrakeStatus": 0,
         "airConditioningSetTemperature": 22.5,
         "airStatus": 1,
+        "vehicleTemperature": 21.5,
+        "innerHumidity": 44,
+        "frontDefrostStatus": 1,
+        "airPurifierStatus": 3,
+        "airConditioningHairRatings": 4,
         "ChrgSts": 2,
         "acChargeGunConnectionState": 3,
+        "BattACChrgInCurr": 16.2,
+        "chargDeltMins": 95,
+        "dcChargeGunConnectionState": 0,
+        "hoodStatus": 0,
+        "highBeam": 1,
+        "lowBeam": 0,
+        "positionLamp": 1,
+        "frontFoglamp": 0,
+        "rearFoglamp": 0,
+        "turnLndicatorLeft": 0,
+        "turnLndicatorRight": 1,
         "driverDoor": 1,
         "passengerDoor": 0,
         "leftRearDoor": 0,
@@ -132,3 +151,21 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["tire"]["rightBack"]["alarm"] == 1
     assert condition["seat"]["rightFront"]["heatStatus"] == 2
     assert condition["seat"]["rightFront"]["ventStatus"] == 1
+    assert condition["vehicleStatus"]["engineSts"] == 1
+    assert condition["vehicleStatus"]["powerStatus"] == 2
+    assert condition["vehicleStatus"]["epbSts"] == 0
+    assert condition["vehicleStatus"]["connectStatus"] == 1
+    assert condition["hvac"]["insideTemp"] == 215
+    assert condition["hvac"]["insideHumidity"] == 44
+    assert condition["hvac"]["defrostStatus"] == 1
+    assert condition["hvac"]["insideAirQualityLevel"] == 3
+    assert condition["hvac"]["fanLevel"] == 4
+    assert condition["charge"]["acChargeCurrent"] == 16.2
+    assert condition["charge"]["chargeCurrent"] == 16.2
+    assert condition["charge"]["remainChargeTime"] == 95
+    assert condition["charge"]["dcChargeGunConnectStatus"] == 0
+    assert condition["door"]["hood"] == 0
+    assert condition["lamp"]["highBeam"] == 1
+    assert condition["lamp"]["positionLamp"] == 1
+    assert condition["lamp"]["rightTurn"] == 1
+    assert condition["lamp"]["lowBeam"] == 0

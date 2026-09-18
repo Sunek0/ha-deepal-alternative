@@ -12,6 +12,7 @@ from deepal.models.vehicle import (
     ClimateCondition,
     TiresCondition,
     TireStatus,
+    LampsCondition,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "ClimateCondition",
     "TiresCondition",
     "TireStatus",
+    "LampsCondition",
 ]

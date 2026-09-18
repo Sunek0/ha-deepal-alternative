@@ -267,14 +267,25 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                 _first(params, "remainedPowerMile", "totalResidualMileage")
             ),
             "totalMileage": _as_float(params.get("totalOdometer")),
+            "engineSts": _as_int(params.get("engineStatus")),
+            "connectStatus": 1,
+            "powerStatus": _as_int(params.get("powerStatusFeedBack")),
+            "epbSts": _as_int(params.get("electronichandbrakeStatus")),
             "steeringWheelHeater": _as_int(params.get("steeringWheelHeating")),
             "steeringWheelHeaterLevel": _as_int(params.get("steeringWheelHeating")),
         },
         "hvac": {
+            "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
+            if _as_float(params.get("vehicleTemperature")) is not None
+            else None,
+            "insideHumidity": _as_float(params.get("innerHumidity")),
             "remoteTemp": _as_float(params.get("airConditioningSetTemperature")) * 10
             if _as_float(params.get("airConditioningSetTemperature")) is not None
             else None,
             "acStatus": _as_int(params.get("airStatus")),
+            "defrostStatus": _as_int(params.get("frontDefrostStatus")),
+            "insideAirQualityLevel": _as_int(params.get("airPurifierStatus")),
+            "fanLevel": _as_int(params.get("airConditioningHairRatings")),
         },
         "charge": {
             "chargeStatus": _as_int(params.get("ChrgSts")),
@@ -283,6 +294,20 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                     params, "acChargeGunConnectionState", "dcChargeGunConnectionState"
                 )
             ),
+            "acChargeCurrent": _as_float(
+                _first(params, "BattACChrgInCurr", "battACChrgInCurr")
+            ),
+            "dcChargeCurrent": _as_float(
+                _first(params, "BattDCChrgInCurr", "battDCChrgInCurr")
+            ),
+            "chargeCurrent": _as_float(
+                _first(params, "BattACChrgInCurr", "BattDCChrgInCurr")
+            ),
+            "remainChargeTime": _as_int(params.get("chargDeltMins")),
+            "dcChargeGunConnectStatus": _as_int(
+                params.get("dcChargeGunConnectionState")
+            ),
+            "chargeCoverStatus": _as_int(params.get("chargeCoverStatus")),
         },
         "door": {
             "doors": [
@@ -292,6 +317,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                 _as_int(params.get("rightRearDoor")),
             ],
             "trunk": _as_int(params.get("trunk")),
+            "hood": _as_int(params.get("hoodStatus")),
             "driverLock": _as_int(params.get("driverDoorLock")),
             "passengerLock": _as_int(params.get("passengerDoorLock")),
         },
@@ -302,6 +328,15 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                 _as_int(params.get("leftRearWindow")),
                 _as_int(params.get("rightRearWindow")),
             ]
+        },
+        "lamp": {
+            "highBeam": _as_int(params.get("highBeam")),
+            "lowBeam": _as_int(params.get("lowBeam")),
+            "positionLamp": _as_int(params.get("positionLamp")),
+            "frontFoglamp": _as_int(params.get("frontFoglamp")),
+            "rearFoglamp": _as_int(params.get("rearFoglamp")),
+            "leftTurn": _as_int(params.get("turnLndicatorLeft")),
+            "rightTurn": _as_int(params.get("turnLndicatorRight")),
         },
         "tire": {
             "leftFront": {
