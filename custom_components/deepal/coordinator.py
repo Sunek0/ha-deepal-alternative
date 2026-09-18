@@ -1,12 +1,14 @@
 """DataUpdateCoordinator for Changan Deepal integration."""
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .deepal import (
@@ -26,6 +28,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_PENDING_RESULT_CODES = (None, -100, 0, 1015)
 
 
 class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleCondition]]):
@@ -48,6 +52,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.entry = entry
         self.client = client
         self.vehicles: list[Vehicle] = []
+        self._command_in_progress = False
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -100,3 +105,79 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         except DeepalError as err:
             _LOGGER.error("Error communicating with Deepal API: %s", err)
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
+
+    async def async_execute_command(
+        self,
+        vehicle_id: str,
+        send_command: Callable[[], Awaitable[str]],
+        *,
+        timeout: float = 30.0,
+        interval: float = 2.0,
+    ) -> None:
+        """Send a remote command and poll until the vehicle reports new data."""
+        if not isinstance(self.client, DeepalIntlClient):
+            raise HomeAssistantError("Remote commands require the international platform")
+        if self._command_in_progress:
+            raise HomeAssistantError(
+                "A Deepal command is already in progress; wait for the vehicle data to refresh"
+            )
+
+        self._command_in_progress = True
+        try:
+            current = (self.data or {}).get(vehicle_id)
+            previous_last_updated = current.last_updated_timestamp if current else None
+
+            command_id = await send_command()
+
+            try:
+                await self.client.control_condition_inquiry(vehicle_id)
+            except DeepalError as err:
+                _LOGGER.warning("Deepal condition inquiry failed: %s", err)
+
+            await self._async_poll_command(
+                vehicle_id, command_id, previous_last_updated, timeout, interval
+            )
+        finally:
+            self._command_in_progress = False
+
+    async def _async_poll_command(
+        self,
+        vehicle_id: str,
+        command_id: str,
+        previous_last_updated: int | None,
+        timeout: float,
+        interval: float,
+    ) -> None:
+        """Poll the command result and condition until the state changes or times out."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+
+        while True:
+            result = await self.client.control_result(vehicle_id, command_id)
+            condition = await self.client.get_vehicle_condition(vehicle_id)
+
+            data = dict(self.data or {})
+            data[vehicle_id] = condition
+            self.async_set_updated_data(data)
+
+            result_code = result.get("resultCode")
+            if result_code not in _PENDING_RESULT_CODES:
+                raise HomeAssistantError(
+                    f"Deepal command failed with result code {result_code}: "
+                    f"{result.get('errorMsg')}"
+                )
+
+            if (
+                condition.last_updated_timestamp is not None
+                and condition.last_updated_timestamp != previous_last_updated
+            ):
+                return
+
+            if loop.time() >= deadline:
+                _LOGGER.warning(
+                    "Deepal command %s timed out before the vehicle reported new data",
+                    command_id,
+                )
+                return
+
+            await asyncio.sleep(interval)

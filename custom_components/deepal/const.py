@@ -11,6 +11,8 @@ CONF_COUNTRY = "country"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_CAC_TOKEN = "cac_token"
+CONF_PRIVATE_KEY = "private_key"
+CONF_CONTROL_PIN = "control_pin"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Changan Deepal"

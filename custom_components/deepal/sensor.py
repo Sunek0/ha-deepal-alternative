@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
+from .deepal import DeepalIntlClient
 
 
 async def async_setup_entry(
@@ -38,6 +39,34 @@ async def async_setup_entry(
             DeepalRemainingRangeSensor(coordinator, vehicle),
             DeepalOdometerSensor(coordinator, vehicle),
         ])
+
+        if isinstance(coordinator.client, DeepalIntlClient):
+            for key, label in (
+                ("front_left", "Front Left"),
+                ("front_right", "Front Right"),
+                ("rear_left", "Rear Left"),
+                ("rear_right", "Rear Right"),
+            ):
+                entities.append(DeepalTirePressureSensor(coordinator, vehicle, key, label))
+
+            for position, label in (
+                ("front_left", "Front Left"),
+                ("front_right", "Front Right"),
+                ("rear_left", "Rear Left"),
+                ("rear_right", "Rear Right"),
+            ):
+                entities.append(
+                    DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level", label, "Heating")
+                )
+            for position, label in (
+                ("front_left", "Front Left"),
+                ("front_right", "Front Right"),
+            ):
+                entities.append(
+                    DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level", label, "Ventilation")
+                )
+
+            entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
 
     async_add_entities(entities)
 
@@ -120,3 +149,74 @@ class DeepalOdometerSensor(DeepalBaseSensor):
         """Return odometer value (CdcTotMilg)."""
         cond = self.coordinator.data.get(self._car_id)
         return cond.total_odometer_km if cond else None
+
+
+class DeepalTirePressureSensor(DeepalBaseSensor):
+    """Tire pressure (bar) sensor for international vehicles."""
+
+    _attr_device_class = SensorDeviceClass.PRESSURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "bar"
+    _attr_icon = "mdi:car-tire-alert"
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str, label: str) -> None:
+        super().__init__(coordinator, vehicle)
+        self._key = key
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_tire_{key}_pressure"
+        self._attr_name = f"{vehicle.series_name} Tire {label} Pressure"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return tire pressure in bar."""
+        cond = self.coordinator.data.get(self._car_id)
+        if not cond:
+            return None
+        return getattr(cond.tires, self._key).pressure_bar
+
+
+class DeepalSeatLevelSensor(DeepalBaseSensor):
+    """Seat heating or ventilation level sensor for international vehicles."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:car-seat"
+
+    def __init__(
+        self,
+        coordinator: DeepalDataUpdateCoordinator,
+        vehicle: Any,
+        position: str,
+        kind: str,
+        label: str,
+        title: str,
+    ) -> None:
+        super().__init__(coordinator, vehicle)
+        self._position = position
+        self._kind = kind
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_seat_{position}_{kind}"
+        self._attr_name = f"{vehicle.series_name} {label} Seat {title}"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the seat level."""
+        cond = self.coordinator.data.get(self._car_id)
+        if not cond:
+            return None
+        return getattr(getattr(cond.seats, self._position), self._kind)
+
+
+class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
+    """Steering wheel heater level sensor for international vehicles."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:steering"
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_steering_wheel_heater_level"
+        self._attr_name = f"{vehicle.series_name} Steering Wheel Heater Level"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the steering wheel heater level."""
+        cond = self.coordinator.data.get(self._car_id)
+        return cond.climate.steering_wheel_heater_level if cond else None

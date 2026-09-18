@@ -50,6 +50,9 @@ async def main():
             print(f"Refresh Token: {token.refresh_token}")
         if token.cac_token:
             print(f"CAC Token: {token.cac_token}")
+        if client.private_key_pem:
+            print("\nLogin Private Key (needed for remote commands):")
+            print(client.private_key_pem)
 
 
 if __name__ == "__main__":

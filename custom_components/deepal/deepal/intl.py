@@ -7,12 +7,17 @@ import secrets
 from typing import Any, Optional
 
 import httpx
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from .endpoints import (
     INTL_BASE_URL,
+    INTL_CHECK_CONTROL_CODE,
+    INTL_CONDITION_INQUIRY,
+    INTL_CONTROL_AIR_CONDITIONER,
+    INTL_CONTROL_RESULT,
     INTL_GET_MY_CARS,
+    INTL_GET_SERIAL_NO,
     INTL_GET_VEHICLE_CONDITION,
     INTL_LOGIN_BY_EMAIL_CODE,
     INTL_LOGIN_BY_MOBILE_CODE,
@@ -31,8 +36,13 @@ from .models import (
     BatteryCondition,
     ClimateCondition,
     DoorsCondition,
+    SeatsCondition,
+    SeatStatus,
+    TiresCondition,
+    TireStatus,
     Vehicle,
     VehicleCondition,
+    WindowsCondition,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -129,6 +139,8 @@ class DeepalIntlClient:
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.cac_token: Optional[str] = None
+        self.control_pin: Optional[str] = None
+        self.rc_token: Optional[str] = None
         self.public_key: Optional[str] = None
         self.private_key_pem: Optional[str] = None
         self._external_client = httpx_client is not None
@@ -412,6 +424,9 @@ class DeepalIntlClient:
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
         charge = raw.get("charge") or {}
+        tire = raw.get("tire") or {}
+        seat = raw.get("seat") or {}
+        window = raw.get("window") or {}
 
         charge_status = charge.get("chargeStatus")
         charge_connection = charge.get("chargeConStatus")
@@ -455,9 +470,61 @@ class DeepalIntlClient:
             trunk_open=door.get("trunk") not in (None, 0),
         )
 
+        window_list = window.get("windows") or []
+
+        def window_open(index: int) -> bool:
+            value = _path_value(window_list, (index,))
+            return value not in (None, 0)
+
+        windows_condition = WindowsCondition(
+            front_left_open=window_open(0),
+            front_right_open=window_open(1),
+            rear_left_open=window_open(2),
+            rear_right_open=window_open(3),
+        )
+
+        def seat_status(position: str) -> SeatStatus:
+            data = seat.get(position) or {}
+            heating = data.get("heatStatus")
+            if heating is None:
+                heating = data.get("level")
+            return SeatStatus(
+                heating_level=_as_int(heating) or 0,
+                ventilation_level=_as_int(data.get("ventStatus")) or 0,
+            )
+
+        seats_condition = SeatsCondition(
+            front_left=seat_status("leftFront"),
+            front_right=seat_status("rightFront"),
+            rear_left=seat_status("leftBack"),
+            rear_right=seat_status("rightBack"),
+        )
+
+        def tire_status(position: str) -> TireStatus:
+            data = tire.get(position) or {}
+            pressure = _as_float(data.get("pressure"))
+            status_value = data.get("status")
+            return TireStatus(
+                pressure_bar=round(pressure / 100, 2) if pressure is not None else None,
+                temperature_c=_as_float(data.get("temperature")),
+                alarm=bool(data.get("alarm"))
+                or status_value not in (None, 0, "0"),
+            )
+
+        tires_condition = TiresCondition(
+            front_left=tire_status("leftFront"),
+            front_right=tire_status("rightFront"),
+            rear_left=tire_status("leftBack"),
+            rear_right=tire_status("rightBack"),
+        )
+
+        steering_heater = _as_int(status.get("steeringWheelHeater"))
+
         climate = ClimateCondition(
             power_on=hvac.get("acStatus") not in (None, 0),
             target_temperature_c=target_temp / 10 if target_temp is not None else None,
+            steering_wheel_heater_on=steering_heater not in (None, 0),
+            steering_wheel_heater_level=_as_int(status.get("steeringWheelHeaterLevel")) or 0,
         )
 
         last_updated = _as_int(raw.get("lastUpdatedAt"))
@@ -468,7 +535,139 @@ class DeepalIntlClient:
             total_odometer_km=_as_float(status.get("totalMileage")),
             battery=battery,
             doors=doors_condition,
+            windows=windows_condition,
+            seats=seats_condition,
             climate=climate,
+            tires=tires_condition,
             last_updated_timestamp=last_updated // 1000 if last_updated is not None else None,
             raw_data=raw,
         )
+
+    def _load_private_key(self):
+        if not self.private_key_pem:
+            raise DeepalAuthError("Login private key is required to sign commands.")
+        return serialization.load_pem_private_key(
+            self.private_key_pem.encode(), password=None
+        )
+
+    def sign_payload(
+        self, payload: dict[str, Any], omit_keys: Optional[set[str]] = None
+    ) -> str:
+        """Sign a command payload with the login keypair."""
+        private_key = self._load_private_key()
+        omitted = omit_keys or set()
+        parts = []
+        for key in sorted(payload):
+            if key == "sign" or key in omitted:
+                continue
+            value = payload[key]
+            if isinstance(value, bool):
+                value = str(value).lower()
+            parts.append(f"{key}={value}")
+        canonical = "&".join(parts)
+        signature = private_key.sign(
+            canonical.encode(), padding.PKCS1v15(), hashes.SHA256()
+        )
+        return base64.b64encode(signature).decode()
+
+    async def get_serial_data(self, serial_type: str = "1") -> str:
+        """Fetch the encrypted vehicle serial number used by signed commands."""
+        data = await self._request(
+            INTL_GET_SERIAL_NO,
+            json_data={"type": serial_type},
+            auth_required=True,
+        )
+        if not isinstance(data, str):
+            raise DeepalAPIError("Unexpected serial number response.")
+        return data
+
+    def decrypt_serial_no(self, serial_data: str) -> str:
+        """Decrypt a serial number with the login private key."""
+        private_key = self._load_private_key()
+        ciphertext = base64.b64decode("".join(serial_data.split()))
+        return private_key.decrypt(ciphertext, padding.PKCS1v15()).decode().strip()
+
+    async def check_control_code(self, control_pin: str) -> str:
+        """Exchange the remote-control PIN for an rcToken."""
+        data = await self._request(
+            INTL_CHECK_CONTROL_CODE,
+            json_data={"safeCode": self.encrypt_request_value(control_pin)},
+            auth_required=True,
+        )
+        if not isinstance(data, dict) or not data.get("rcToken"):
+            raise DeepalAuthError("Control-code check did not return an rcToken.")
+        self.rc_token = str(data["rcToken"])
+        return self.rc_token
+
+    async def _signed_command(
+        self,
+        path: str,
+        vehicle_id: str,
+        payload: dict[str, Any],
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+        sign_omit_keys: Optional[set[str]] = None,
+    ) -> str:
+        if not self.private_key_pem:
+            raise DeepalAuthError("Login private key is required to sign commands.")
+        if require_rc_token and not self.rc_token:
+            if not self.control_pin:
+                raise DeepalAuthError("Control PIN is required for this command.")
+            await self.check_control_code(self.control_pin)
+
+        serial_data = await self.get_serial_data(serial_type)
+        serial_no = self.decrypt_serial_no(serial_data)
+        signed_payload = {
+            **payload,
+            "rcToken": self.rc_token or "",
+            "seriralNo": serial_no,
+            "vehicleId": vehicle_id,
+        }
+        signed_payload["sign"] = self.sign_payload(
+            signed_payload, omit_keys=sign_omit_keys
+        )
+
+        data = await self._request(path, json_data=signed_payload, auth_required=True)
+        if not isinstance(data, dict) or not data.get("commandId"):
+            raise DeepalAPIError("Control command did not return a commandId.")
+        return str(data["commandId"])
+
+    async def control_air_conditioner(
+        self,
+        vehicle_id: str,
+        enabled: bool,
+        target_temp_c: float,
+        run_time: int = 30,
+        wind_mode: int = 1,
+    ) -> str:
+        """Turn the cabin air conditioner on or off and set its target temperature."""
+        return await self._signed_command(
+            path=INTL_CONTROL_AIR_CONDITIONER,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "air",
+                "enabled": enabled,
+                "runTime": run_time,
+                "targetTemp": int(round(target_temp_c * 10)),
+                "windMode": wind_mode,
+            },
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_condition_inquiry(self, vehicle_id: str) -> str:
+        """Ask the vehicle to report fresh condition data."""
+        return await self._signed_command(
+            path=INTL_CONDITION_INQUIRY,
+            vehicle_id=vehicle_id,
+            payload={"command": "COMMAND_GET_NEW_CONDITION"},
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_result(self, vehicle_id: str, command_id: str) -> dict[str, Any]:
+        """Fetch the status of a signed command."""
+        data = await self._request(
+            INTL_CONTROL_RESULT,
+            json_data={"vehicleId": vehicle_id, "commandId": command_id},
+            auth_required=True,
+        )
+        return data if isinstance(data, dict) else {}

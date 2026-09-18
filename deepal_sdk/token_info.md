@@ -1,1 +1,0 @@
-npx skills add https://github.com/wshobson/agents --skill python-testing-patterns
