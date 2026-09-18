@@ -10,9 +10,21 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
+from .const import (
+    DEFAULT_MODEL,
+    DOMAIN,
+    MANUFACTURER,
+    CONF_ENABLE_MQTT_CONTROLS,
+)
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
+
+
+def mqtt_controls_enabled(coordinator: DeepalDataUpdateCoordinator) -> bool:
+    """Return whether the experimental MQTT remote controls are enabled."""
+    return bool(
+        coordinator.entry.options.get(CONF_ENABLE_MQTT_CONTROLS, False)
+    )
 
 
 class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
@@ -69,8 +81,8 @@ def async_setup_control_entities(
 ) -> None:
     """Set up control entities for international, command-capable vehicles.
 
-    MQTT-backed vehicles stay read-only: the app controls for them are not
-    verified, so no control entities are created.
+    MQTT-backed vehicles stay read-only unless the experimental MQTT controls
+    option is enabled.
     """
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
@@ -79,8 +91,9 @@ def async_setup_control_entities(
         return
 
     entities = []
+    allow_mqtt = mqtt_controls_enabled(coordinator)
     for vehicle in coordinator.vehicles:
-        if coordinator.vehicle_uses_mqtt(vehicle.car_id):
+        if not allow_mqtt and coordinator.vehicle_uses_mqtt(vehicle.car_id):
             continue
         entities.extend(build_entities(coordinator, vehicle))
 

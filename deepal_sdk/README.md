@@ -138,7 +138,9 @@ tráfico API redactado (útil para diagnosticar).
 
 Los vehículos con backend MQTT (Deepal S05) usan la telemetría MQTT cuando la entrada tiene
 `user_id`; si el gateway CA rechaza la cuenta, la integración avisa y continúa con la condición
-REST. Los comandos remotos del S05 siguen en solo lectura por ahora.
+REST. Los comandos remotos del S05 están deshabilitados por defecto: actívalos con la opción
+experimental **"Enable experimental remote controls for MQTT vehicles (S05)"** en las opciones de
+la entrada. No están verificados contra un coche real, así que úsalos con cuidado.
 
 ### Control del clima (plataforma internacional)
 

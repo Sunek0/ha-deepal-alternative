@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
+from .entity import mqtt_controls_enabled
 
 
 async def async_setup_entry(
@@ -80,9 +81,14 @@ class DeepalCabinClimateEntity(
         return (self.vehicle.protocol_type or "").upper() == "MQTT"
 
     @property
+    def _read_only(self) -> bool:
+        """Return whether the entity rejects commands."""
+        return self._is_mqtt and not mqtt_controls_enabled(self.coordinator)
+
+    @property
     def supported_features(self) -> ClimateEntityFeature:
-        """Return no features for MQTT-backed vehicles until controls are verified."""
-        if self._is_mqtt:
+        """Return no features for read-only MQTT vehicles."""
+        if self._read_only:
             return ClimateEntityFeature(0)
         return ClimateEntityFeature.TARGET_TEMPERATURE
 
@@ -126,9 +132,10 @@ class DeepalCabinClimateEntity(
         await self._async_send(False, self.target_temperature or 21.0)
 
     async def _async_send(self, enabled: bool, temperature: float) -> None:
-        if self._is_mqtt:
+        if self._read_only:
             raise HomeAssistantError(
-                "S05 MQTT vehicles are read-only in this version"
+                "S05 MQTT vehicles are read-only; enable the experimental MQTT "
+                "controls option first"
             )
         try:
             await self.coordinator.async_execute_command(
