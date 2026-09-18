@@ -12,6 +12,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .deepal import (
+    DeepalAPIError,
     DeepalAuthError,
     DeepalClient,
     DeepalError,
@@ -62,7 +63,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
             if self._uses_mqtt(vehicle):
-                condition = await self.client.s05_mqtt_condition(vehicle.car_id)
+                try:
+                    condition = await self.client.s05_mqtt_condition(vehicle.car_id)
+                except DeepalAPIError as err:
+                    _LOGGER.warning(
+                        "Deepal MQTT telemetry unavailable for %s (%s); using the "
+                        "REST condition endpoint",
+                        vehicle.car_id,
+                        err,
+                    )
+                    condition = await self.client.get_vehicle_condition(vehicle.car_id)
             else:
                 condition = await self.client.get_vehicle_condition(vehicle.car_id)
             data[vehicle.car_id] = condition

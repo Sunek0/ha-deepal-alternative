@@ -305,6 +305,8 @@ async def test_authorization_includes_cac_token():
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["auth"] = request.headers.get("authorization")
+        captured["tsp"] = request.headers.get("X-Tsp-User-Token")
+        captured["vcs"] = request.headers.get("X-VCS-User-Token")
         captured["path"] = request.url.path
         return httpx.Response(200, json={"success": True, "code": "0", "data": []})
 
@@ -316,6 +318,26 @@ async def test_authorization_includes_cac_token():
 
     assert captured["path"] == INTL_GET_MY_CARS
     assert captured["auth"] == "test_token_123|test_cac_123"
+    assert captured["tsp"] == "test_cac_123"
+    assert captured["vcs"] == "test_cac_123"
+
+
+@pytest.mark.asyncio
+async def test_tsp_headers_omitted_without_cac_token():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tsp"] = request.headers.get("X-Tsp-User-Token")
+        captured["vcs"] = request.headers.get("X-VCS-User-Token")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["tsp"] is None
+    assert captured["vcs"] is None
 
 
 @pytest.mark.asyncio
