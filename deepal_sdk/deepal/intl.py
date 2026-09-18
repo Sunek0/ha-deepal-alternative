@@ -18,10 +18,16 @@ from deepal.endpoints import (
     INTL_CA_BASE_URL,
     INTL_CA_GET_AUTH_TOKEN,
     INTL_CA_GET_CONN_CONF,
+    INTL_CHARGE_MODIFY_PLAN,
+    INTL_CHARGE_PERCENTAGE,
     INTL_CHECK_CONTROL_CODE,
     INTL_CONDITION_INQUIRY,
     INTL_CONTROL_AIR_CONDITIONER,
+    INTL_CONTROL_DOORS,
+    INTL_CONTROL_FLASHING_HONKING,
     INTL_CONTROL_RESULT,
+    INTL_CONTROL_TRUNK,
+    INTL_CONTROL_WINDOWS,
     INTL_GET_MY_CARS,
     INTL_GET_SERIAL_NO,
     INTL_GET_SECURITY_CODE_STATUS,
@@ -554,6 +560,18 @@ class DeepalIntlClient:
                 if charge_plan.get("endTime") is not None
                 else None
             ),
+            charge_plan_id=(
+                str(charge_plan["planId"])
+                if charge_plan.get("planId") is not None
+                else None
+            ),
+            charge_plan_type=_as_int(charge_plan.get("planType")),
+            charge_plan_time_format=_as_int(charge_plan.get("timeFormat")),
+            charge_plan_time_zone=(
+                str(charge_plan["timeZone"])
+                if charge_plan.get("timeZone") is not None
+                else None
+            ),
         )
 
         doors_condition = DoorsCondition(
@@ -1027,6 +1045,89 @@ class DeepalIntlClient:
             path=INTL_CONDITION_INQUIRY,
             vehicle_id=vehicle_id,
             payload={"command": "COMMAND_GET_NEW_CONDITION"},
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_doors(self, vehicle_id: str, open_value: bool) -> str:
+        """Lock (`open_value=False`) or unlock (`open_value=True`) the vehicle."""
+        return await self._signed_command(
+            path=INTL_CONTROL_DOORS,
+            vehicle_id=vehicle_id,
+            payload={"open": open_value},
+            require_rc_token=True,
+        )
+
+    async def control_windows(
+        self, vehicle_id: str, open_value: bool, open_type: int = 10
+    ) -> str:
+        """Open or close all windows."""
+        return await self._signed_command(
+            path=INTL_CONTROL_WINDOWS,
+            vehicle_id=vehicle_id,
+            payload={"command": "window", "open": open_value, "openType": open_type},
+            require_rc_token=True,
+            sign_omit_keys={"command"},
+        )
+
+    async def control_trunk(self, vehicle_id: str, open_value: bool) -> str:
+        """Open or close the boot/trunk."""
+        return await self._signed_command(
+            path=INTL_CONTROL_TRUNK,
+            vehicle_id=vehicle_id,
+            payload={"command": "trunk", "open": open_value},
+            require_rc_token=True,
+            sign_omit_keys={"command"},
+        )
+
+    async def control_charge_limit(self, vehicle_id: str, percentage: int) -> str:
+        """Set the maximum charge percentage."""
+        return await self._signed_command(
+            path=INTL_CHARGE_PERCENTAGE,
+            vehicle_id=vehicle_id,
+            payload={
+                "chargePercentageMax": int(percentage),
+                "command": "charge_max",
+            },
+            serial_type="2",
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_charge_schedule(
+        self,
+        vehicle_id: str,
+        plan_id: str,
+        start_time: str,
+        end_time: str,
+        enabled: bool,
+        plan_type: int = 1,
+        time_format: int = 1,
+        time_zone: str = "GMT+08:00",
+    ) -> str:
+        """Update the charging schedule plan."""
+        switch = 1 if enabled else 0
+        return await self._signed_command(
+            path=INTL_CHARGE_MODIFY_PLAN,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "modify-plan",
+                "endSwitch": switch,
+                "endTime": end_time,
+                "planId": str(plan_id),
+                "planType": plan_type,
+                "startTime": start_time,
+                "timeFormat": time_format,
+                "timeZone": time_zone,
+            },
+            serial_type="2",
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_flashing_honking(self, vehicle_id: str, action_type: int) -> str:
+        """Flash the lights (type 1) or sound the horn (type 3)."""
+        return await self._signed_command(
+            path=INTL_CONTROL_FLASHING_HONKING,
+            vehicle_id=vehicle_id,
+            payload={"command": "flash_bee", "type": action_type},
             sign_omit_keys={"command", "rcToken"},
         )
 

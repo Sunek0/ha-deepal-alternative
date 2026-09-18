@@ -145,6 +145,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         vehicle_id: str,
         send_command: Callable[[], Awaitable[str]],
         *,
+        is_done: Callable[[], bool] | None = None,
         timeout: float = 30.0,
         interval: float = 2.0,
     ) -> None:
@@ -169,10 +170,22 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 _LOGGER.warning("Deepal condition inquiry failed: %s", err)
 
             await self._async_poll_command(
-                vehicle_id, command_id, previous_last_updated, timeout, interval
+                vehicle_id,
+                command_id,
+                previous_last_updated,
+                timeout,
+                interval,
+                is_done,
             )
         finally:
             self._command_in_progress = False
+
+    def vehicle_uses_mqtt(self, car_id: str) -> bool:
+        """Return whether a vehicle reports telemetry over MQTT."""
+        if not isinstance(self.client, DeepalIntlClient):
+            return False
+        vehicle = next((item for item in self.vehicles if item.car_id == car_id), None)
+        return bool(vehicle and self.client.is_mqtt_vehicle(vehicle))
 
     async def _async_poll_command(
         self,
@@ -181,6 +194,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         previous_last_updated: int | None,
         timeout: float,
         interval: float,
+        is_done: Callable[[], bool] | None = None,
     ) -> None:
         """Poll the command result and condition until the state changes or times out."""
         loop = asyncio.get_running_loop()
@@ -201,10 +215,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     f"{result.get('errorMsg')}"
                 )
 
-            if (
+            condition_changed = (
                 condition.last_updated_timestamp is not None
                 and condition.last_updated_timestamp != previous_last_updated
-            ):
+            )
+            state_done = is_done() if is_done is not None else True
+            if condition_changed and state_done:
                 return
 
             if loop.time() >= deadline:

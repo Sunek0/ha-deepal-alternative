@@ -47,6 +47,10 @@ class BatteryCondition(BaseModel):
     charge_schedule_enabled: bool = Field(default=False, description="Is the charging schedule enabled")
     charge_schedule_start: Optional[str] = Field(default=None, description="Charging schedule start time")
     charge_schedule_end: Optional[str] = Field(default=None, description="Charging schedule end time")
+    charge_plan_id: Optional[str] = Field(default=None, description="Charging plan identifier")
+    charge_plan_type: Optional[int] = Field(default=None, description="Charging plan type")
+    charge_plan_time_format: Optional[int] = Field(default=None, description="Charging plan time format")
+    charge_plan_time_zone: Optional[str] = Field(default=None, description="Charging plan time zone")
 
 
 class DoorsCondition(BaseModel):
