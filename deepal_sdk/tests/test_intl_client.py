@@ -25,6 +25,12 @@ from deepal.endpoints import (
     INTL_GET_MY_CARS,
     INTL_GET_SECURITY_CODE_STATUS,
     INTL_GET_SERIAL_NO,
+    INTL_CHARGE_MODIFY_PLAN,
+    INTL_CHARGE_PERCENTAGE,
+    INTL_CONTROL_DOORS,
+    INTL_CONTROL_FLASHING_HONKING,
+    INTL_CONTROL_TRUNK,
+    INTL_CONTROL_WINDOWS,
     INTL_GET_VEHICLE_CONDITION,
     INTL_LOGIN_BY_EMAIL_CODE,
     INTL_REFRESH_TOKEN,
@@ -1163,3 +1169,201 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.position_lamp is True
     assert condition.lamps.right_turn is True
     assert condition.lamps.low_beam is False
+
+
+def _command_handler(public_key, captured: dict):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == INTL_GET_SERIAL_NO:
+            captured.setdefault("serial_bodies", []).append(
+                json.loads(request.content)
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": _encrypted_serial(public_key, "SN123"),
+                },
+            )
+        if path == INTL_GET_SECURITY_CODE_STATUS:
+            captured["status_calls"] = captured.get("status_calls", 0) + 1
+            return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
+        if path == INTL_CHECK_CONTROL_CODE:
+            captured["check_calls"] = captured.get("check_calls", 0) + 1
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"rcToken": "rc-1"},
+                },
+            )
+        captured["path"] = path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"commandId": "cmd-1"}}
+        )
+
+    return handler
+
+
+def _verify_signature(body: dict, canonical: str, public_key) -> None:
+    public_key.verify(
+        base64.b64decode(body["sign"]),
+        canonical.encode(),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_doors_payload_requires_rc_token():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.control_pin = "1234"
+
+    command_id = await client.control_doors("car-1", True)
+    await client.close()
+
+    assert command_id == "cmd-1"
+    assert captured["path"] == INTL_CONTROL_DOORS
+    body = captured["body"]
+    assert body["open"] is True
+    assert body["rcToken"] == "rc-1"
+    assert body["seriralNo"] == "SN123"
+    _verify_signature(
+        body,
+        "open=true&rcToken=rc-1&seriralNo=SN123&vehicleId=car-1",
+        public_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_windows_payload_omits_command():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.rc_token = "rc-1"
+
+    await client.control_windows("car-1", False)
+    await client.close()
+
+    assert captured["path"] == INTL_CONTROL_WINDOWS
+    body = captured["body"]
+    assert body["command"] == "window"
+    assert body["open"] is False
+    assert body["openType"] == 10
+    _verify_signature(
+        body,
+        "open=false&openType=10&rcToken=rc-1&seriralNo=SN123&vehicleId=car-1",
+        public_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_trunk_payload_omits_command():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.rc_token = "rc-1"
+
+    await client.control_trunk("car-1", True)
+    await client.close()
+
+    assert captured["path"] == INTL_CONTROL_TRUNK
+    body = captured["body"]
+    assert body["command"] == "trunk"
+    assert body["open"] is True
+    _verify_signature(
+        body,
+        "open=true&rcToken=rc-1&seriralNo=SN123&vehicleId=car-1",
+        public_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_charge_limit_uses_serial_type_2():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+
+    await client.control_charge_limit("car-1", 80)
+    await client.close()
+
+    assert captured["serial_bodies"] == [{"type": "2"}]
+    assert captured["path"] == INTL_CHARGE_PERCENTAGE
+    body = captured["body"]
+    assert body["chargePercentageMax"] == 80
+    assert body["command"] == "charge_max"
+    assert body["rcToken"] == ""
+    _verify_signature(
+        body,
+        "chargePercentageMax=80&seriralNo=SN123&vehicleId=car-1",
+        public_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_charge_schedule_payload_uses_serial_type_2():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+
+    await client.control_charge_schedule(
+        "car-1", "p1", "2300", "0700", True
+    )
+    await client.close()
+
+    assert captured["serial_bodies"] == [{"type": "2"}]
+    assert captured["path"] == INTL_CHARGE_MODIFY_PLAN
+    body = captured["body"]
+    assert body["command"] == "modify-plan"
+    assert body["planId"] == "p1"
+    assert body["startTime"] == "2300"
+    assert body["endTime"] == "0700"
+    assert body["endSwitch"] == 1
+    assert body["timeZone"] == "GMT+08:00"
+    _verify_signature(
+        body,
+        (
+            "endSwitch=1&endTime=0700&planId=p1&planType=1&seriralNo=SN123"
+            "&startTime=2300&timeFormat=1&timeZone=GMT+08:00&vehicleId=car-1"
+        ),
+        public_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_flashing_honking_does_not_require_rc_token():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+
+    await client.control_flashing_honking("car-1", 3)
+    await client.close()
+
+    assert "check_calls" not in captured
+    assert captured["path"] == INTL_CONTROL_FLASHING_HONKING
+    body = captured["body"]
+    assert body["command"] == "flash_bee"
+    assert body["type"] == 3
+    assert body["rcToken"] == ""
+    _verify_signature(
+        body,
+        "seriralNo=SN123&type=3&vehicleId=car-1",
+        public_key,
+    )

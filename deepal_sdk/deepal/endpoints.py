@@ -27,6 +27,14 @@ INTL_GET_SECURITY_CODE_STATUS = "/intl-app-gw/intl-app-car-control/api/security-
 INTL_CONTROL_AIR_CONDITIONER = "/intl-app-gw/intl-app-car-control/api/control/air-conditioner"
 INTL_CONDITION_INQUIRY = "/intl-app-gw/intl-app-car-control/api/control/condition-inquiry"
 INTL_CONTROL_RESULT = "/intl-app-gw/intl-app-car-control/api/control/control-result"
+INTL_CONTROL_DOORS = "/intl-app-gw/intl-app-car-control/api/control/doors"
+INTL_CONTROL_WINDOWS = "/intl-app-gw/intl-app-car-control/api/control/windows"
+INTL_CONTROL_TRUNK = "/intl-app-gw/intl-app-car-control/api/control/trunk"
+INTL_CONTROL_FLASHING_HONKING = (
+    "/intl-app-gw/intl-app-car-control/api/control/flashing-honking"
+)
+INTL_CHARGE_PERCENTAGE = "/intl-app-gw/intl-app-car-control/api/charge/percentage"
+INTL_CHARGE_MODIFY_PLAN = "/intl-app-gw/intl-app-car-control/api/charge/modify-plan"
 
 # International CA gateway (S05 MQTT telemetry bootstrap)
 INTL_CA_GET_CONN_CONF = "/user-apigw/vot-connect-conf-center/api/device/getConnConf"

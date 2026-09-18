@@ -44,7 +44,11 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
         client.cac_token = entry.data.get(CONF_CAC_TOKEN) or None
         client.user_id = entry.data.get(CONF_USER_ID) or None
         client.private_key_pem = entry.data.get(CONF_PRIVATE_KEY) or None
-        client.control_pin = entry.data.get(CONF_CONTROL_PIN) or None
+        client.control_pin = (
+            entry.options.get(CONF_CONTROL_PIN)
+            or entry.data.get(CONF_CONTROL_PIN)
+            or None
+        )
         return client
 
     return DeepalClient(access_token=entry.data[CONF_ACCESS_TOKEN])
@@ -57,7 +61,17 @@ def _platforms(entry: ConfigEntry) -> list[Platform]:
         entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
         and entry.data.get(CONF_PRIVATE_KEY)
     ):
-        platforms.append(Platform.CLIMATE)
+        platforms.extend(
+            [
+                Platform.CLIMATE,
+                Platform.LOCK,
+                Platform.COVER,
+                Platform.BUTTON,
+                Platform.NUMBER,
+                Platform.SWITCH,
+                Platform.TIME,
+            ]
+        )
     return platforms
 
 

@@ -1,0 +1,88 @@
+"""Shared entity helpers for the Changan Deepal integration."""
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
+from .coordinator import DeepalDataUpdateCoordinator
+from .deepal import DeepalError, DeepalIntlClient
+
+
+class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
+    """Base entity with device information and command helpers."""
+
+    def __init__(
+        self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(coordinator)
+        self.vehicle = vehicle
+        self._car_id = vehicle.car_id
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.vehicle.car_id)},
+            name=self.vehicle.series_name or DEFAULT_MODEL,
+            manufacturer=MANUFACTURER,
+            model=self.vehicle.series_name or DEFAULT_MODEL,
+        )
+
+    @property
+    def condition(self):
+        """Return the vehicle condition from the coordinator."""
+        return self.coordinator.data.get(self._car_id)
+
+    @property
+    def client(self) -> DeepalIntlClient:
+        """Return the international client."""
+        return self.coordinator.client
+
+    async def async_send_command(
+        self,
+        send_command: Callable[[], Awaitable[str]],
+        *,
+        is_done: Callable[[], bool] | None = None,
+    ) -> None:
+        """Send a signed command and wait for the vehicle to report the state."""
+        try:
+            await self.coordinator.async_execute_command(
+                self._car_id, send_command, is_done=is_done
+            )
+        except DeepalError as err:
+            raise HomeAssistantError(f"Deepal command failed: {err}") from err
+
+
+def async_setup_control_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    build_entities: Callable[[Any, Any], list],
+) -> None:
+    """Set up control entities for international, command-capable vehicles.
+
+    MQTT-backed vehicles stay read-only: the app controls for them are not
+    verified, so no control entities are created.
+    """
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
+    client = coordinator.client
+    if not isinstance(client, DeepalIntlClient) or not client.private_key_pem:
+        return
+
+    entities = []
+    for vehicle in coordinator.vehicles:
+        if coordinator.vehicle_uses_mqtt(vehicle.car_id):
+            continue
+        entities.extend(build_entities(coordinator, vehicle))
+
+    if entities:
+        async_add_entities(entities)
