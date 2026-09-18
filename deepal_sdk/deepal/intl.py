@@ -47,6 +47,7 @@ from deepal.models import (
     BatteryCondition,
     ClimateCondition,
     DoorsCondition,
+    LampsCondition,
     SeatsCondition,
     SeatStatus,
     TiresCondition,
@@ -495,6 +496,12 @@ class DeepalIntlClient:
         tire = raw.get("tire") or {}
         seat = raw.get("seat") or {}
         window = raw.get("window") or {}
+        lamp = raw.get("lamp") or {}
+        charge_plan = _path_value(charge, ("chargePlanList", 0)) or {}
+
+        def _tenths(value: Any) -> Optional[float]:
+            parsed = _as_float(value)
+            return parsed / 10 if parsed is not None else None
 
         charge_status = charge.get("chargeStatus")
         charge_connection = charge.get("chargeConStatus")
@@ -527,15 +534,40 @@ class DeepalIntlClient:
             remaining_range_km=_as_int(status.get("drvMileage")),
             charging_status=str(charge_status) if charge_status is not None else None,
             charger_connected=charger_connected,
+            dc_gun_connected=charge.get("dcChargeGunConnectStatus") == 0,
+            charge_current_a=_as_float(charge.get("chargeCurrent")),
+            ac_charge_current_a=_as_float(charge.get("acChargeCurrent")),
+            dc_charge_current_a=_as_float(charge.get("dcChargeCurrent")),
+            remaining_charge_time_min=_as_int(charge.get("remainChargeTime")),
+            charge_limit_percent=_as_int(charge.get("maxSocPercent")),
+            charge_schedule_enabled=(
+                charge_plan.get("startSwitch") == 1
+                and charge_plan.get("endSwitch") == 1
+            ),
+            charge_schedule_start=(
+                str(charge_plan["startTime"])
+                if charge_plan.get("startTime") is not None
+                else None
+            ),
+            charge_schedule_end=(
+                str(charge_plan["endTime"])
+                if charge_plan.get("endTime") is not None
+                else None
+            ),
         )
 
         doors_condition = DoorsCondition(
             locked=locked,
+            driver_locked=driver_lock == 0 if driver_lock is not None else None,
+            passenger_locked=(
+                passenger_lock == 0 if passenger_lock is not None else None
+            ),
             driver_door_open=door_open(0),
             passenger_door_open=door_open(1),
             rear_left_door_open=door_open(2),
             rear_right_door_open=door_open(3),
             trunk_open=door.get("trunk") not in (None, 0),
+            hood_open=door.get("hood") not in (None, 0),
         )
 
         window_list = window.get("windows") or []
@@ -591,8 +623,25 @@ class DeepalIntlClient:
         climate = ClimateCondition(
             power_on=hvac.get("acStatus") not in (None, 0),
             target_temperature_c=target_temp / 10 if target_temp is not None else None,
+            inside_temperature_c=_tenths(hvac.get("insideTemp")),
+            outside_temperature_c=_tenths(hvac.get("outsideTemp")),
+            humidity=_as_float(hvac.get("insideHumidity")),
+            inside_pm25=_as_float(hvac.get("insidePm25")),
+            air_quality_level=_as_int(hvac.get("insideAirQualityLevel")),
+            defrost_on=hvac.get("defrostStatus") not in (None, 0),
+            fan_level=_as_int(hvac.get("fanLevel")),
             steering_wheel_heater_on=steering_heater not in (None, 0),
             steering_wheel_heater_level=_as_int(status.get("steeringWheelHeaterLevel")) or 0,
+        )
+
+        lamps = LampsCondition(
+            high_beam=lamp.get("highBeam") not in (None, 0),
+            low_beam=lamp.get("lowBeam") not in (None, 0),
+            position_lamp=lamp.get("positionLamp") not in (None, 0),
+            front_fog=lamp.get("frontFoglamp") not in (None, 0),
+            rear_fog=lamp.get("rearFoglamp") not in (None, 0),
+            left_turn=lamp.get("leftTurn") not in (None, 0),
+            right_turn=lamp.get("rightTurn") not in (None, 0),
         )
 
         last_updated = _as_int(raw.get("lastUpdatedAt"))
@@ -601,12 +650,28 @@ class DeepalIntlClient:
             car_id=vehicle_id,
             vin=raw.get("vin") or "",
             total_odometer_km=_as_float(status.get("totalMileage")),
+            speed_kmh=_as_float(status.get("speed")),
+            gear=(
+                str(status["gearSignal"])
+                if status.get("gearSignal") is not None
+                else None
+            ),
+            epb_status=_as_int(status.get("epbSts")),
+            power_status=_as_int(status.get("powerStatus")),
+            vehicle_status=_as_int(status.get("status")),
+            engine_on=_as_int(status.get("engineSts")) not in (None, 0),
+            connected=(
+                status.get("connectStatus") == 1
+                if status.get("connectStatus") is not None
+                else None
+            ),
             battery=battery,
             doors=doors_condition,
             windows=windows_condition,
             seats=seats_condition,
             climate=climate,
             tires=tires_condition,
+            lamps=lamps,
             last_updated_timestamp=last_updated // 1000 if last_updated is not None else None,
             raw_data=raw,
         )

@@ -1072,3 +1072,94 @@ async def test_command_prerequisites_raise_command_not_ready():
             require_rc_token=True,
         )
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_maps_extended_status_groups():
+    payload = {
+        "vehicleStatus": {
+            "soc": 70,
+            "drvMileage": 300,
+            "totalMileage": 1000,
+            "speed": 42.5,
+            "gearSignal": "D",
+            "epbSts": 0,
+            "powerStatus": 2,
+            "status": 1,
+            "engineSts": 1,
+            "connectStatus": 1,
+        },
+        "hvac": {
+            "insideTemp": 215,
+            "outsideTemp": 180,
+            "insideHumidity": 44.5,
+            "insidePm25": 12,
+            "insideAirQualityLevel": 3,
+            "defrostStatus": 1,
+            "fanLevel": 4,
+        },
+        "charge": {
+            "dcChargeGunConnectStatus": 0,
+            "acChargeCurrent": 16.2,
+            "dcChargeCurrent": 0,
+            "chargeCurrent": 16.2,
+            "remainChargeTime": 95,
+            "maxSocPercent": 80,
+            "chargePlanList": [
+                {"startSwitch": 1, "endSwitch": 1, "startTime": "2300", "endTime": "0700"}
+            ],
+        },
+        "door": {
+            "doors": [0, 0, 0, 0],
+            "trunk": 0,
+            "hood": 0,
+            "driverLock": 0,
+            "passengerLock": 1,
+        },
+        "lamp": {
+            "highBeam": 1,
+            "lowBeam": 0,
+            "positionLamp": 1,
+            "frontFoglamp": 0,
+            "rearFoglamp": 0,
+            "leftTurn": 0,
+            "rightTurn": 1,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.speed_kmh == 42.5
+    assert condition.gear == "D"
+    assert condition.epb_status == 0
+    assert condition.power_status == 2
+    assert condition.vehicle_status == 1
+    assert condition.engine_on is True
+    assert condition.connected is True
+    assert condition.climate.inside_temperature_c == 21.5
+    assert condition.climate.outside_temperature_c == 18.0
+    assert condition.climate.humidity == 44.5
+    assert condition.climate.inside_pm25 == 12
+    assert condition.climate.air_quality_level == 3
+    assert condition.climate.defrost_on is True
+    assert condition.climate.fan_level == 4
+    assert condition.battery.dc_gun_connected is True
+    assert condition.battery.ac_charge_current_a == 16.2
+    assert condition.battery.charge_current_a == 16.2
+    assert condition.battery.remaining_charge_time_min == 95
+    assert condition.battery.charge_limit_percent == 80
+    assert condition.battery.charge_schedule_enabled is True
+    assert condition.battery.charge_schedule_start == "2300"
+    assert condition.battery.charge_schedule_end == "0700"
+    assert condition.doors.driver_locked is True
+    assert condition.doors.passenger_locked is False
+    assert condition.lamps.high_beam is True
+    assert condition.lamps.position_lamp is True
+    assert condition.lamps.right_turn is True
+    assert condition.lamps.low_beam is False
