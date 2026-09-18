@@ -22,10 +22,12 @@ from .const import (
     CONF_CONTROL_PIN,
     CONF_DEVICE_ID,
     CONF_USER_ID,
+    CONF_OS_VERSION,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_OS_VERSION,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 
@@ -37,6 +39,7 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
     if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
         client = DeepalIntlClient(
             country=entry.data.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
+            os_version=entry.options.get(CONF_OS_VERSION, DEFAULT_OS_VERSION),
             enable_api_logging=bool(
                 entry.options.get(CONF_ENABLE_API_LOGGING, False)
             ),

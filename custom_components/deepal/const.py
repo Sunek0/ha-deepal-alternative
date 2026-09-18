@@ -18,6 +18,7 @@ CONF_VEHICLE_ID = "vehicle_id"
 CONF_PRIVATE_KEY = "private_key"
 CONF_CONTROL_PIN = "control_pin"
 CONF_DEVICE_ID = "device_id"
+CONF_OS_VERSION = "os_version"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
 CONF_ENABLE_MQTT_CONTROLS = "enable_mqtt_controls"
@@ -25,6 +26,7 @@ CONF_ENABLE_MQTT_CONTROLS = "enable_mqtt_controls"
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Changan Deepal"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
+DEFAULT_OS_VERSION = "15"
 
 # Device Info
 MANUFACTURER = "Changan Auto"

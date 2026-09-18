@@ -33,6 +33,7 @@ from .const import (
     CONF_PRIVATE_KEY,
     CONF_CONTROL_PIN,
     CONF_DEVICE_ID,
+    CONF_OS_VERSION,
     CONF_USER_ID,
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
@@ -40,6 +41,7 @@ from .const import (
     CONF_ENABLE_MQTT_CONTROLS,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_OS_VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -494,6 +496,15 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     CONF_ENABLE_MQTT_CONTROLS,
                     default=options.get(CONF_ENABLE_MQTT_CONTROLS, False),
                 ): bool,
+                vol.Optional(
+                    CONF_OS_VERSION,
+                    default=options.get(CONF_OS_VERSION, DEFAULT_OS_VERSION),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["15", "14", "13", "12", "11", "10", "9"],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

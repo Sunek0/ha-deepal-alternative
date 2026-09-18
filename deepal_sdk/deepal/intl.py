@@ -159,6 +159,7 @@ class DeepalIntlClient:
         country: str = DEFAULT_COUNTRY,
         language: str = DEFAULT_LANGUAGE,
         app_version: str = INTL_APP_VERSION,
+        os_version: str = INTL_OS_VERSION,
         device_id: Optional[str] = None,
         base_url: str = INTL_BASE_URL,
         timeout: float = 15.0,
@@ -168,6 +169,7 @@ class DeepalIntlClient:
         self.country = country
         self.language = language
         self.app_version = app_version
+        self.os_version = os_version
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -231,7 +233,7 @@ class DeepalIntlClient:
             "devicetype": INTL_DEVICE_TYPE,
             "deviceid": self.device_id,
             "selectcountry": self.country,
-            "x-os-version": INTL_OS_VERSION,
+            "x-os-version": self.os_version,
             "accept-language": self.language,
             "content-type": "application/json; charset=UTF-8",
             "user-agent": INTL_USER_AGENT,
@@ -466,6 +468,14 @@ class DeepalIntlClient:
         self.cac_token = data.get("cacToken") or self.cac_token
         self.access_token_expires_at = self._jwt_expiry(self.access_token)
         self.user_id = data.get("userId") or self.user_id
+
+        if data.get("cacToken"):
+            logger.info("Deepal token refresh returned a new CAC token")
+        else:
+            logger.warning(
+                "Deepal token refresh did not return a new CAC token; the CA/MQTT "
+                "bootstrap keeps the previous one"
+            )
 
         return AuthToken(
             access_token=self.access_token,
