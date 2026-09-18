@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import time
 
 import httpx
@@ -1481,3 +1482,68 @@ async def test_login_stores_access_token_expiry():
     await client.close()
 
     assert client.access_token_expires_at == expires
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_os_version_header_override():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["xos"] = request.headers.get("x-os-version")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="ES",
+        device_id="test-device-id",
+        os_version="9",
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["xos"] == "9"
+
+
+@pytest.mark.asyncio
+async def test_refresh_logs_when_cac_token_not_renewed(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"success": True, "code": "0", "data": {"token": "new_token"}},
+        )
+
+    client = _client(handler)
+    client.access_token = "old_token"
+    client.refresh_token = "old_refresh"
+
+    with caplog.at_level(logging.WARNING, logger="deepal_sdk"):
+        await client.refresh_tokens()
+    await client.close()
+
+    assert "did not return a new CAC token" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_refresh_logs_when_cac_token_renewed(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"token": "new_token", "cacToken": "new_cac"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "old_token"
+    client.refresh_token = "old_refresh"
+
+    with caplog.at_level(logging.INFO, logger="deepal_sdk"):
+        await client.refresh_tokens()
+    await client.close()
+
+    assert "returned a new CAC token" in caplog.text
+    assert "new_cac" not in caplog.text
