@@ -11,6 +11,8 @@ async def test_client_initialization():
     assert client.access_token == "test_token_123"
     assert "Authorization" in client._get_headers()
     assert client._get_headers()["Authorization"] == "Bearer test_token_123"
+    assert client._get_headers()["Version"] == "1.12.0"
+    assert "MyChangan/1.12.0" in client._get_headers()["User-Agent"]
     await client.close()
 
 

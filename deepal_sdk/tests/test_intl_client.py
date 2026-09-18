@@ -60,6 +60,8 @@ async def test_request_email_code_encrypts_email_and_sends_app_headers():
     assert captured["method"] == "POST"
     assert captured["url"].path == INTL_SEND_EMAIL_CODE
     assert captured["headers"]["appid"] == "ca"
+    assert captured["headers"]["appversion"] == "V1.12.0"
+    assert captured["headers"]["x-os-version"] == "15"
     assert captured["headers"]["selectcountry"] == "GB"
     assert captured["headers"]["deviceid"] == "test-device-id"
     assert captured["body"]["type"] == "0"
