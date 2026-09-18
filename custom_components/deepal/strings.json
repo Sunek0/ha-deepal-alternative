@@ -3,25 +3,89 @@
     "step": {
       "user": {
         "title": "Changan Deepal",
-        "description": "Select the platform you use in the My Changan app and paste the tokens printed by the SDK login example.",
+        "description": "Choose the platform you use in the My Changan app. International accounts log in with an email or SMS code; SDA accounts use a pasted access token.",
         "data": {
-          "platform": "Platform",
+          "platform": "Platform"
+        }
+      },
+      "sda": {
+        "title": "SDA (China) access token",
+        "description": "Paste the access token printed by the SDA login example.",
+        "data": {
           "access_token": "Access token",
-          "refresh_token": "Refresh token (international, optional)",
-          "cac_token": "CAC token (international, optional)",
-          "private_key": "Login private key (international, for remote commands)",
-          "control_pin": "Remote control PIN (international, optional)",
-          "country": "Sales country code (international, e.g. ES)",
+          "country": "Country code",
           "phone": "Phone number (optional)"
+        }
+      },
+      "intl_method": {
+        "title": "International login",
+        "description": "Choose how your My Changan account signs in.",
+        "data": {
+          "login_method": "Login method"
+        }
+      },
+      "intl_email": {
+        "title": "Email login",
+        "description": "Select your sales country and the account email. A verification code will be sent.",
+        "data": {
+          "country": "Sales country",
+          "email": "Email"
+        }
+      },
+      "intl_email_code": {
+        "title": "Email verification code",
+        "description": "Enter the code received by email.",
+        "data": {
+          "auth_code": "Verification code"
+        }
+      },
+      "intl_phone": {
+        "title": "SMS login",
+        "description": "Select your sales country and the national mobile number (without the country prefix).",
+        "data": {
+          "country": "Sales country",
+          "phone": "Mobile number"
+        }
+      },
+      "intl_sms_code": {
+        "title": "SMS verification code",
+        "description": "Enter the code received by SMS.",
+        "data": {
+          "auth_code": "Verification code"
+        }
+      },
+      "sda_reauth": {
+        "title": "SDA reauthentication",
+        "description": "Paste a new access token for this account.",
+        "data": {
+          "access_token": "Access token"
         }
       }
     },
     "error": {
-      "invalid_auth": "Authentication failed. Check the token for the selected platform.",
-      "cannot_connect": "Could not reach the Changan Deepal API."
+      "invalid_auth": "Authentication failed.",
+      "cannot_connect": "Could not reach the Changan Deepal API.",
+      "too_many_codes": "Too many verification codes requested. Wait and try again.",
+      "account_not_registered": "This account is not registered for the selected country.",
+      "bad_code": "The verification code is invalid or has expired.",
+      "no_vehicles": "The account has no vehicles linked.",
+      "wrong_account": "This account does not own the configured vehicle."
     },
     "abort": {
-      "already_configured": "This account is already configured."
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Reauthentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Changan Deepal options",
+        "data": {
+          "scan_interval": "Scan interval (seconds)",
+          "control_pin": "Remote control PIN",
+          "enable_api_logging": "Log redacted API traffic"
+        }
+      }
     }
   }
 }

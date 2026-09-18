@@ -1,6 +1,7 @@
 """Component for Changan Deepal integration."""
 
 import logging
+from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -19,7 +20,10 @@ from .const import (
     CONF_PRIVATE_KEY,
     CONF_CONTROL_PIN,
     CONF_USER_ID,
+    CONF_SCAN_INTERVAL,
+    CONF_ENABLE_API_LOGGING,
     DEFAULT_COUNTRY,
+    DEFAULT_SCAN_INTERVAL,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 
@@ -31,6 +35,9 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
     if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
         client = DeepalIntlClient(
             country=entry.data.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
+            enable_api_logging=bool(
+                entry.options.get(CONF_ENABLE_API_LOGGING, False)
+            ),
         )
         client.access_token = entry.data[CONF_ACCESS_TOKEN]
         client.refresh_token = entry.data.get(CONF_REFRESH_TOKEN) or None
@@ -57,7 +64,14 @@ def _platforms(entry: ConfigEntry) -> list[Platform]:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Changan Deepal from a config entry."""
     client = _build_client(entry)
-    coordinator = DeepalDataUpdateCoordinator(hass, entry, client)
+    coordinator = DeepalDataUpdateCoordinator(
+        hass,
+        entry,
+        client,
+        update_interval=timedelta(
+            seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        ),
+    )
 
     # Fetch initial data
     await coordinator.async_config_entry_first_refresh()
