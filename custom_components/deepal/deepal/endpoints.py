@@ -4,6 +4,7 @@
 DEFAULT_BASE_URL = "https://pre-acenter.sda.changan.com.cn"
 GATEWAY_BASE_URL = "https://pre-acenter.sda.changan.com.cn/app-apigw/store-sda-api/api/v2"
 INTL_BASE_URL = "https://m.iov.changanauto.com.de"
+INTL_CA_BASE_URL = "https://ca-m.iov.changanauto.com.de"
 
 # Authentication Endpoints
 LOGIN_SMS_CODE = "/appauth/sda-app/api/user/login/code"
@@ -25,6 +26,10 @@ INTL_CHECK_CONTROL_CODE = "/intl-app-gw/intl-app-car-control/api/security-code/c
 INTL_CONTROL_AIR_CONDITIONER = "/intl-app-gw/intl-app-car-control/api/control/air-conditioner"
 INTL_CONDITION_INQUIRY = "/intl-app-gw/intl-app-car-control/api/control/condition-inquiry"
 INTL_CONTROL_RESULT = "/intl-app-gw/intl-app-car-control/api/control/control-result"
+
+# International CA gateway (S05 MQTT telemetry bootstrap)
+INTL_CA_GET_CONN_CONF = "/user-apigw/vot-connect-conf-center/api/device/getConnConf"
+INTL_CA_GET_AUTH_TOKEN = "/user-apigw/vot-connect-auth-center/api/auth/getAuthTokenByUserId"
 
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"

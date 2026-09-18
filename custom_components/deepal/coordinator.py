@@ -61,10 +61,34 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
-            condition = await self.client.get_vehicle_condition(vehicle.car_id)
+            if self._uses_mqtt(vehicle):
+                condition = await self.client.s05_mqtt_condition(vehicle.car_id)
+            else:
+                condition = await self.client.get_vehicle_condition(vehicle.car_id)
             data[vehicle.car_id] = condition
 
         return data
+
+    def _uses_mqtt(self, vehicle: Vehicle) -> bool:
+        """Return whether this vehicle should use the MQTT telemetry path.
+
+        MQTT needs the account user id returned by login; without it (today,
+        entries configured with pasted tokens) the REST condition is used so the
+        integration keeps working until the entry is re-authenticated.
+        """
+        if not isinstance(self.client, DeepalIntlClient):
+            return False
+        if not self.client.is_mqtt_vehicle(vehicle):
+            return False
+        if not self.client.user_id:
+            _LOGGER.warning(
+                "Deepal vehicle %s is MQTT-backed but the entry has no user id; "
+                "using the REST condition endpoint (stale data). Re-authenticate "
+                "to enable MQTT telemetry.",
+                vehicle.car_id,
+            )
+            return False
+        return True
 
     async def _async_refresh_tokens(self) -> bool:
         """Refresh the international session and persist the new tokens."""
