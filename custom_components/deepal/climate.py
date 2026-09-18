@@ -46,7 +46,6 @@ class DeepalCabinClimateEntity(
     """Cabin climate control for international vehicles."""
 
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
-    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_min_temp = 16
@@ -74,6 +73,18 @@ class DeepalCabinClimateEntity(
     @property
     def _condition(self):
         return self.coordinator.data.get(self._car_id)
+
+    @property
+    def _is_mqtt(self) -> bool:
+        """Return whether the vehicle uses the MQTT telemetry backend."""
+        return (self.vehicle.protocol_type or "").upper() == "MQTT"
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        """Return no features for MQTT-backed vehicles until controls are verified."""
+        if self._is_mqtt:
+            return ClimateEntityFeature(0)
+        return ClimateEntityFeature.TARGET_TEMPERATURE
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -115,6 +126,10 @@ class DeepalCabinClimateEntity(
         await self._async_send(False, self.target_temperature or 21.0)
 
     async def _async_send(self, enabled: bool, temperature: float) -> None:
+        if self._is_mqtt:
+            raise HomeAssistantError(
+                "S05 MQTT vehicles are read-only in this version"
+            )
         try:
             await self.coordinator.async_execute_command(
                 self._car_id,

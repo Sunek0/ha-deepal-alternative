@@ -18,6 +18,7 @@ from .const import (
     CONF_CAC_TOKEN,
     CONF_PRIVATE_KEY,
     CONF_CONTROL_PIN,
+    CONF_USER_ID,
     DEFAULT_COUNTRY,
 )
 from .coordinator import DeepalDataUpdateCoordinator
@@ -34,6 +35,7 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
         client.access_token = entry.data[CONF_ACCESS_TOKEN]
         client.refresh_token = entry.data.get(CONF_REFRESH_TOKEN) or None
         client.cac_token = entry.data.get(CONF_CAC_TOKEN) or None
+        client.user_id = entry.data.get(CONF_USER_ID) or None
         client.private_key_pem = entry.data.get(CONF_PRIVATE_KEY) or None
         client.control_pin = entry.data.get(CONF_CONTROL_PIN) or None
         return client

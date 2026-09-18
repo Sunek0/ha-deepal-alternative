@@ -21,6 +21,7 @@ from .const import (
     CONF_CAC_TOKEN,
     CONF_PRIVATE_KEY,
     CONF_CONTROL_PIN,
+    CONF_USER_ID,
     DEFAULT_COUNTRY,
 )
 
@@ -83,6 +84,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_ACCESS_TOKEN: token,
                         CONF_REFRESH_TOKEN: (user_input.get(CONF_REFRESH_TOKEN) or "").strip(),
                         CONF_CAC_TOKEN: (user_input.get(CONF_CAC_TOKEN) or "").strip(),
+                        CONF_USER_ID: (user_input.get(CONF_USER_ID) or "").strip(),
                         CONF_PRIVATE_KEY: (user_input.get(CONF_PRIVATE_KEY) or "").strip(),
                         CONF_CONTROL_PIN: (user_input.get(CONF_CONTROL_PIN) or "").strip(),
                         CONF_COUNTRY: user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
@@ -102,6 +104,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_ACCESS_TOKEN): str,
                 vol.Optional(CONF_REFRESH_TOKEN, default=""): str,
                 vol.Optional(CONF_CAC_TOKEN, default=""): str,
+                vol.Optional(CONF_USER_ID, default=""): str,
                 vol.Optional(CONF_PRIVATE_KEY, default=""): selector.TextSelector(
                     selector.TextSelectorConfig(multiline=True)
                 ),

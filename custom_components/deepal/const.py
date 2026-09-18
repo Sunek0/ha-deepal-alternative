@@ -11,6 +11,7 @@ CONF_COUNTRY = "country"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_CAC_TOKEN = "cac_token"
+CONF_USER_ID = "user_id"
 CONF_PRIVATE_KEY = "private_key"
 CONF_CONTROL_PIN = "control_pin"
 
