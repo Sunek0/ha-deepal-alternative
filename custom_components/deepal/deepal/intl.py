@@ -160,6 +160,7 @@ class DeepalIntlClient:
         language: str = DEFAULT_LANGUAGE,
         app_version: str = INTL_APP_VERSION,
         os_version: str = INTL_OS_VERSION,
+        tsp_token_source: str = "cac",
         device_id: Optional[str] = None,
         base_url: str = INTL_BASE_URL,
         timeout: float = 15.0,
@@ -170,6 +171,7 @@ class DeepalIntlClient:
         self.language = language
         self.app_version = app_version
         self.os_version = os_version
+        self.tsp_token_source = tsp_token_source
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -179,6 +181,8 @@ class DeepalIntlClient:
         self.cac_token: Optional[str] = None
         self.access_token_expires_at: Optional[int] = None
         self.user_id: Optional[str] = None
+        self.ca_user_id: Optional[str] = None
+        self.cac_user_id: Optional[str] = None
         self.control_pin: Optional[str] = None
         self.rc_token: Optional[str] = None
         self.public_key: Optional[str] = None
@@ -240,9 +244,14 @@ class DeepalIntlClient:
         }
         if self.access_token:
             headers["authorization"] = self._authorization_value()
-            if self.cac_token:
-                headers["X-Tsp-User-Token"] = self.cac_token
-                headers["X-VCS-User-Token"] = self.cac_token
+            tsp_value = {
+                "cac": self.cac_token,
+                "cac_user_id": self.cac_user_id,
+                "ca_user_id": self.ca_user_id,
+            }.get(self.tsp_token_source, self.cac_token)
+            if tsp_value:
+                headers["X-Tsp-User-Token"] = tsp_value
+                headers["X-VCS-User-Token"] = tsp_value
         return headers
 
     def _authorization_value(self) -> str:
@@ -360,12 +369,30 @@ class DeepalIntlClient:
         self.cac_token = data.get("cacToken")
         self.access_token_expires_at = self._jwt_expiry(self.access_token)
         self.user_id = data.get("userId")
+        self.ca_user_id = data.get("caUserId")
+        self.cac_user_id = data.get("cacUserId")
+        self._log_session_fields()
 
         return AuthToken(
             access_token=self.access_token,
             refresh_token=self.refresh_token,
             cac_token=self.cac_token,
-            user_id=data.get("userId"),
+            ca_user_id=self.ca_user_id,
+            cac_user_id=self.cac_user_id,
+            user_id=self.user_id,
+        )
+
+    def _log_session_fields(self) -> None:
+        """Log which session fields are present, never their values."""
+        logger.warning(
+            "Deepal session fields present: token=%s refreshToken=%s cacToken=%s "
+            "userId=%s caUserId=%s cacUserId=%s",
+            bool(self.access_token),
+            bool(self.refresh_token),
+            bool(self.cac_token),
+            bool(self.user_id),
+            bool(self.ca_user_id),
+            bool(self.cac_user_id),
         )
 
     async def request_email_code(self, email: str) -> None:
@@ -468,6 +495,9 @@ class DeepalIntlClient:
         self.cac_token = data.get("cacToken") or self.cac_token
         self.access_token_expires_at = self._jwt_expiry(self.access_token)
         self.user_id = data.get("userId") or self.user_id
+        self.ca_user_id = data.get("caUserId") or self.ca_user_id
+        self.cac_user_id = data.get("cacUserId") or self.cac_user_id
+        self._log_session_fields()
 
         if data.get("cacToken"):
             logger.info("Deepal token refresh returned a new CAC token")
@@ -481,6 +511,8 @@ class DeepalIntlClient:
             access_token=self.access_token,
             refresh_token=self.refresh_token,
             cac_token=self.cac_token,
+            ca_user_id=self.ca_user_id,
+            cac_user_id=self.cac_user_id,
             user_id=data.get("userId"),
         )
 

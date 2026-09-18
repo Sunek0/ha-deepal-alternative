@@ -39,11 +39,17 @@ def test_safe_headers_keeps_region_only():
             "selectcountry": "ES",
             "appversion": "V1.12.0",
             "language": "es_ES",
+            "x-os-version": "9",
             "authorization": "secret",
         }
     )
 
-    assert out == {"selectcountry": "ES", "appversion": "V1.12.0", "language": "es_ES"}
+    assert out == {
+        "selectcountry": "ES",
+        "appversion": "V1.12.0",
+        "language": "es_ES",
+        "x-os-version": "9",
+    }
 
 
 def test_is_sensitive_key():

@@ -1547,3 +1547,62 @@ async def test_refresh_logs_when_cac_token_renewed(caplog):
 
     assert "returned a new CAC token" in caplog.text
     assert "new_cac" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_tsp_token_source_override():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tsp"] = request.headers.get("X-Tsp-User-Token")
+        captured["vcs"] = request.headers.get("X-VCS-User-Token")
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="ES",
+        device_id="test-device-id",
+        tsp_token_source="cac_user_id",
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+    client.cac_token = "cac_value"
+    client.cac_user_id = "cac_user_value"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["tsp"] == "cac_user_value"
+    assert captured["vcs"] == "cac_user_value"
+    assert captured["auth"] == "test_token_123|cac_value"
+
+
+@pytest.mark.asyncio
+async def test_login_logs_session_fields_without_values(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {
+                    "token": "SECRET_TOKEN",
+                    "refreshToken": "SECRET_REFRESH",
+                    "cacToken": "SECRET_CAC",
+                    "caUserId": "SECRET_CA_USER",
+                    "cacUserId": "SECRET_CAC_USER",
+                    "userId": "SECRET_USER",
+                },
+            },
+        )
+
+    client = _client(handler)
+    with caplog.at_level(logging.INFO, logger="deepal_sdk"):
+        await client.login_with_email_code(EMAIL, CODE)
+    await client.close()
+
+    assert "cacToken=True" in caplog.text
+    assert "caUserId=True" in caplog.text
+    assert "cacUserId=True" in caplog.text
+    assert "SECRET_CAC" not in caplog.text
+    assert "SECRET_CA_USER" not in caplog.text
