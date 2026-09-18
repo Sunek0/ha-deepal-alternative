@@ -23,3 +23,15 @@ class DeepalAPIError(DeepalError):
 class DeepalConnectionError(DeepalError):
     """Raised when a network or connection error occurs."""
     pass
+
+
+class DeepalRateLimitError(DeepalAPIError):
+    """Raised when the API rate-limits the request."""
+
+
+class DeepalCommandAuthError(DeepalAuthError):
+    """Raised when remote-command signing material is rejected."""
+
+
+class DeepalCommandNotReady(DeepalAuthError):
+    """Raised when remote-command prerequisites are missing."""

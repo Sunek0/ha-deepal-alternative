@@ -36,8 +36,12 @@ from .endpoints import (
 from .exceptions import (
     DeepalAPIError,
     DeepalAuthError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
     DeepalConnectionError,
+    DeepalRateLimitError,
 )
+from .redact import redact_for_log, safe_headers
 from .models import (
     AuthToken,
     BatteryCondition,
@@ -151,6 +155,7 @@ class DeepalIntlClient:
         device_id: Optional[str] = None,
         base_url: str = INTL_BASE_URL,
         timeout: float = 15.0,
+        enable_api_logging: bool = False,
         httpx_client: Optional[httpx.AsyncClient] = None,
     ):
         self.country = country
@@ -159,6 +164,7 @@ class DeepalIntlClient:
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.enable_api_logging = enable_api_logging
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.cac_token: Optional[str] = None
@@ -247,13 +253,21 @@ class DeepalIntlClient:
 
         url = f"{base_url or self.base_url}{path}" if path.startswith("/") else path
         body = json.dumps(json_data or {}, separators=(",", ":"), ensure_ascii=False)
+        headers = self._get_headers()
+        if self.enable_api_logging:
+            logger.warning(
+                "Deepal API request path=%s headers=%s payload=%s",
+                path,
+                safe_headers(headers),
+                redact_for_log(json_data or {}),
+            )
 
         try:
             response = await self._client.request(
                 method="POST",
                 url=url,
                 content=body,
-                headers=self._get_headers(),
+                headers=headers,
             )
         except httpx.RequestError as exc:
             logger.error("Network error requesting %s: %s", url, exc)
@@ -278,11 +292,25 @@ class DeepalIntlClient:
                 status_code=response.status_code,
             )
 
+        if self.enable_api_logging:
+            logger.warning(
+                "Deepal API response path=%s status=%s body=%s",
+                path,
+                response.status_code,
+                redact_for_log(payload),
+            )
+
         if payload.get("success") is False:
             code = payload.get("code")
             msg = payload.get("msg") or payload.get("message") or f"HTTP {response.status_code}"
+            if str(code) == "CAC_1_1_01_033":
+                raise DeepalRateLimitError(
+                    f"Deepal rate limit: {code} {msg}",
+                    status_code=response.status_code,
+                    code=code,
+                )
             if str(code) == "COMMON_1_1_01_001" and path.endswith("/serial-no/get"):
-                raise DeepalAuthError(
+                raise DeepalCommandAuthError(
                     "Remote command signing was rejected; log in again to register "
                     "a new command-signing key."
                 )
@@ -773,7 +801,9 @@ class DeepalIntlClient:
 
     def _load_private_key(self):
         if not self.private_key_pem:
-            raise DeepalAuthError("Login private key is required to sign commands.")
+            raise DeepalCommandNotReady(
+                "Login private key is required to sign commands."
+            )
         return serialization.load_pem_private_key(
             self.private_key_pem.encode(), password=None
         )
@@ -813,7 +843,13 @@ class DeepalIntlClient:
         """Decrypt a serial number with the login private key."""
         private_key = self._load_private_key()
         ciphertext = base64.b64decode("".join(serial_data.split()))
-        return private_key.decrypt(ciphertext, padding.PKCS1v15()).decode().strip()
+        try:
+            return private_key.decrypt(ciphertext, padding.PKCS1v15()).decode().strip()
+        except ValueError as exc:
+            raise DeepalCommandAuthError(
+                "Could not decrypt the vehicle serial number; log in again to "
+                "register a new command-signing key."
+            ) from exc
 
     async def get_security_code_status(self) -> dict[str, Any]:
         """Fetch the control PIN status before exchanging it.
@@ -835,7 +871,7 @@ class DeepalIntlClient:
             auth_required=True,
         )
         if not isinstance(data, dict) or not data.get("rcToken"):
-            raise DeepalAuthError("Control-code check did not return an rcToken.")
+            raise DeepalCommandAuthError("Control-code check did not return an rcToken.")
         self.rc_token = str(data["rcToken"])
         return self.rc_token
 
@@ -849,7 +885,9 @@ class DeepalIntlClient:
         sign_omit_keys: Optional[set[str]] = None,
     ) -> str:
         if not self.private_key_pem:
-            raise DeepalAuthError("Login private key is required to sign commands.")
+            raise DeepalCommandNotReady(
+                "Login private key is required to sign commands."
+            )
         reused_rc_token = False
         if require_rc_token:
             if self.rc_token:
@@ -857,7 +895,7 @@ class DeepalIntlClient:
             elif self.control_pin:
                 await self.check_control_code(self.control_pin)
             else:
-                raise DeepalAuthError("Control PIN is required for this command.")
+                raise DeepalCommandNotReady("Control PIN is required for this command.")
 
         serial_data = await self.get_serial_data(serial_type)
         serial_no = self.decrypt_serial_no(serial_data)
