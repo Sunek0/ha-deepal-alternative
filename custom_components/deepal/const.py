@@ -20,6 +20,8 @@ CONF_CONTROL_PIN = "control_pin"
 CONF_DEVICE_ID = "device_id"
 CONF_OS_VERSION = "os_version"
 CONF_TSP_TOKEN_SOURCE = "tsp_token_source"
+CONF_ENVIRONMENT = "environment"
+CONF_SEND_TIMESTAMPS = "send_timestamps"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
 CONF_ENABLE_MQTT_CONTROLS = "enable_mqtt_controls"
@@ -28,7 +30,9 @@ DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Changan Deepal"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
 DEFAULT_OS_VERSION = "15"
-DEFAULT_TSP_TOKEN_SOURCE = "cac"
+DEFAULT_TSP_TOKEN_SOURCE = "access"
+DEFAULT_ENVIRONMENT = "release_eu"
+DEFAULT_SEND_TIMESTAMPS = False
 
 # Device Info
 MANUFACTURER = "Changan Auto"

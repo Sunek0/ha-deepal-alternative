@@ -35,6 +35,8 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_OS_VERSION,
     CONF_TSP_TOKEN_SOURCE,
+    CONF_ENVIRONMENT,
+    CONF_SEND_TIMESTAMPS,
     CONF_USER_ID,
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
@@ -44,7 +46,10 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_OS_VERSION,
     DEFAULT_TSP_TOKEN_SOURCE,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_SEND_TIMESTAMPS,
 )
+from .deepal.endpoints import INTL_ENVIRONMENTS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -514,10 +519,30 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     ),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=["cac", "cac_user_id", "ca_user_id"],
+                        options=["access", "cac", "cac_user_id", "ca_user_id"],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Optional(
+                    CONF_ENVIRONMENT,
+                    default=options.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(
+                                value=environment.id, label=environment.label
+                            )
+                            for environment in INTL_ENVIRONMENTS.values()
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    CONF_SEND_TIMESTAMPS,
+                    default=options.get(
+                        CONF_SEND_TIMESTAMPS, DEFAULT_SEND_TIMESTAMPS
+                    ),
+                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

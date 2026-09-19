@@ -87,3 +87,18 @@ async def test_api_logging_redacts_payloads(caplog):
     assert "[redacted]" in caplog.text
     assert "secret_token" not in caplog.text
     assert "test_token_123" not in caplog.text
+
+
+def test_safe_headers_keeps_timestamps():
+    out = safe_headers(
+        {
+            "X-Tsp-Timestamp": "1700000000000",
+            "X-VCS-Timestamp": "1700000000000",
+            "X-Tsp-User-Token": "secret",
+        }
+    )
+
+    assert out == {
+        "x-tsp-timestamp": "1700000000000",
+        "x-vcs-timestamp": "1700000000000",
+    }

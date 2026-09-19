@@ -24,12 +24,16 @@ from .const import (
     CONF_USER_ID,
     CONF_OS_VERSION,
     CONF_TSP_TOKEN_SOURCE,
+    CONF_ENVIRONMENT,
+    CONF_SEND_TIMESTAMPS,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_OS_VERSION,
     DEFAULT_TSP_TOKEN_SOURCE,
+    DEFAULT_ENVIRONMENT,
+    DEFAULT_SEND_TIMESTAMPS,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 
@@ -44,6 +48,10 @@ def _build_client(entry: ConfigEntry) -> DeepalClient | DeepalIntlClient:
             os_version=entry.options.get(CONF_OS_VERSION, DEFAULT_OS_VERSION),
             tsp_token_source=entry.options.get(
                 CONF_TSP_TOKEN_SOURCE, DEFAULT_TSP_TOKEN_SOURCE
+            ),
+            environment=entry.options.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),
+            send_timestamps=bool(
+                entry.options.get(CONF_SEND_TIMESTAMPS, DEFAULT_SEND_TIMESTAMPS)
             ),
             enable_api_logging=bool(
                 entry.options.get(CONF_ENABLE_API_LOGGING, False)

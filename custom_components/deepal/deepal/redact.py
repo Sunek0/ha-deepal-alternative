@@ -6,7 +6,14 @@ from typing import Any
 
 _REDACTED = "[redacted]"
 _MAX_STRING_LENGTH = 500
-_SAFE_HEADER_KEYS = ("selectcountry", "appversion", "language", "x-os-version")
+_SAFE_HEADER_KEYS = (
+    "selectcountry",
+    "appversion",
+    "language",
+    "x-os-version",
+    "x-tsp-timestamp",
+    "x-vcs-timestamp",
+)
 
 _SENSITIVE_EXACT_KEYS = {
     "access_token",
@@ -88,4 +95,5 @@ def redact_for_log(value: Any) -> Any:
 
 def safe_headers(headers: dict[str, str]) -> dict[str, str]:
     """Return only the non-sensitive headers useful for debugging regions."""
-    return {key: headers[key] for key in _SAFE_HEADER_KEYS if key in headers}
+    lookup = {str(key).lower(): value for key, value in headers.items()}
+    return {key: lookup[key] for key in _SAFE_HEADER_KEYS if key in lookup}
