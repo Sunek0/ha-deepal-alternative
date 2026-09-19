@@ -26,76 +26,36 @@ INTL_ENVIRONMENTS: dict[str, IntlEnvironment] = {
     for environment in (
         IntlEnvironment(
             "release_eu",
-            "Europe (production)",
+            "Europe",
             "ca",
             "https://m.iov.changanauto.com.de",
             "https://ca-m.iov.changanauto.com.de",
         ),
         IntlEnvironment(
-            "release_eu_mix",
-            "Europe (migration)",
-            "ca",
-            "https://mix-m.iov.changanauto.com.de",
-            "https://ca-m.iov.changanauto.com.de",
-        ),
-        IntlEnvironment(
-            "preprod_eu",
-            "Europe (preproduction)",
-            "ca",
-            "https://m-uat.iov.changanauto.com.de",
-            "https://ca-m-uat.iov.changanauto.com.de",
-        ),
-        IntlEnvironment(
-            "release_ase",
-            "ASEAN DEEPAL (production)",
-            "ca",
-            "https://m.iov.changanauto.sg",
-            "https://ca-m.iov.changanauto.sg",
-            intl_path_prefix="/appgw",
-        ),
-        IntlEnvironment(
-            "release_ase_connect",
-            "ASEAN CONNECT (production)",
-            "changan",
-            "https://m.iov.changanauto.sg",
-            "https://ca-m.iov.changanauto.sg",
-            intl_path_prefix="/ca-appgw",
-        ),
-        IntlEnvironment(
-            "release_st",
-            "Saudi Arabia (production)",
-            "ca",
-            "https://m.sa.changanauto.link",
-            "https://m.sa.changanauto.link",
-        ),
-        IntlEnvironment(
-            "release_alq",
-            "United Arab Emirates (production)",
-            "ca",
-            "https://m.ae.changanauto.link",
-            "https://m.ae.changanauto.link",
-        ),
-        IntlEnvironment(
             "release_znm",
-            "Latin America (production)",
+            "Latin America",
             "ca",
             "https://m.mx.changanauto.link",
             "https://m.mx.changanauto.link",
-        ),
-        IntlEnvironment(
-            "release_dlt",
-            "CIS (production)",
-            "ca",
-            "https://m.iov.changanauto.ru",
-            "https://m.iov.changanauto.ru",
         ),
     )
 }
 DEFAULT_INTL_ENVIRONMENT = "release_eu"
 
+LEGACY_INTL_ENVIRONMENTS: dict[str, str] = {
+    "release_eu_mix": "release_eu",
+    "preprod_eu": "release_eu",
+    "release_ase": "release_eu",
+    "release_ase_connect": "release_eu",
+    "release_dlt": "release_eu",
+    "release_st": "release_eu",
+    "release_alq": "release_eu",
+}
+
 
 def get_intl_environment(environment: str) -> IntlEnvironment:
     """Return the environment definition or raise for an unknown identifier."""
+    environment = LEGACY_INTL_ENVIRONMENTS.get(environment, environment)
     try:
         return INTL_ENVIRONMENTS[environment]
     except KeyError as exc:
@@ -110,8 +70,11 @@ OAUTH_TOKEN_BIND = "/appauth/sda-app/api/v2/oauth2-login/token/bind"
 OAUTH_THIRD_UNBIND = "/appauth/sda-app/api/v2/oauth2/third/unbind"
 INTL_SEND_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-send-auth-code"
 INTL_LOGIN_BY_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-code-in"
+INTL_LOGIN_BY_EMAIL_PASSWORD = "/intl-app-gw/intl-app-auth/api/login/email-pass-in"
 INTL_SEND_SMS_CODE = "/intl-app-gw/intl-app-auth/api/login/send-auth-code"
 INTL_LOGIN_BY_MOBILE_CODE = "/intl-app-gw/intl-app-auth/api/login/login-by-mobile-code"
+INTL_LOGIN_BY_MOBILE_PASSWORD = "/intl-app-gw/intl-app-auth/api/login/login-by-pwd"
+INTL_LOGOUT = "/intl-app-gw/intl-app-auth/api/logout"
 INTL_REFRESH_TOKEN = "/intl-app-gw/intl-app-auth/api/auth/refresh-token"
 
 # International Vehicle Endpoints
@@ -133,6 +96,29 @@ INTL_CONTROL_FLASHING_HONKING = (
 )
 INTL_CHARGE_PERCENTAGE = "/intl-app-gw/intl-app-car-control/api/charge/percentage"
 INTL_CHARGE_MODIFY_PLAN = "/intl-app-gw/intl-app-car-control/api/charge/modify-plan"
+INTL_CHARGE_ADD_PLAN = "/intl-app-gw/intl-app-car-control/api/charge/add-plan"
+INTL_CHARGE_DELETE_PLAN = "/intl-app-gw/intl-app-car-control/api/charge/delete-plan"
+INTL_CHARGE_VALIDITY = "/intl-app-gw/intl-app-car-control/api/charge/validity"
+INTL_CONTROL_DEFROST = "/intl-app-gw/intl-app-car-control/api/control/defrost"
+INTL_CONTROL_SEATS_HEAT = "/intl-app-gw/intl-app-car-control/api/control/seats/heat"
+INTL_CONTROL_SEATS_WIND = "/intl-app-gw/intl-app-car-control/api/control/seats/wind"
+INTL_CONTROL_STEERING_WHEEL_HEAT = (
+    "/intl-app-gw/intl-app-car-control/api/control/steering-wheel/heat"
+)
+INTL_CONTROL_FOTA_PLAN = "/intl-app-gw/intl-app-car-control/api/control/fota-plan"
+INTL_DEPARTURE_ADD_PLAN = (
+    "/intl-app-gw/intl-app-car-control/api/departure-plans/add-plan"
+)
+INTL_DEPARTURE_MODIFY_PLAN = (
+    "/intl-app-gw/intl-app-car-control/api/departure-plans/modify-plan"
+)
+INTL_DEPARTURE_DELETE = "/intl-app-gw/intl-app-car-control/api/departure-plans/delete"
+INTL_DEPARTURE_VALIDITY = (
+    "/intl-app-gw/intl-app-car-control/api/departure-plans/validity"
+)
+INTL_DEPARTURE_ENABLED = (
+    "/intl-app-gw/intl-app-car-control/api/departure-plans/enabled"
+)
 
 # International CA gateway (S05 MQTT telemetry bootstrap)
 INTL_CA_GET_CONN_CONF = "/user-apigw/vot-connect-conf-center/api/device/getConnConf"
