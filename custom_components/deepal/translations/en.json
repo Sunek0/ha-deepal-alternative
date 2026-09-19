@@ -2,63 +2,91 @@
   "config": {
     "step": {
       "user": {
-        "title": "Changan Deepal",
-        "description": "Choose the platform you use in the My Changan app. International accounts log in with an email or SMS code; SDA accounts use a pasted access token.",
+        "title": "Deepal Alternative",
+        "description": "Set up your Changan Deepal account. Choose International for the My Changan app (email or SMS code login); choose SDA (China) only for a mainland-China account with a pasted access token.",
         "data": {
           "platform": "Platform"
+        },
+        "data_description": {
+          "platform": "International (Europe) supports email or SMS code login, telemetry and, with a control PIN, signed remote commands. SDA (China) uses a long-lived access token from the SDA API."
         }
       },
       "sda": {
         "title": "SDA (China) access token",
-        "description": "Paste the access token printed by the SDA login example.",
+        "description": "Paste an access token issued by the SDA platform. The SDK login example (deepal_sdk/examples/login_example.py) prints one.",
         "data": {
           "access_token": "Access token",
           "country": "Country code",
           "phone": "Phone number (optional)"
+        },
+        "data_description": {
+          "access_token": "Long-lived token used for every request. It is stored in the config entry; remove and re-add the integration to replace it.",
+          "country": "ISO country code for the account, for example CN. Optional; defaults to ES.",
+          "phone": "Phone number associated with the account. Optional, for reference only."
         }
       },
       "intl_method": {
         "title": "International login",
-        "description": "Choose how your My Changan account signs in.",
+        "description": "Choose how your My Changan account signs in. Both methods send a one-time verification code and store the session tokens in Home Assistant.",
         "data": {
           "login_method": "Login method"
+        },
+        "data_description": {
+          "login_method": "Email code signs in with an email address; phone/SMS code signs in with a national mobile number plus its dial code."
         }
       },
       "intl_email": {
         "title": "Email login",
-        "description": "Select your sales country and the account email. A verification code will be sent.",
+        "description": "Select the sales country registered in My Changan and the account email. Home Assistant will request a verification code.",
         "data": {
           "country": "Sales country",
           "email": "Email"
+        },
+        "data_description": {
+          "country": "Sales country of the account, for example Spain. It is sent as selectcountry and salesCountry; it does not change the API gateway.",
+          "email": "Email used in the My Changan app. It is encrypted before it is sent."
         }
       },
       "intl_email_code": {
         "title": "Email verification code",
-        "description": "Enter the code received by email.",
+        "description": "Enter the verification code that was sent to the email address.",
         "data": {
           "auth_code": "Verification code"
+        },
+        "data_description": {
+          "auth_code": "Numeric code from the email. It expires quickly; request a new one if it is rejected."
         }
       },
       "intl_phone": {
         "title": "SMS login",
-        "description": "Select your sales country and the national mobile number (without the country prefix).",
+        "description": "Select the sales country and the national mobile number (without the country prefix). Home Assistant will request a verification code by SMS.",
         "data": {
           "country": "Sales country",
           "phone": "Mobile number"
+        },
+        "data_description": {
+          "country": "Sales country of the account. Its dial code is sent together with the mobile number.",
+          "phone": "National mobile number without the dial code, for example 600000000 for Spain (+34)."
         }
       },
       "intl_sms_code": {
         "title": "SMS verification code",
-        "description": "Enter the code received by SMS.",
+        "description": "Enter the verification code that was sent by SMS.",
         "data": {
           "auth_code": "Verification code"
+        },
+        "data_description": {
+          "auth_code": "Numeric code from the SMS. It expires quickly; request a new one if it is rejected."
         }
       },
       "sda_reauth": {
         "title": "SDA reauthentication",
-        "description": "Paste a new access token for this account.",
+        "description": "Paste a new access token for this account. Home Assistant verifies it before replacing the stored one.",
         "data": {
           "access_token": "Access token"
+        },
+        "data_description": {
+          "access_token": "New long-lived SDA access token. The old token is replaced only after it is verified."
         }
       }
     },
@@ -79,16 +107,25 @@
   "options": {
     "step": {
       "init": {
-        "title": "Changan Deepal options",
+        "title": "Deepal Alternative options",
         "data": {
           "scan_interval": "Scan interval (seconds)",
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log redacted API traffic",
           "enable_mqtt_controls": "Enable experimental remote controls for MQTT vehicles (S05)",
           "os_version": "Declared Android version (diagnostic)",
-          "tsp_token_source": "TSP token source (diagnostic)",
           "environment": "Regional environment (diagnostic)",
-          "send_timestamps": "Send TSP/VCS timestamp headers (diagnostic)"
+          "send_timestamps": "Send the X-Tsp-Timestamp header (diagnostic)"
+        },
+        "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
+        "data_description": {
+          "scan_interval": "How often Home Assistant polls the vehicle when no MQTT telemetry is available, in seconds (30-3600).",
+          "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
+          "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number redacted. Enable only while troubleshooting.",
+          "enable_mqtt_controls": "Allow remote commands for MQTT-backed vehicles (S05). Experimental: MQTT command sending is not verified yet.",
+          "os_version": "Android version declared in the x-os-version header. The default (9) matches the verified app capture; change it only to diagnose requests rejected by the gateway.",
+          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
+          "send_timestamps": "Send the diagnostic X-Tsp-Timestamp header (epoch milliseconds) with every request. Disabled by default."
         }
       }
     }

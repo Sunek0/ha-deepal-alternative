@@ -3,12 +3,12 @@
 from typing import Any
 
 from homeassistant.components.lock import LockEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
+from .runtime_data import DeepalConfigEntry
 
 
 def _set_locked(condition: Any, locked: bool) -> Any:
@@ -18,7 +18,7 @@ def _set_locked(condition: Any, locked: bool) -> Any:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the door lock entity."""

@@ -7,8 +7,8 @@ from typing import Any
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
+    BinarySensorEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -17,16 +17,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
+from .runtime_data import DeepalConfigEntry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Deepal binary sensors based on a config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
 
     entities: list[BinarySensorEntity] = []
 
@@ -178,15 +178,11 @@ class DeepalSteeringWheelHeaterBinarySensor(DeepalBaseBinarySensor):
         return cond.climate.steering_wheel_heater_on if cond else None
 
 
-@dataclass(frozen=True)
-class DeepalBinarySensorDescription:
+@dataclass(frozen=True, kw_only=True)
+class DeepalBinarySensorDescription(BinarySensorEntityDescription):
     """Description of an extended international binary sensor."""
 
-    key: str
-    name: str
     value_fn: Callable[[Any, Any], bool | None]
-    device_class: BinarySensorDeviceClass | None = None
-    icon: str | None = None
 
 
 def _charging(condition: Any, vehicle: Any) -> bool | None:
@@ -202,43 +198,65 @@ def _not_locked(value: bool | None) -> bool | None:
 
 BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
     DeepalBinarySensorDescription(
-        "engine", "Engine", lambda cond, vehicle: cond.engine_on,
-        BinarySensorDeviceClass.RUNNING, "mdi:engine",
+        key="engine",
+        name="Engine",
+        value_fn=lambda cond, vehicle: cond.engine_on,
+        device_class=BinarySensorDeviceClass.RUNNING,
+        icon="mdi:engine",
     ),
     DeepalBinarySensorDescription(
-        "defrost", "Front Defrost", lambda cond, vehicle: cond.climate.defrost_on,
-        None, "mdi:car-defrost-front",
+        key="defrost",
+        name="Front Defrost",
+        value_fn=lambda cond, vehicle: cond.climate.defrost_on,
+        device_class=None,
+        icon="mdi:car-defrost-front",
     ),
     DeepalBinarySensorDescription(
-        "connected", "Cloud Connection", lambda cond, vehicle: cond.connected,
-        BinarySensorDeviceClass.CONNECTIVITY, "mdi:cloud-check",
+        key="connected",
+        name="Cloud Connection",
+        value_fn=lambda cond, vehicle: cond.connected,
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        icon="mdi:cloud-check",
     ),
     DeepalBinarySensorDescription(
-        "high_beam", "High Beam", lambda cond, vehicle: cond.lamps.high_beam,
-        BinarySensorDeviceClass.LIGHT, "mdi:car-high-beam",
+        key="high_beam",
+        name="High Beam",
+        value_fn=lambda cond, vehicle: cond.lamps.high_beam,
+        device_class=BinarySensorDeviceClass.LIGHT,
+        icon="mdi:car-high-beam",
     ),
     DeepalBinarySensorDescription(
-        "low_beam", "Low Beam", lambda cond, vehicle: cond.lamps.low_beam,
-        BinarySensorDeviceClass.LIGHT, "mdi:car-low-beam",
+        key="low_beam",
+        name="Low Beam",
+        value_fn=lambda cond, vehicle: cond.lamps.low_beam,
+        device_class=BinarySensorDeviceClass.LIGHT,
+        icon="mdi:car-low-beam",
     ),
     DeepalBinarySensorDescription(
-        "position_lamp", "Position Lamp",
-        lambda cond, vehicle: cond.lamps.position_lamp,
-        BinarySensorDeviceClass.LIGHT, "mdi:car-parking-lights",
+        key="position_lamp",
+        name="Position Lamp",
+        value_fn=lambda cond, vehicle: cond.lamps.position_lamp,
+        device_class=BinarySensorDeviceClass.LIGHT,
+        icon="mdi:car-parking-lights",
     ),
     DeepalBinarySensorDescription(
-        "left_turn_signal", "Left Turn Signal",
-        lambda cond, vehicle: cond.lamps.left_turn,
-        BinarySensorDeviceClass.LIGHT, "mdi:arrow-left",
+        key="left_turn_signal",
+        name="Left Turn Signal",
+        value_fn=lambda cond, vehicle: cond.lamps.left_turn,
+        device_class=BinarySensorDeviceClass.LIGHT,
+        icon="mdi:arrow-left",
     ),
     DeepalBinarySensorDescription(
-        "right_turn_signal", "Right Turn Signal",
-        lambda cond, vehicle: cond.lamps.right_turn,
-        BinarySensorDeviceClass.LIGHT, "mdi:arrow-right",
+        key="right_turn_signal",
+        name="Right Turn Signal",
+        value_fn=lambda cond, vehicle: cond.lamps.right_turn,
+        device_class=BinarySensorDeviceClass.LIGHT,
+        icon="mdi:arrow-right",
     ),
     DeepalBinarySensorDescription(
-        "any_door_open", "Any Door Open",
-        lambda cond, vehicle: any(
+        key="any_door_open",
+        name="Any Door Open",
+        value_fn=lambda cond, vehicle: any(
             (
                 cond.doors.driver_door_open,
                 cond.doors.passenger_door_open,
@@ -247,89 +265,127 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
                 cond.doors.trunk_open,
             )
         ),
-        BinarySensorDeviceClass.DOOR, "mdi:car-door",
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
-        "door_front_left", "Front Left Door",
-        lambda cond, vehicle: cond.doors.driver_door_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-door",
+        key="door_front_left",
+        name="Front Left Door",
+        value_fn=lambda cond, vehicle: cond.doors.driver_door_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
-        "door_front_right", "Front Right Door",
-        lambda cond, vehicle: cond.doors.passenger_door_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-door",
+        key="door_front_right",
+        name="Front Right Door",
+        value_fn=lambda cond, vehicle: cond.doors.passenger_door_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
-        "door_rear_left", "Rear Left Door",
-        lambda cond, vehicle: cond.doors.rear_left_door_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-door",
+        key="door_rear_left",
+        name="Rear Left Door",
+        value_fn=lambda cond, vehicle: cond.doors.rear_left_door_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
-        "door_rear_right", "Rear Right Door",
-        lambda cond, vehicle: cond.doors.rear_right_door_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-door",
+        key="door_rear_right",
+        name="Rear Right Door",
+        value_fn=lambda cond, vehicle: cond.doors.rear_right_door_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
-        "trunk", "Trunk", lambda cond, vehicle: cond.doors.trunk_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-back",
+        key="trunk",
+        name="Trunk",
+        value_fn=lambda cond, vehicle: cond.doors.trunk_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-select",
     ),
     DeepalBinarySensorDescription(
-        "hood", "Hood", lambda cond, vehicle: cond.doors.hood_open,
-        BinarySensorDeviceClass.DOOR, "mdi:car-cowl",
+        key="hood",
+        name="Hood",
+        value_fn=lambda cond, vehicle: cond.doors.hood_open,
+        device_class=BinarySensorDeviceClass.DOOR,
+        icon="mdi:car-cowl",
     ),
     DeepalBinarySensorDescription(
-        "driver_door_unlocked", "Driver Door Unlocked",
-        lambda cond, vehicle: _not_locked(cond.doors.driver_locked),
-        BinarySensorDeviceClass.LOCK, "mdi:car-door-lock",
+        key="driver_door_unlocked",
+        name="Driver Door Unlocked",
+        value_fn=lambda cond, vehicle: _not_locked(cond.doors.driver_locked),
+        device_class=BinarySensorDeviceClass.LOCK,
+        icon="mdi:car-door-lock",
     ),
     DeepalBinarySensorDescription(
-        "passenger_door_unlocked", "Passenger Door Unlocked",
-        lambda cond, vehicle: _not_locked(cond.doors.passenger_locked),
-        BinarySensorDeviceClass.LOCK, "mdi:car-door-lock",
+        key="passenger_door_unlocked",
+        name="Passenger Door Unlocked",
+        value_fn=lambda cond, vehicle: _not_locked(cond.doors.passenger_locked),
+        device_class=BinarySensorDeviceClass.LOCK,
+        icon="mdi:car-door-lock",
     ),
     DeepalBinarySensorDescription(
-        "dc_gun_connected", "DC Gun Connected",
-        lambda cond, vehicle: cond.battery.dc_gun_connected,
-        BinarySensorDeviceClass.PLUG, "mdi:ev-plug-ccs2",
+        key="dc_gun_connected",
+        name="DC Gun Connected",
+        value_fn=lambda cond, vehicle: cond.battery.dc_gun_connected,
+        device_class=BinarySensorDeviceClass.PLUG,
+        icon="mdi:ev-plug-ccs2",
     ),
     DeepalBinarySensorDescription(
-        "charging", "Charging", _charging,
-        BinarySensorDeviceClass.BATTERY_CHARGING, "mdi:battery-charging",
+        key="charging",
+        name="Charging",
+        value_fn=_charging,
+        device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
+        icon="mdi:battery-charging",
     ),
     DeepalBinarySensorDescription(
-        "charge_schedule_enabled", "Charge Schedule Enabled",
-        lambda cond, vehicle: cond.battery.charge_schedule_enabled,
-        None, "mdi:calendar-clock",
+        key="charge_schedule_enabled",
+        name="Charge Schedule Enabled",
+        value_fn=lambda cond, vehicle: cond.battery.charge_schedule_enabled,
+        device_class=None,
+        icon="mdi:calendar-clock",
     ),
     DeepalBinarySensorDescription(
-        "front_left_seat_heating", "Front Left Seat Heating",
-        lambda cond, vehicle: cond.seats.front_left.heating_level > 0,
-        BinarySensorDeviceClass.HEAT, "mdi:car-seat-heater",
+        key="front_left_seat_heating",
+        name="Front Left Seat Heating",
+        value_fn=lambda cond, vehicle: cond.seats.front_left.heating_level > 0,
+        device_class=BinarySensorDeviceClass.HEAT,
+        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
-        "front_right_seat_heating", "Front Right Seat Heating",
-        lambda cond, vehicle: cond.seats.front_right.heating_level > 0,
-        BinarySensorDeviceClass.HEAT, "mdi:car-seat-heater",
+        key="front_right_seat_heating",
+        name="Front Right Seat Heating",
+        value_fn=lambda cond, vehicle: cond.seats.front_right.heating_level > 0,
+        device_class=BinarySensorDeviceClass.HEAT,
+        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
-        "rear_left_seat_heating", "Rear Left Seat Heating",
-        lambda cond, vehicle: cond.seats.rear_left.heating_level > 0,
-        BinarySensorDeviceClass.HEAT, "mdi:car-seat-heater",
+        key="rear_left_seat_heating",
+        name="Rear Left Seat Heating",
+        value_fn=lambda cond, vehicle: cond.seats.rear_left.heating_level > 0,
+        device_class=BinarySensorDeviceClass.HEAT,
+        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
-        "rear_right_seat_heating", "Rear Right Seat Heating",
-        lambda cond, vehicle: cond.seats.rear_right.heating_level > 0,
-        BinarySensorDeviceClass.HEAT, "mdi:car-seat-heater",
+        key="rear_right_seat_heating",
+        name="Rear Right Seat Heating",
+        value_fn=lambda cond, vehicle: cond.seats.rear_right.heating_level > 0,
+        device_class=BinarySensorDeviceClass.HEAT,
+        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
-        "front_left_seat_ventilation", "Front Left Seat Ventilation",
-        lambda cond, vehicle: cond.seats.front_left.ventilation_level > 0,
-        None, "mdi:car-seat-cooler",
+        key="front_left_seat_ventilation",
+        name="Front Left Seat Ventilation",
+        value_fn=lambda cond, vehicle: cond.seats.front_left.ventilation_level > 0,
+        device_class=None,
+        icon="mdi:car-seat-cooler",
     ),
     DeepalBinarySensorDescription(
-        "front_right_seat_ventilation", "Front Right Seat Ventilation",
-        lambda cond, vehicle: cond.seats.front_right.ventilation_level > 0,
-        None, "mdi:car-seat-cooler",
+        key="front_right_seat_ventilation",
+        name="Front Right Seat Ventilation",
+        value_fn=lambda cond, vehicle: cond.seats.front_right.ventilation_level > 0,
+        device_class=None,
+        icon="mdi:car-seat-cooler",
     ),
 )
 

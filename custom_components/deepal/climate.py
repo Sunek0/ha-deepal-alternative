@@ -7,7 +7,6 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -19,16 +18,16 @@ from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
 from .entity import mqtt_controls_enabled
+from .runtime_data import DeepalConfigEntry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Deepal climate entity for international entries."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
 
     if not isinstance(coordinator.client, DeepalIntlClient):
         return

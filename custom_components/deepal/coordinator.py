@@ -12,6 +12,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .deepal import (
+    CommandResultStatus,
     DeepalAPIError,
     DeepalAuthError,
     DeepalClient,
@@ -30,7 +31,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_PENDING_RESULT_CODES = (None, -100, 0, 1015)
+_COMMAND_RESULT_INTERVAL = 0.5
+_COMMAND_TIMEOUT = 60.0
+_CONDITION_FETCH_INTERVAL = 2.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 
 
@@ -55,7 +58,6 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.client = client
         self.vehicles: list[Vehicle] = []
         self._command_in_progress = False
-        self._next_mqtt_refresh_at = 0.0
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -75,14 +77,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
             try:
-                condition = await self.client.s05_mqtt_condition(vehicle_id)
+                condition = await self.client.s05_mqtt_condition(
+                    vehicle_id, vin=vehicle.vin
+                )
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
                 if getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES and (
                     await self._async_refresh_session_for_mqtt(err)
                 ):
                     try:
-                        condition = await self.client.s05_mqtt_condition(vehicle_id)
+                        condition = await self.client.s05_mqtt_condition(
+                            vehicle_id, vin=vehicle.vin
+                        )
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
                         err = retry_err
@@ -92,16 +98,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     vehicle_id,
                     err,
                 )
-        condition = await self.client.get_vehicle_condition(vehicle_id)
+        condition = await self.client.get_vehicle_condition(
+            vehicle_id, vin=vehicle.vin if vehicle is not None else None
+        )
         return self._merge_condition(vehicle_id, condition)
 
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
-        """Refresh the session once per hour when the CA gateway rejects it."""
-        loop = asyncio.get_running_loop()
-        now = loop.time()
-        if now < self._next_mqtt_refresh_at:
-            return False
-        self._next_mqtt_refresh_at = now + 3600
+        """Refresh the session when the CA gateway rejects it.
+
+        The coordinator only decides that a refresh is justified here; the SDK
+        owns the per-client refresh window and single-flight behavior.
+        """
         if not getattr(self.client, "refresh_token", None):
             return False
         _LOGGER.warning(
@@ -146,7 +153,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         return True
 
     async def _async_maybe_refresh_tokens(self) -> None:
-        """Refresh the session proactively when the token is close to expiry."""
+        """Refresh proactively when the token is close to expiry.
+
+        The coordinator only decides that a refresh is justified; the SDK owns
+        the refresh window and may return the current session unchanged.
+        """
         client = self.client
         if not isinstance(client, DeepalIntlClient):
             return
@@ -159,15 +170,28 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         await self._async_refresh_tokens()
 
     async def _async_refresh_tokens(self) -> bool:
-        """Refresh the international session and persist the new tokens."""
+        """Refresh the international session and persist the new tokens.
+
+        The SDK decides whether a request actually happens (its throttle may
+        return the current session); success is reported only when the access
+        token changed, so callers never retry an unchanged session.
+        """
         refresh = getattr(self.client, "refresh_tokens", None)
         if refresh is None or not getattr(self.client, "refresh_token", None):
             return False
 
+        previous_access_token = getattr(self.client, "access_token", None)
         try:
             token = await refresh()
         except DeepalError as err:
             _LOGGER.error("Deepal token refresh failed: %s", err)
+            return False
+
+        if token.access_token == previous_access_token:
+            _LOGGER.debug(
+                "Deepal token refresh kept the current access token; treating it "
+                "as not refreshed"
+            )
             return False
 
         self.hass.config_entries.async_update_entry(
@@ -206,8 +230,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         *,
         is_done: Callable[[], bool] | None = None,
         optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None = None,
-        timeout: float = 30.0,
-        interval: float = 2.0,
+        timeout: float = _COMMAND_TIMEOUT,
+        interval: float = _COMMAND_RESULT_INTERVAL,
     ) -> None:
         """Send a remote command and poll until the vehicle reports new data."""
         if not isinstance(self.client, DeepalIntlClient):
@@ -264,33 +288,42 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         timeout: float,
         interval: float,
         is_done: Callable[[], bool] | None = None,
+        condition_interval: float = _CONDITION_FETCH_INTERVAL,
     ) -> None:
-        """Poll the command result and condition until the state changes or times out."""
+        """Poll the command result while bounding the condition request rate."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        next_condition_at = 0.0
+        condition_changed = False
 
         while True:
-            result = await self.client.control_result(vehicle_id, command_id)
-            condition = await self._async_fetch_condition(vehicle_id)
-
-            data = dict(self.data or {})
-            data[vehicle_id] = condition
-            self.async_set_updated_data(data)
-
-            result_code = result.get("resultCode")
-            if result_code not in _PENDING_RESULT_CODES:
+            result = await self.client.control_result_status(vehicle_id, command_id)
+            if result.status is CommandResultStatus.FAILED:
                 raise HomeAssistantError(
-                    f"Deepal command failed with result code {result_code}: "
-                    f"{result.get('errorMsg')}"
+                    f"Deepal command failed with result code {result.code}: "
+                    f"{result.error_message}"
                 )
 
-            condition_changed = (
-                condition.last_updated_timestamp is not None
-                and condition.last_updated_timestamp != previous_last_updated
-            )
-            state_done = is_done() if is_done is not None else True
-            if condition_changed and state_done:
-                return
+            now = loop.time()
+            if now >= next_condition_at:
+                condition = await self._async_fetch_condition(vehicle_id)
+                next_condition_at = now + condition_interval
+                data = dict(self.data or {})
+                data[vehicle_id] = condition
+                self.async_set_updated_data(data)
+                if (
+                    condition.last_updated_timestamp is not None
+                    and condition.last_updated_timestamp != previous_last_updated
+                ):
+                    condition_changed = True
+
+            if result.status in (
+                CommandResultStatus.SUCCESS,
+                CommandResultStatus.ALREADY_DONE,
+            ):
+                state_done = is_done() if is_done is not None else True
+                if state_done and (is_done is not None or condition_changed):
+                    return
 
             if loop.time() >= deadline:
                 _LOGGER.warning(

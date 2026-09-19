@@ -3,13 +3,13 @@
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import UnitOfRatio
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
+from .runtime_data import DeepalConfigEntry
 
 
 def _set_charge_limit(condition: Any, percentage: int) -> Any:
@@ -19,7 +19,7 @@ def _set_charge_limit(condition: Any, percentage: int) -> Any:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge limit number."""
@@ -37,9 +37,9 @@ class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
     _attr_native_min_value = 60
     _attr_native_max_value = 100
     _attr_native_step = 1
-    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
     _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-lock"
+    _attr_icon = "mdi:battery-heart"
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any

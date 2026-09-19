@@ -1,4 +1,4 @@
-"""Config flow for Changan Deepal integration."""
+"""Config flow for the Deepal Alternative integration."""
 
 import logging
 from typing import Any
@@ -6,7 +6,9 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import OptionsFlowWithReload
+from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 
 from .deepal import (
@@ -31,10 +33,10 @@ from .const import (
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
     CONF_PRIVATE_KEY,
+    CONF_PUBLIC_KEY,
     CONF_CONTROL_PIN,
     CONF_DEVICE_ID,
     CONF_OS_VERSION,
-    CONF_TSP_TOKEN_SOURCE,
     CONF_ENVIRONMENT,
     CONF_SEND_TIMESTAMPS,
     CONF_USER_ID,
@@ -45,7 +47,6 @@ from .const import (
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_OS_VERSION,
-    DEFAULT_TSP_TOKEN_SOURCE,
     DEFAULT_ENVIRONMENT,
     DEFAULT_SEND_TIMESTAMPS,
 )
@@ -112,14 +113,25 @@ def _login_error(err: DeepalError) -> str:
     return "cannot_connect"
 
 
+def _vehicle_device_entry(
+    hass: HomeAssistant, car_id: str
+) -> config_entries.ConfigEntry | None:
+    """Return the config entry that owns a vehicle device, if any."""
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, car_id)})
+    if device is None or device.primary_config_entry is None:
+        return None
+    return hass.config_entries.async_get_entry(device.primary_config_entry)
+
+
 class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Changan Deepal."""
+    """Handle a config flow for Deepal Alternative."""
 
     VERSION = 1
 
     def __init__(self) -> None:
         """Initialize flow."""
         self._pending_login: dict[str, Any] = {}
+        self._reauth_identity: dict[str, Any] = {}
 
     # ------------------------------------------------------------------ user
     async def async_step_user(
@@ -154,6 +166,9 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vehicles = await client.get_vehicles()
                 await self.async_set_unique_id(token[:10])
                 self._abort_if_unique_id_configured()
+                for vehicle in vehicles:
+                    if _vehicle_device_entry(self.hass, vehicle.car_id) is not None:
+                        return self.async_abort(reason="already_configured")
                 return self.async_create_entry(
                     title=f"Deepal Account ({len(vehicles)} vehicle/s)",
                     data={
@@ -198,6 +213,15 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="intl_method", data_schema=schema)
 
+    def _intl_login_client(self, country: str) -> DeepalIntlClient:
+        """Build a client reusing the reauth entry identity, when present."""
+        return DeepalIntlClient(
+            country=country,
+            device_id=self._reauth_identity.get(CONF_DEVICE_ID),
+            private_key_pem=self._reauth_identity.get(CONF_PRIVATE_KEY),
+            public_key=self._reauth_identity.get(CONF_PUBLIC_KEY),
+        )
+
     async def async_step_intl_email(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -206,7 +230,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             country = user_input.get(CONF_COUNTRY, DEFAULT_COUNTRY)
             email = str(user_input[CONF_EMAIL]).strip()
-            client = DeepalIntlClient(country=country)
+            client = self._intl_login_client(country)
             try:
                 await client.request_email_code(email)
             except DeepalError as err:
@@ -243,7 +267,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             info = self._pending_login
-            client = DeepalIntlClient(country=info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
+            client = self._intl_login_client(info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
             try:
                 token = await client.login_with_email_code(
                     info[CONF_EMAIL],
@@ -276,7 +300,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             country = user_input.get(CONF_COUNTRY, DEFAULT_COUNTRY)
             mobile = str(user_input[CONF_PHONE]).strip()
             dial_code = COUNTRY_DIAL_CODES[country]
-            client = DeepalIntlClient(country=country)
+            client = self._intl_login_client(country)
             try:
                 await client.request_sms_code(mobile, dial_code)
             except DeepalError as err:
@@ -314,7 +338,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             info = self._pending_login
-            client = DeepalIntlClient(country=info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
+            client = self._intl_login_client(info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
             try:
                 token = await client.login_with_sms_code(
                     info[CONF_PHONE],
@@ -368,6 +392,12 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors=errors,
             )
 
+        if self.source != config_entries.SOURCE_REAUTH:
+            for candidate in vehicles:
+                if _vehicle_device_entry(self.hass, candidate.car_id) is not None:
+                    await client.close()
+                    return self.async_abort(reason="already_configured")
+
         vehicle: Vehicle = vehicles[0]
         data_updates = {
             CONF_ACCESS_TOKEN: token.access_token,
@@ -375,6 +405,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_CAC_TOKEN: token.cac_token or "",
             CONF_USER_ID: token.user_id or client.user_id or "",
             CONF_PRIVATE_KEY: client.private_key_pem or "",
+            CONF_PUBLIC_KEY: client.public_key or "",
             CONF_DEVICE_ID: client.device_id,
             CONF_VEHICLE_ID: vehicle.car_id,
             CONF_COUNTRY: info.get(CONF_COUNTRY, DEFAULT_COUNTRY),
@@ -399,7 +430,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self.async_set_unique_id(vehicle.vin or vehicle.car_id)
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
-            title=vehicle.car_name or vehicle.series_name or "Changan Deepal",
+            title=vehicle.car_name or vehicle.series_name or "Deepal Alternative",
             data={
                 CONF_PLATFORM: PLATFORM_INTL,
                 CONF_ACCESS_TOKEN: data_updates[CONF_ACCESS_TOKEN],
@@ -407,6 +438,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_CAC_TOKEN: data_updates[CONF_CAC_TOKEN],
                 CONF_USER_ID: data_updates[CONF_USER_ID],
                 CONF_PRIVATE_KEY: data_updates[CONF_PRIVATE_KEY],
+                CONF_PUBLIC_KEY: data_updates[CONF_PUBLIC_KEY],
                 CONF_DEVICE_ID: data_updates[CONF_DEVICE_ID],
                 CONF_VEHICLE_ID: data_updates[CONF_VEHICLE_ID],
                 CONF_COUNTRY: data_updates[CONF_COUNTRY],
@@ -421,6 +453,11 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Start the reauthentication flow."""
         entry = self._get_reauth_entry()
         if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
+            self._reauth_identity = {
+                CONF_DEVICE_ID: entry_data.get(CONF_DEVICE_ID),
+                CONF_PRIVATE_KEY: entry_data.get(CONF_PRIVATE_KEY),
+                CONF_PUBLIC_KEY: entry_data.get(CONF_PUBLIC_KEY),
+            }
             return await self.async_step_intl_method()
         return await self.async_step_sda_reauth()
 
@@ -464,7 +501,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DeepalOptionsFlow(OptionsFlowWithReload):
-    """Options for Changan Deepal entries."""
+    """Options for Deepal Alternative entries."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -509,17 +546,6 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=["15", "14", "13", "12", "11", "10", "9"],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Optional(
-                    CONF_TSP_TOKEN_SOURCE,
-                    default=options.get(
-                        CONF_TSP_TOKEN_SOURCE, DEFAULT_TSP_TOKEN_SOURCE
-                    ),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=["access", "cac", "cac_user_id", "ca_user_id"],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),

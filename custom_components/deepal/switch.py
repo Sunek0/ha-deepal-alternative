@@ -3,13 +3,13 @@
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
+from .runtime_data import DeepalConfigEntry
 
 
 def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
@@ -19,7 +19,7 @@ def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge schedule switch."""

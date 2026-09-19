@@ -3,19 +3,19 @@
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DeepalDataUpdateCoordinator
-from .deepal import DeepalError
+from .deepal import DeepalError, FLASH_HONK_BEE, FLASH_HONK_FLASH
 from .entity import DeepalEntity, async_setup_control_entities
+from .runtime_data import DeepalConfigEntry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the control buttons."""
@@ -69,7 +69,9 @@ class DeepalFlashLightsButton(DeepalEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Flash the lights."""
         await self.async_send_command(
-            lambda: self.client.control_flashing_honking(self._car_id, 1)
+            lambda: self.client.control_flashing_honking(
+                self._car_id, FLASH_HONK_FLASH
+            )
         )
 
 
@@ -89,5 +91,7 @@ class DeepalHonkHornButton(DeepalEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Sound the horn."""
         await self.async_send_command(
-            lambda: self.client.control_flashing_honking(self._car_id, 3)
+            lambda: self.client.control_flashing_honking(
+                self._car_id, FLASH_HONK_BEE
+            )
         )

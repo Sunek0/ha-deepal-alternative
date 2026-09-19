@@ -1,4 +1,4 @@
-"""Cover platform (windows and boot) for the Changan Deepal integration."""
+"""Cover platform (windows and trunk) for the Changan Deepal integration."""
 
 from typing import Any
 
@@ -7,12 +7,12 @@ from homeassistant.components.cover import (
     CoverEntity,
     CoverEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
+from .runtime_data import DeepalConfigEntry
 
 
 def _set_windows(condition: Any, is_open: bool) -> Any:
@@ -24,24 +24,24 @@ def _set_windows(condition: Any, is_open: bool) -> Any:
     return condition
 
 
-def _set_boot(condition: Any, is_open: bool) -> Any:
+def _set_trunk(condition: Any, is_open: bool) -> Any:
     condition.doors.trunk_open = is_open
     return condition
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the window and boot covers."""
+    """Set up the window and trunk covers."""
     async_setup_control_entities(
         hass,
         entry,
         async_add_entities,
         lambda coordinator, vehicle: [
             DeepalWindowsCover(coordinator, vehicle),
-            DeepalBootCover(coordinator, vehicle),
+            DeepalTrunkCover(coordinator, vehicle),
         ],
     )
 
@@ -91,8 +91,8 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
         )
 
 
-class DeepalBootCover(DeepalEntity, CoverEntity):
-    """Boot/trunk cover."""
+class DeepalTrunkCover(DeepalEntity, CoverEntity):
+    """Trunk cover."""
 
     _attr_device_class = CoverDeviceClass.DOOR
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
@@ -100,29 +100,29 @@ class DeepalBootCover(DeepalEntity, CoverEntity):
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
     ) -> None:
-        """Initialize the boot cover."""
+        """Initialize the trunk cover."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_boot_cover"
-        self._attr_name = f"{vehicle.series_name} Boot"
+        self._attr_name = f"{vehicle.series_name} Trunk"
 
     @property
     def is_closed(self) -> bool | None:
-        """Return True when the boot is closed."""
+        """Return True when the trunk is closed."""
         cond = self.condition
         return None if cond is None else not cond.doors.trunk_open
 
     async def async_open_cover(self, **kwargs: Any) -> None:
-        """Open the boot."""
+        """Open the trunk."""
         await self.async_send_command(
             lambda: self.client.control_trunk(self._car_id, True),
             is_done=lambda: self.is_closed is False,
-            optimistic_update=lambda cond: _set_boot(cond, True),
+            optimistic_update=lambda cond: _set_trunk(cond, True),
         )
 
     async def async_close_cover(self, **kwargs: Any) -> None:
-        """Close the boot."""
+        """Close the trunk."""
         await self.async_send_command(
             lambda: self.client.control_trunk(self._car_id, False),
             is_done=lambda: self.is_closed is True,
-            optimistic_update=lambda cond: _set_boot(cond, False),
+            optimistic_update=lambda cond: _set_trunk(cond, False),
         )

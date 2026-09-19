@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from datetime import UTC, datetime
 import json
 import logging
 import secrets
@@ -19,22 +20,38 @@ from .endpoints import (
     INTL_CA_GET_AUTH_TOKEN,
     INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CA_GET_CONN_CONF,
+    INTL_CHARGE_ADD_PLAN,
+    INTL_CHARGE_DELETE_PLAN,
     INTL_CHARGE_MODIFY_PLAN,
     INTL_CHARGE_PERCENTAGE,
+    INTL_CHARGE_VALIDITY,
     INTL_CHECK_CONTROL_CODE,
     INTL_CONDITION_INQUIRY,
     INTL_CONTROL_AIR_CONDITIONER,
+    INTL_CONTROL_DEFROST,
     INTL_CONTROL_DOORS,
     INTL_CONTROL_FLASHING_HONKING,
+    INTL_CONTROL_FOTA_PLAN,
     INTL_CONTROL_RESULT,
+    INTL_CONTROL_SEATS_HEAT,
+    INTL_CONTROL_SEATS_WIND,
+    INTL_CONTROL_STEERING_WHEEL_HEAT,
     INTL_CONTROL_TRUNK,
     INTL_CONTROL_WINDOWS,
+    INTL_DEPARTURE_ADD_PLAN,
+    INTL_DEPARTURE_DELETE,
+    INTL_DEPARTURE_ENABLED,
+    INTL_DEPARTURE_MODIFY_PLAN,
+    INTL_DEPARTURE_VALIDITY,
     INTL_GET_MY_CARS,
     INTL_GET_SERIAL_NO,
     INTL_GET_SECURITY_CODE_STATUS,
     INTL_GET_VEHICLE_CONDITION,
     INTL_LOGIN_BY_EMAIL_CODE,
+    INTL_LOGIN_BY_EMAIL_PASSWORD,
     INTL_LOGIN_BY_MOBILE_CODE,
+    INTL_LOGIN_BY_MOBILE_PASSWORD,
+    INTL_LOGOUT,
     INTL_REFRESH_TOKEN,
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
@@ -47,6 +64,7 @@ from .exceptions import (
     DeepalCommandAuthError,
     DeepalCommandNotReady,
     DeepalConnectionError,
+    DeepalError,
     DeepalRateLimitError,
 )
 from .redact import redact_for_log, safe_headers
@@ -54,6 +72,7 @@ from .models import (
     AuthToken,
     BatteryCondition,
     ClimateCondition,
+    CommandResult,
     DoorsCondition,
     LampsCondition,
     SeatsCondition,
@@ -65,20 +84,27 @@ from .models import (
     WindowsCondition,
 )
 from .mqtt import (
+    MQTT_CONNACK_REASONS,
+    MQTT_DEFAULT_KEEPALIVE,
     S05_SERVICE_CODES,
     aes_cbc_decrypt,
+    basic_identifiers,
     build_connect_packet,
+    build_disconnect_packet,
     build_puback_packet,
     build_publish_packet,
     build_subscribe_packet,
     condition_request_payload,
+    config_mqtt_identity,
     login_request_payload,
     new_request_id,
     normalize_s05_params,
+    parse_connack,
     parse_publish,
     read_packet,
+    read_packet_with_keepalive,
+    resolve_mqtt_topics,
     secret_from_login_payload,
-    topic_device_id,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -87,12 +113,42 @@ INTL_APP_ID = "ca"
 INTL_APP_TYPE = "Android"
 INTL_APP_VERSION = "V1.12.0"
 INTL_DEVICE_TYPE = "samsung"
-INTL_OS_VERSION = "15"
+INTL_OS_VERSION = "9"
 INTL_USER_AGENT = "okhttp/4.12.0"
 DEFAULT_COUNTRY = "GB"
 DEFAULT_LANGUAGE = "en_US"
 
-_AUTH_ERROR_CODES = {"APP_1_1_02_004", "APP_1_1_02_005"}
+# Flash/honk action codes (CarContrlConfig.java:12,84-86).
+FLASH_HONK_OFF = 0
+FLASH_HONK_FLASH = 1
+FLASH_HONK_BEE = 2
+FLASH_HONK_FLASH_BEE = 3
+
+# Signing canonical source policy; see docs/intl-api.md section 7.1.
+SIGNING_POLICY_APP = "app"
+SIGNING_POLICY_LEGACY = "legacy"
+SIGNING_POLICIES = (SIGNING_POLICY_APP, SIGNING_POLICY_LEGACY)
+APP_SIGN_EXCLUDED_KEYS = {"sign", "class", "command"}
+
+# Gateway kick-out codes the app treats as session failures
+# (CaErrorCode.java:10-27). Compared as strings so numeric codes match too.
+_AUTH_ERROR_CODES = {
+    "APP_1_1_02_003",
+    "APP_1_1_02_004",
+    "APP_1_1_02_005",
+    "APP_1_1_02_006",
+    "CAC_1_1_01_045",
+    "46000",
+}
+
+# App session refresh windows: a static LastGetRefreshTokenTime guarded by a lock
+# (RefreshTokenInterceptor.java:14-21) with tokenExpireTime = 1800000 for the
+# international session (RefreshTokenInterceptorKt.java:9-10) and 55 minutes for
+# car control (RefreshTokenIntercetorKt.java:10). The car-control window guards a
+# module the SDK does not model yet; it is recorded for the planned
+# remote-command change.
+INTL_REFRESH_THROTTLE_SECONDS = 1800.0
+CAR_CONTROL_REFRESH_THROTTLE_SECONDS = 3300.0
 
 
 def _is_auth_failure(code: Any) -> bool:
@@ -153,6 +209,31 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _to_millis(value: Any) -> Optional[int]:
+    """Normalize an ISO-8601 string or epoch seconds/milliseconds to epoch ms."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        parsed = int(value)
+        return parsed if abs(parsed) >= 100_000_000_000 else parsed * 1000
+    if isinstance(value, str) and value:
+        text = value.strip()
+        try:
+            parsed = int(float(text))
+        except ValueError:
+            pass
+        else:
+            return parsed if abs(parsed) >= 100_000_000_000 else parsed * 1000
+        try:
+            parsed_dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=UTC)
+        return int(parsed_dt.timestamp() * 1000)
+    return None
+
+
 class DeepalIntlClient:
     """Asynchronous client for the Deepal international email login flow."""
 
@@ -161,23 +242,40 @@ class DeepalIntlClient:
         country: str = DEFAULT_COUNTRY,
         language: str = DEFAULT_LANGUAGE,
         app_version: str = INTL_APP_VERSION,
+        app_type: str = INTL_APP_TYPE,
+        device_type: str = INTL_DEVICE_TYPE,
         os_version: str = INTL_OS_VERSION,
         tsp_token_source: str = "access",
         environment: str = DEFAULT_INTL_ENVIRONMENT,
         send_timestamps: bool = False,
         mqtt_config_fallback: bool = True,
         mqtt_token_fallback: bool = True,
+        mqtt_client_id: Optional[str] = None,
+        mqtt_username: Optional[str] = None,
+        mqtt_keepalive: float = MQTT_DEFAULT_KEEPALIVE,
+        mqtt_clean_start: bool = True,
+        mqtt_tls_insecure: bool = False,
         device_id: Optional[str] = None,
+        private_key_pem: Optional[str] = None,
+        public_key: Optional[str] = None,
         base_url: Optional[str] = None,
         ca_base_url: Optional[str] = None,
         timeout: float = 15.0,
         enable_api_logging: bool = False,
+        signing_policy: str = SIGNING_POLICY_APP,
         httpx_client: Optional[httpx.AsyncClient] = None,
     ):
+        if signing_policy not in SIGNING_POLICIES:
+            supported = ", ".join(SIGNING_POLICIES)
+            raise ValueError(
+                f"Unknown signing policy {signing_policy!r}; supported: {supported}."
+            )
         environment_config = get_intl_environment(environment)
         self.country = country
         self.language = language
         self.app_version = app_version
+        self.app_type = app_type
+        self.device_type = device_type
         self.os_version = os_version
         self.tsp_token_source = tsp_token_source
         self.environment = environment_config.id
@@ -186,11 +284,17 @@ class DeepalIntlClient:
         self.send_timestamps = send_timestamps
         self.mqtt_config_fallback = mqtt_config_fallback
         self.mqtt_token_fallback = mqtt_token_fallback
+        self.mqtt_client_id = mqtt_client_id
+        self.mqtt_username = mqtt_username
+        self.mqtt_keepalive = mqtt_keepalive
+        self.mqtt_clean_start = mqtt_clean_start
+        self.mqtt_tls_insecure = mqtt_tls_insecure
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
         self.ca_base_url = (ca_base_url or environment_config.ca_base_url).rstrip("/")
         self.timeout = timeout
         self.enable_api_logging = enable_api_logging
+        self.signing_policy = signing_policy
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
         self.cac_token: Optional[str] = None
@@ -200,14 +304,31 @@ class DeepalIntlClient:
         self.cac_user_id: Optional[str] = None
         self.control_pin: Optional[str] = None
         self.rc_token: Optional[str] = None
-        self.public_key: Optional[str] = None
-        self.private_key_pem: Optional[str] = None
+        self.public_key: Optional[str] = public_key
+        self.private_key_pem: Optional[str] = private_key_pem
         self._external_client = httpx_client is not None
-        self._client = httpx_client or httpx.AsyncClient(timeout=timeout)
+        self._client: Optional[httpx.AsyncClient] = httpx_client
+        self._client_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
+        self._last_refresh_attempt_at: Optional[float] = None
+        self._refresh_attempt_sequence = 0
+        self._refresh_attempt_error: Optional[BaseException] = None
+
+    async def _http_client(self) -> httpx.AsyncClient:
+        """Return the managed HTTP client, creating it outside the event loop."""
+        if self._client is None:
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = await asyncio.to_thread(
+                        httpx.AsyncClient, timeout=self.timeout
+                    )
+        return self._client
 
     async def close(self) -> None:
         """Close the underlying HTTP client if managed internally."""
-        if not self._external_client and not self._client.is_closed:
+        if self._external_client or self._client is None:
+            return
+        if not self._client.is_closed:
             await self._client.aclose()
 
     async def __aenter__(self) -> "DeepalIntlClient":
@@ -215,6 +336,19 @@ class DeepalIntlClient:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.close()
+
+    @staticmethod
+    def _public_body(public_key: rsa.RSAPublicKey) -> str:
+        """Render an RSA public key as the app ``pubKey`` body."""
+        public_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode()
+        return "\n".join(
+            line
+            for line in public_pem.splitlines()
+            if "BEGIN" not in line and "END" not in line
+        ) + "\n"
 
     @staticmethod
     def generate_login_keypair() -> tuple[str, str]:
@@ -225,14 +359,32 @@ class DeepalIntlClient:
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         ).decode()
-        public_pem = key.public_key().public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode()
-        pub_body = "\n".join(
-            line for line in public_pem.splitlines() if "BEGIN" not in line and "END" not in line
-        ) + "\n"
-        return private_pem, pub_body
+        return private_pem, DeepalIntlClient._public_body(key.public_key())
+
+    @staticmethod
+    def public_key_body_from_private(private_key_pem: str) -> str:
+        """Derive the app ``pubKey`` body from a stored login private PEM."""
+        private_key = serialization.load_pem_private_key(
+            private_key_pem.encode(), password=None
+        )
+        return DeepalIntlClient._public_body(private_key.public_key())
+
+    def set_login_keypair(
+        self, private_key_pem: str, public_key: Optional[str] = None
+    ) -> str:
+        """Restore the persisted login keypair on this client.
+
+        Stores the private PEM and resolves the app ``pubKey`` body: the
+        provided public key when given, otherwise the public key derived from
+        the private PEM. Returns the resolved public key body.
+        """
+        if not private_key_pem:
+            raise ValueError("private_key_pem is required.")
+        self.private_key_pem = private_key_pem
+        self.public_key = public_key or self.public_key_body_from_private(
+            private_key_pem
+        )
+        return self.public_key
 
     @staticmethod
     def encrypt_request_value(value: str) -> str:
@@ -248,8 +400,8 @@ class DeepalIntlClient:
             "appid": self.app_id,
             "language": self.language,
             "appversion": self.app_version,
-            "apptype": INTL_APP_TYPE,
-            "devicetype": INTL_DEVICE_TYPE,
+            "apptype": self.app_type,
+            "devicetype": self.device_type,
             "deviceid": self.device_id,
             "selectcountry": self.country,
             "x-os-version": self.os_version,
@@ -258,9 +410,7 @@ class DeepalIntlClient:
             "user-agent": INTL_USER_AGENT,
         }
         if self.send_timestamps:
-            timestamp = str(int(time.time() * 1000))
-            headers["X-Tsp-Timestamp"] = timestamp
-            headers["X-VCS-Timestamp"] = timestamp
+            headers["X-Tsp-Timestamp"] = str(int(time.time() * 1000))
         if self.access_token:
             headers["authorization"] = self._authorization_value()
             tsp_value = {
@@ -306,7 +456,8 @@ class DeepalIntlClient:
             )
 
         try:
-            response = await self._client.request(
+            http_client = await self._http_client()
+            response = await http_client.request(
                 method="POST",
                 url=url,
                 content=body,
@@ -377,9 +528,19 @@ class DeepalIntlClient:
         return payload.get("data")
 
     def _ensure_pub_key(self, pub_key: Optional[str] = None) -> str:
+        """Resolve the login ``pubKey`` without replacing stored key material.
+
+        Order: the caller-provided key for this login, the client's public key,
+        the public key derived from a stored private key, and only then a new
+        keypair. A stored private key is never replaced while only the public
+        half is missing.
+        """
         if pub_key:
             return pub_key
         if self.public_key:
+            return self.public_key
+        if self.private_key_pem:
+            self.public_key = self.public_key_body_from_private(self.private_key_pem)
             return self.public_key
         self.private_key_pem, self.public_key = self.generate_login_keypair()
         return self.public_key
@@ -419,6 +580,28 @@ class DeepalIntlClient:
             bool(self.cac_user_id),
         )
 
+    def _current_auth_token(self) -> AuthToken:
+        """Return the current session as an ``AuthToken``.
+
+        Omitted fields keep the previous value; ``user_id`` is included so a
+        refresh response without ``userId`` does not drop the stored one.
+        """
+        return AuthToken(
+            access_token=self.access_token or "",
+            refresh_token=self.refresh_token,
+            cac_token=self.cac_token,
+            ca_user_id=self.ca_user_id,
+            cac_user_id=self.cac_user_id,
+            user_id=self.user_id,
+        )
+
+    def _refresh_is_throttled(self) -> bool:
+        """Return whether the last automatic attempt is inside the app window."""
+        if self._last_refresh_attempt_at is None:
+            return False
+        elapsed = time.monotonic() - self._last_refresh_attempt_at
+        return elapsed < INTL_REFRESH_THROTTLE_SECONDS
+
     async def request_email_code(self, email: str) -> None:
         """Request an email login verification code."""
         await self._request(
@@ -443,6 +626,31 @@ class DeepalIntlClient:
                 "authCode": code,
                 "salesCountry": sales_country or self.country,
                 "email": self.encrypt_request_value(email),
+                "pubKey": self._ensure_pub_key(pub_key),
+            },
+        )
+        return self._store_tokens(data)
+
+    async def login_with_email_password(
+        self,
+        email: str,
+        password: str,
+        sales_country: Optional[str] = None,
+        pub_key: Optional[str] = None,
+    ) -> AuthToken:
+        """Login with an email and password (experiment E12, unverified body).
+
+        The route is recovered from ``LoginApi.emailLoginByPwd``, but the app
+        method body is VMP-extracted, so the request field names are modeled on
+        the sibling verification-code flow. The email and password are
+        RSA-encrypted with the app public key.
+        """
+        data = await self._request(
+            INTL_LOGIN_BY_EMAIL_PASSWORD,
+            json_data={
+                "salesCountry": sales_country or self.country,
+                "email": self.encrypt_request_value(email),
+                "password": self.encrypt_request_value(password),
                 "pubKey": self._ensure_pub_key(pub_key),
             },
         )
@@ -481,6 +689,57 @@ class DeepalIntlClient:
         )
         return self._store_tokens(data)
 
+    async def login_with_password(
+        self,
+        phone: str,
+        password: str,
+        country_code: str,
+        sales_country: Optional[str] = None,
+        pub_key: Optional[str] = None,
+    ) -> AuthToken:
+        """Login with a mobile number and password (experiment E13, unverified).
+
+        The route is recovered from ``LoginApi.loginByPwd``, but the app method
+        body is VMP-extracted, so the request field names are modeled on the
+        sibling verification-code flow. Phone validation is shared with the SMS
+        flow; the mobile and password are RSA-encrypted with the app public key.
+        """
+        dial_code = _normalize_country_code(country_code)
+        mobile = _normalize_phone(phone)
+        data = await self._request(
+            INTL_LOGIN_BY_MOBILE_PASSWORD,
+            json_data={
+                "countryCode": dial_code,
+                "mobile": self.encrypt_request_value(mobile),
+                "password": self.encrypt_request_value(password),
+                "salesCountry": sales_country or self.country,
+                "pubKey": self._ensure_pub_key(pub_key),
+            },
+        )
+        return self._store_tokens(data)
+
+    async def logout(self) -> None:
+        """Terminate the session (experiment E14, unverified response).
+
+        Posts to ``INTL_LOGOUT`` with the session headers and clears the local
+        access, refresh, CAC and control tokens afterwards, even when the
+        remote call fails. Does nothing without an access token.
+        """
+        if not self.access_token:
+            return
+        try:
+            await self._request(INTL_LOGOUT, json_data={}, auth_required=True)
+        except DeepalError as exc:
+            logger.warning(
+                "Deepal logout failed (%s); clearing the local session anyway", exc
+            )
+        finally:
+            self.access_token = None
+            self.refresh_token = None
+            self.cac_token = None
+            self.rc_token = None
+            self.access_token_expires_at = None
+
     @staticmethod
     def _jwt_expiry(token: Optional[str]) -> Optional[int]:
         """Return the ``exp`` claim of a JWT access token, if present."""
@@ -502,43 +761,74 @@ class DeepalIntlClient:
         return time.time() >= self.access_token_expires_at - margin_seconds
 
     async def refresh_tokens(self) -> AuthToken:
-        """Refresh the international session tokens."""
+        """Refresh the international session tokens.
+
+        Automatic reactive attempts are throttled with the app's monotonic
+        30-minute window and serialized with a per-client lock, so concurrent
+        callers cause at most one request in flight and share its outcome. A
+        refresh justified by the access token JWT ``exp`` bypasses the throttle.
+        """
         if not self.refresh_token:
             raise DeepalAuthError("No refresh token is available.")
 
-        data = await self._request(
-            INTL_REFRESH_TOKEN,
-            json_data={"refreshToken": self.refresh_token},
-        )
+        seen_attempt = self._refresh_attempt_sequence
+        async with self._refresh_lock:
+            if self._refresh_attempt_sequence != seen_attempt:
+                if self._refresh_attempt_error is not None:
+                    raise self._refresh_attempt_error
+                return self._current_auth_token()
+            return await self._refresh_tokens_locked()
 
-        if not isinstance(data, dict) or not data.get("token"):
-            raise DeepalAuthError("Refresh response did not contain an access token.")
+    async def _refresh_tokens_locked(self) -> AuthToken:
+        """Run one refresh attempt while holding the per-client lock."""
+        if not self.access_token_expires_soon() and self._refresh_is_throttled():
+            logger.info(
+                "Deepal refresh throttled by the app window (%.0f s); keeping the "
+                "current session",
+                INTL_REFRESH_THROTTLE_SECONDS,
+            )
+            return self._current_auth_token()
 
-        self.access_token = str(data["token"])
-        self.refresh_token = data.get("refreshToken") or self.refresh_token
-        self.cac_token = data.get("cacToken") or self.cac_token
-        self.access_token_expires_at = self._jwt_expiry(self.access_token)
-        self.user_id = data.get("userId") or self.user_id
-        self.ca_user_id = data.get("caUserId") or self.ca_user_id
-        self.cac_user_id = data.get("cacUserId") or self.cac_user_id
-        self._log_session_fields()
-
-        if data.get("cacToken"):
-            logger.info("Deepal token refresh returned a new CAC token")
-        else:
-            logger.warning(
-                "Deepal token refresh did not return a new CAC token; the CA/MQTT "
-                "bootstrap keeps the previous one"
+        # The attempt is recorded before the request, so failures occupy the
+        # window for reactive attempts too, like the app interceptor does.
+        self._last_refresh_attempt_at = time.monotonic()
+        self._refresh_attempt_error = None
+        try:
+            data = await self._request(
+                INTL_REFRESH_TOKEN,
+                json_data={"refreshToken": self.refresh_token},
             )
 
-        return AuthToken(
-            access_token=self.access_token,
-            refresh_token=self.refresh_token,
-            cac_token=self.cac_token,
-            ca_user_id=self.ca_user_id,
-            cac_user_id=self.cac_user_id,
-            user_id=data.get("userId"),
-        )
+            if not isinstance(data, dict) or not data.get("token"):
+                raise DeepalAuthError(
+                    "Refresh response did not contain an access token."
+                )
+
+            self.access_token = str(data["token"])
+            self.refresh_token = data.get("refreshToken") or self.refresh_token
+            self.cac_token = data.get("cacToken") or self.cac_token
+            self.access_token_expires_at = self._jwt_expiry(self.access_token)
+            self.user_id = data.get("userId") or self.user_id
+            self.ca_user_id = data.get("caUserId") or self.ca_user_id
+            self.cac_user_id = data.get("cacUserId") or self.cac_user_id
+            self._log_session_fields()
+
+            if data.get("cacToken"):
+                logger.info("Deepal token refresh returned a new CAC token")
+            else:
+                logger.warning(
+                    "Deepal token refresh did not return a new CAC token; the CA/MQTT "
+                    "bootstrap keeps the previous one"
+                )
+
+            token = self._current_auth_token()
+        except Exception as exc:
+            self._refresh_attempt_sequence += 1
+            self._refresh_attempt_error = exc
+            raise
+        else:
+            self._refresh_attempt_sequence += 1
+            return token
 
     async def get_vehicles(self) -> list[Vehicle]:
         """Fetch the account vehicles from the international gateway."""
@@ -560,7 +850,9 @@ class DeepalIntlClient:
             )
         return vehicles
 
-    async def get_vehicle_condition(self, vehicle_id: str) -> VehicleCondition:
+    async def get_vehicle_condition(
+        self, vehicle_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
         """Fetch the telemetry condition of an international vehicle."""
         raw = await self._request(
             INTL_GET_VEHICLE_CONDITION,
@@ -582,9 +874,11 @@ class DeepalIntlClient:
         if not isinstance(raw, dict):
             raw = {}
 
-        return self.parse_condition(raw, vehicle_id)
+        return self.parse_condition(raw, vehicle_id, vin=vin)
 
-    def parse_condition(self, raw: dict[str, Any], vehicle_id: str) -> VehicleCondition:
+    def parse_condition(
+        self, raw: dict[str, Any], vehicle_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
         """Map a raw condition payload into the shared vehicle model."""
         status = raw.get("vehicleStatus") or {}
         door = raw.get("door") or {}
@@ -760,12 +1054,18 @@ class DeepalIntlClient:
             right_turn=lamp.get("rightTurn") not in (None, 0),
         )
 
-        last_updated = _as_int(raw.get("lastUpdatedAt"))
+        last_updated = _to_millis(
+            raw.get("lastUpdatedAt")
+            if raw.get("lastUpdatedAt") is not None
+            else status.get("lastUpdatedAt")
+        )
 
         return VehicleCondition(
             car_id=vehicle_id,
-            vin=raw.get("vin") or "",
+            vin=raw.get("vin") or vin or "",
             total_odometer_km=_as_float(status.get("totalMileage")),
+            mileage_yesterday_km=_as_float(status.get("totalMeterYesterday")),
+            trip_mileage_km=_as_float(status.get("igniteCumulativeMileage")),
             speed_kmh=_as_float(status.get("speed")),
             gear=(
                 str(status["gearSignal"])
@@ -863,7 +1163,9 @@ class DeepalIntlClient:
             raise DeepalAPIError("S05 MQTT auth response did not include authToken.")
         return str(data["authToken"])
 
-    async def s05_mqtt_condition(self, vehicle_id: str) -> VehicleCondition:
+    async def s05_mqtt_condition(
+        self, vehicle_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
         """Fetch a live S05 condition snapshot over MQTT."""
         config = await self.get_mqtt_config(vehicle_id)
         token = await self.get_mqtt_token()
@@ -873,65 +1175,119 @@ class DeepalIntlClient:
             raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
         if not params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
-        return self.parse_condition(normalize_s05_params(params), vehicle_id)
+        return self.parse_condition(
+            normalize_s05_params(params), vehicle_id, vin=vin
+        )
+
+    def _mqtt_ssl_context(self) -> ssl.SSLContext:
+        """Build the TLS context, honouring the explicit insecure override."""
+        if self.mqtt_tls_insecure:
+            logger.warning(
+                "Deepal MQTT TLS verification is disabled (mqtt_tls_insecure=True); "
+                "certificate and hostname checks are skipped."
+            )
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            return context
+        return ssl.create_default_context()
+
+    def _mqtt_basic_identifiers(
+        self, config: dict[str, Any], login_did: str
+    ) -> dict[str, Any]:
+        """Collect the basic ReqPayLoad identifiers known to this client."""
+        info = ((config.get("mqttConnectionInfos") or [None])[0]) or {}
+        cluster = ((info.get("clusterInfos") or [None])[0]) or {}
+        car_data = info.get("carConfigJson")
+        if isinstance(car_data, str) and car_data.strip().startswith("{"):
+            try:
+                parsed = json.loads(car_data)
+            except ValueError:
+                parsed = {}
+            car_data = parsed if isinstance(parsed, dict) else {}
+        if not isinstance(car_data, dict):
+            car_data = {}
+        sources = (info, cluster, car_data, config)
+
+        def first_value(*keys: str) -> Optional[str]:
+            for source in sources:
+                for key in keys:
+                    value = source.get(key)
+                    if value is not None and str(value):
+                        return str(value)
+            return None
+
+        return basic_identifiers(
+            ruid=login_did,
+            uid=self.user_id or first_value("userId", "uid"),
+            vin=first_value("vin"),
+            cid=first_value("carId", "car_id", "cid"),
+        )
 
     async def _read_s05_params(
         self, config: dict[str, Any], token: str
     ) -> dict[str, Any]:
-        """Run one MQTT login + condition exchange and return the raw parameters."""
+        """Run one MQTT 5.0 login + condition exchange and return the raw parameters."""
         info = ((config.get("mqttConnectionInfos") or [None])[0]) or {}
         cluster = ((info.get("clusterInfos") or [None])[0]) or {}
         host = str(cluster.get("brokerUrl", "")).replace("ssl://", "")
         port = int(cluster.get("brokerPort") or 8883)
-        topics: list[str] = []
-        login_topic: Optional[str] = None
-        login_did: Optional[str] = None
-        properties_topic: Optional[str] = None
-        device_did: Optional[str] = None
-
-        for topic_info in info.get("topicInfos") or []:
-            msg_type = topic_info.get("msgType")
-            for topic in topic_info.get("pubTopics") or []:
-                if msg_type == "loginout" and "/loginout/req" in topic:
-                    login_topic = topic
-                    login_did = topic_device_id(topic)
-                if msg_type == "properties" and "/properties/get/req" in topic:
-                    properties_topic = topic
-                    device_did = topic_device_id(topic)
-            for topic in topic_info.get("subTopics") or []:
-                if "/commands/" not in topic and "/set/" not in topic:
-                    topics.append(topic)
-                if device_did is None and "/properties/" in topic:
-                    device_did = topic_device_id(topic)
+        resolved = resolve_mqtt_topics(config, fallback_did=self.mqtt_client_id)
+        login_topic = resolved.login_publish
+        login_did = resolved.login_did
+        properties_topic = resolved.properties_publish
+        device_did = resolved.device_did
 
         if not host or not login_topic or not login_did or not properties_topic or not device_did:
             raise DeepalAPIError(
                 "S05 MQTT configuration did not include required topics."
             )
 
-        context = ssl.create_default_context()
+        client_id, username = config_mqtt_identity(
+            config,
+            login_did,
+            client_id=self.mqtt_client_id,
+            username=self.mqtt_username,
+        )
+        basic_info = self._mqtt_basic_identifiers(config, login_did)
+        context = await asyncio.to_thread(self._mqtt_ssl_context)
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=context, server_hostname=host),
             timeout=self.timeout,
         )
         try:
-            writer.write(build_connect_packet(login_did, login_did, token))
+            writer.write(
+                build_connect_packet(
+                    client_id,
+                    username,
+                    token,
+                    keepalive=self.mqtt_keepalive,
+                    clean_start=self.mqtt_clean_start,
+                )
+            )
             await writer.drain()
             first, body = await asyncio.wait_for(
                 read_packet(reader), timeout=self.timeout
             )
-            rc = body[1] if first == 0x20 and len(body) >= 2 else None
-            if rc != 0:
-                raise DeepalAPIError(f"S05 MQTT broker rejected connection: rc={rc}")
+            _session_present, reason_code = parse_connack(first, body)
+            if reason_code != 0:
+                reason = MQTT_CONNACK_REASONS.get(reason_code, "unknown reason code")
+                raise DeepalAPIError(
+                    "S05 MQTT broker rejected connection: "
+                    f"reason code {reason_code} ({reason})"
+                )
 
-            writer.write(build_subscribe_packet(1, sorted(set(topics))))
+            writer.write(build_subscribe_packet(1, sorted(set(resolved.subscriptions))))
             await writer.drain()
             await asyncio.wait_for(read_packet(reader), timeout=self.timeout)
 
             login_req_id = new_request_id(login_did)
             writer.write(
                 build_publish_packet(
-                    login_topic, login_request_payload(login_did, login_req_id)
+                    login_topic,
+                    login_request_payload(
+                        login_did, login_req_id, basic_info=basic_info
+                    ),
                 )
             )
             await writer.drain()
@@ -943,9 +1299,15 @@ class DeepalIntlClient:
             deadline = loop.time() + max(self.timeout, 20.0)
 
             while loop.time() < deadline:
-                first, body = await asyncio.wait_for(
-                    read_packet(reader), timeout=max(1.0, deadline - loop.time())
-                )
+                try:
+                    first, body = await read_packet_with_keepalive(
+                        reader,
+                        writer,
+                        max(0.05, deadline - loop.time()),
+                        self.mqtt_keepalive,
+                    )
+                except asyncio.TimeoutError:
+                    break
                 if first >> 4 != 3:
                     continue
                 topic, payload, packet_id = parse_publish(first, body)
@@ -961,7 +1323,11 @@ class DeepalIntlClient:
                             build_publish_packet(
                                 properties_topic,
                                 condition_request_payload(
-                                    device_did, login_did, secret_key, req_id
+                                    device_did,
+                                    login_did,
+                                    secret_key,
+                                    req_id,
+                                    basic_info=basic_info,
                                 ),
                             )
                         )
@@ -980,6 +1346,11 @@ class DeepalIntlClient:
 
             return partial
         finally:
+            try:
+                writer.write(build_disconnect_packet())
+                await writer.drain()
+            except (ConnectionError, OSError, ssl.SSLError):
+                pass
             writer.close()
             try:
                 await writer.wait_closed()
@@ -1024,16 +1395,28 @@ class DeepalIntlClient:
     def sign_payload(
         self, payload: dict[str, Any], omit_keys: Optional[set[str]] = None
     ) -> str:
-        """Sign a command payload with the login keypair."""
+        """Sign a command payload with the login keypair.
+
+        The default ``app`` policy signs alphabetically sorted ``key=value``
+        pairs excluding exactly ``sign``, ``class`` and ``command``, including
+        an empty ``rcToken``. The ``legacy`` policy keeps the per-command
+        omission sets for rollback and live A/B checks.
+        """
         private_key = self._load_private_key()
-        omitted = omit_keys or set()
+        if self.signing_policy == SIGNING_POLICY_LEGACY:
+            omitted = set(omit_keys or ())
+            omitted.add("sign")
+        else:
+            omitted = APP_SIGN_EXCLUDED_KEYS
         parts = []
         for key in sorted(payload):
-            if key == "sign" or key in omitted:
+            if key in omitted:
                 continue
             value = payload[key]
             if isinstance(value, bool):
                 value = str(value).lower()
+            elif value is None:
+                value = "null"
             parts.append(f"{key}={value}")
         canonical = "&".join(parts)
         signature = private_key.sign(
@@ -1179,12 +1562,17 @@ class DeepalIntlClient:
         )
 
     async def control_doors(self, vehicle_id: str, open_value: bool) -> str:
-        """Lock (`open_value=False`) or unlock (`open_value=True`) the vehicle."""
+        """Lock (`open_value=False`) or unlock (`open_value=True`) the vehicle.
+
+        The app base request class always carries ``command``, set to ``lock``
+        for this endpoint; it stays outside the canonical signature.
+        """
         return await self._signed_command(
             path=INTL_CONTROL_DOORS,
             vehicle_id=vehicle_id,
-            payload={"open": open_value},
+            payload={"command": "lock", "open": open_value},
             require_rc_token=True,
+            sign_omit_keys={"command"},
         )
 
     async def control_windows(
@@ -1253,7 +1641,8 @@ class DeepalIntlClient:
         )
 
     async def control_flashing_honking(self, vehicle_id: str, action_type: int) -> str:
-        """Flash the lights (type 1) or sound the horn (type 3)."""
+        """Flash the lights (`FLASH_HONK_FLASH`), sound the horn (`FLASH_HONK_BEE`),
+        combine both (`FLASH_HONK_FLASH_BEE`) or turn them off (`FLASH_HONK_OFF`)."""
         return await self._signed_command(
             path=INTL_CONTROL_FLASHING_HONKING,
             vehicle_id=vehicle_id,
@@ -1261,11 +1650,320 @@ class DeepalIntlClient:
             sign_omit_keys={"command", "rcToken"},
         )
 
+    async def control_defrost(
+        self,
+        vehicle_id: str,
+        enabled: bool,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Turn the front defrost on or off (optional command)."""
+        return await self._signed_command(
+            path=INTL_CONTROL_DEFROST,
+            vehicle_id=vehicle_id,
+            payload={"command": "defrost", "enabled": enabled},
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_seats_heat(
+        self,
+        vehicle_id: str,
+        master_switch: Optional[int] = None,
+        master_level: Optional[int] = None,
+        copilot_switch: Optional[int] = None,
+        copilot_level: Optional[int] = None,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Set the driver/copilot seat heating levels (optional command).
+
+        Omitted positions are sent as JSON null, matching the app request.
+        """
+        return await self._signed_command(
+            path=INTL_CONTROL_SEATS_HEAT,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "seats_heat",
+                "masterSwitch": master_switch,
+                "masterLevel": master_level,
+                "copilotSwitch": copilot_switch,
+                "copilotLevel": copilot_level,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_seats_wind(
+        self,
+        vehicle_id: str,
+        master_switch: Optional[int] = None,
+        master_level: Optional[int] = None,
+        copilot_switch: Optional[int] = None,
+        copilot_level: Optional[int] = None,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Set the driver/copilot seat ventilation levels (optional command)."""
+        return await self._signed_command(
+            path=INTL_CONTROL_SEATS_WIND,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "seats_wind",
+                "masterSwitch": master_switch,
+                "masterLevel": master_level,
+                "copilotSwitch": copilot_switch,
+                "copilotLevel": copilot_level,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_steering_wheel_heat(
+        self,
+        vehicle_id: str,
+        open_value: bool,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Turn the steering wheel heating on or off (optional command)."""
+        return await self._signed_command(
+            path=INTL_CONTROL_STEERING_WHEEL_HEAT,
+            vehicle_id=vehicle_id,
+            payload={"command": "steering_wheel_heating", "open": open_value},
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_charge_plan_add(
+        self,
+        vehicle_id: str,
+        start_time: str,
+        end_time: str,
+        end_switch: int,
+        plan_type: int = 1,
+        time_format: int = 1,
+        time_zone: str = "GMT+08:00",
+        serial_type: str = "2",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Add a charging schedule plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_CHARGE_ADD_PLAN,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "add_charge_plan",
+                "endSwitch": end_switch,
+                "endTime": end_time,
+                "planType": plan_type,
+                "startTime": start_time,
+                "timeFormat": time_format,
+                "timeZone": time_zone,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_charge_plan_delete(
+        self,
+        vehicle_id: str,
+        plan_id: str,
+        serial_type: str = "2",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Delete a charging schedule plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_CHARGE_DELETE_PLAN,
+            vehicle_id=vehicle_id,
+            payload={"command": "delete_charge_plan", "planId": str(plan_id)},
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_charge_plan_validity(
+        self,
+        vehicle_id: str,
+        plan_id: str,
+        enabled: bool,
+        serial_type: str = "2",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Enable or disable a charging schedule plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_CHARGE_VALIDITY,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_VALID_CHARGE_PLAN",
+                "enabled": enabled,
+                "planId": str(plan_id),
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_departure_plan_add(
+        self,
+        vehicle_id: str,
+        start_time: str,
+        weeks: str,
+        plan_type: int = 1,
+        schedule_type: int = 1,
+        is_valid: int = 1,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Add a departure/charging-travel plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_DEPARTURE_ADD_PLAN,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_TRAVELPLAN_ADD",
+                "isValid": is_valid,
+                "planType": plan_type,
+                "startTime": start_time,
+                "type": schedule_type,
+                "weeks": weeks,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_departure_plan_modify(
+        self,
+        vehicle_id: str,
+        plan_id: int,
+        start_time: str,
+        weeks: str,
+        plan_type: int = 1,
+        schedule_type: int = 1,
+        is_valid: int = 1,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Modify a departure/charging-travel plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_DEPARTURE_MODIFY_PLAN,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_TRAVELPLAN_MODIFY_PLAN",
+                "isValid": is_valid,
+                "planId": int(plan_id),
+                "planType": plan_type,
+                "startTime": start_time,
+                "type": schedule_type,
+                "weeks": weeks,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_departure_plan_delete(
+        self,
+        vehicle_id: str,
+        plan_id: int,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Delete a departure/charging-travel plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_DEPARTURE_DELETE,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_TRAVELPLAN_DELETE",
+                "planId": int(plan_id),
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_departure_plan_validity(
+        self,
+        vehicle_id: str,
+        plan_id: int,
+        enabled: bool,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Enable or disable a departure/charging-travel plan (optional command)."""
+        return await self._signed_command(
+            path=INTL_DEPARTURE_VALIDITY,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_TRAVELPLAN_MODIFY_VALIDITY",
+                "enabled": enabled,
+                "planId": int(plan_id),
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_departure_plan_enabled(
+        self,
+        vehicle_id: str,
+        plan_id: int,
+        enabled: bool,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Start or stop a departure plan immediately (optional command)."""
+        return await self._signed_command(
+            path=INTL_DEPARTURE_ENABLED,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_TRAVELPLAN_STARTSTOPPINGPLANNOW",
+                "enabled": enabled,
+                "planId": int(plan_id),
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
+    async def control_fota_plan(
+        self,
+        vehicle_id: str,
+        appointment: bool,
+        timestamp: str,
+        serial_type: str = "1",
+        require_rc_token: bool = False,
+    ) -> str:
+        """Schedule an OTA appointment (optional command)."""
+        return await self._signed_command(
+            path=INTL_CONTROL_FOTA_PLAN,
+            vehicle_id=vehicle_id,
+            payload={
+                "command": "COMMAND_APPOINT_UPGRADE",
+                "appointment": appointment,
+                "timestamp": timestamp,
+            },
+            serial_type=serial_type,
+            require_rc_token=require_rc_token,
+            sign_omit_keys={"command", "rcToken"},
+        )
+
     async def control_result(self, vehicle_id: str, command_id: str) -> dict[str, Any]:
-        """Fetch the status of a signed command."""
+        """Fetch the raw status payload of a signed command."""
         data = await self._request(
             INTL_CONTROL_RESULT,
             json_data={"vehicleId": vehicle_id, "commandId": command_id},
             auth_required=True,
         )
         return data if isinstance(data, dict) else {}
+
+    async def control_result_status(
+        self, vehicle_id: str, command_id: str
+    ) -> CommandResult:
+        """Fetch and classify the status of a signed command."""
+        raw = await self.control_result(vehicle_id, command_id)
+        return CommandResult.from_payload(raw)
