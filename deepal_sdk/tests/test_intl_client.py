@@ -20,6 +20,8 @@ from deepal import (
     DeepalRateLimitError,
 )
 from deepal.endpoints import (
+    INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
+    INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CHECK_CONTROL_CODE,
     INTL_CONDITION_INQUIRY,
     INTL_CONTROL_AIR_CONDITIONER,
@@ -331,17 +333,18 @@ async def test_authorization_includes_cac_token():
 
     assert captured["path"] == INTL_GET_MY_CARS
     assert captured["auth"] == "test_token_123|test_cac_123"
-    assert captured["tsp"] == "test_cac_123"
-    assert captured["vcs"] == "test_cac_123"
+    assert captured["tsp"] == "test_token_123"
+    assert captured["vcs"] == "test_token_123"
 
 
 @pytest.mark.asyncio
-async def test_tsp_headers_omitted_without_cac_token():
+async def test_tsp_headers_use_access_token_without_cac():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["tsp"] = request.headers.get("X-Tsp-User-Token")
         captured["vcs"] = request.headers.get("X-VCS-User-Token")
+        captured["auth"] = request.headers.get("authorization")
         return httpx.Response(200, json={"success": True, "code": "0", "data": []})
 
     client = _client(handler)
@@ -349,8 +352,9 @@ async def test_tsp_headers_omitted_without_cac_token():
     await client.get_vehicles()
     await client.close()
 
-    assert captured["tsp"] is None
-    assert captured["vcs"] is None
+    assert captured["tsp"] == "test_token_123"
+    assert captured["vcs"] == "test_token_123"
+    assert captured["auth"] == "test_token_123"
 
 
 @pytest.mark.asyncio
@@ -1606,3 +1610,256 @@ async def test_login_logs_session_fields_without_values(caplog):
     assert "cacUserId=True" in caplog.text
     assert "SECRET_CAC" not in caplog.text
     assert "SECRET_CA_USER" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_environment_selects_regional_gateways():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = request.url
+        captured["appid"] = request.headers.get("appid")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="TH",
+        environment="release_ase",
+        device_id="test-device-id",
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+
+    assert client.ca_base_url == "https://ca-m.iov.changanauto.sg"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["url"].host == "m.iov.changanauto.sg"
+    assert captured["url"].path == "/appgw/intl-app-user/api/car/vehicles"
+    assert captured["appid"] == "ca"
+
+
+@pytest.mark.asyncio
+async def test_asean_connect_environment_uses_changan_app_id():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["appid"] = request.headers.get("appid")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        environment="release_ase_connect",
+        device_id="test-device-id",
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["appid"] == "changan"
+
+
+def test_unknown_environment_raises():
+    with pytest.raises(ValueError):
+        DeepalIntlClient(environment="does_not_exist")
+
+
+@pytest.mark.asyncio
+async def test_timestamp_headers_are_opt_in():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tsp"] = request.headers.get("X-Tsp-Timestamp")
+        captured["vcs"] = request.headers.get("X-VCS-Timestamp")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    await client.get_vehicles()
+    await client.close()
+    assert captured["tsp"] is None
+    assert captured["vcs"] is None
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="GB",
+        device_id="test-device-id",
+        send_timestamps=True,
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["tsp"] is not None and captured["tsp"].isdigit()
+    assert captured["tsp"] == captured["vcs"]
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_falls_back_to_app_endpoint():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("getConnConf"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": False,
+                    "code": "APIGW_-1_7_01_004",
+                    "msg": "invalided token",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"mqttConnectionInfos": []},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    data = await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert data == {"mqttConnectionInfos": []}
+    assert paths[0].endswith("getConnConf")
+    assert paths[1] == INTL_CA_GET_CAR_CONF_FUNC
+
+
+@pytest.mark.asyncio
+async def test_mqtt_config_fallback_can_be_disabled():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"success": False, "code": "APIGW_-1_7_01_004", "msg": "nope"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="GB",
+        device_id="test-device-id",
+        mqtt_config_fallback=False,
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+
+    with pytest.raises(DeepalAPIError):
+        await client.get_mqtt_config("car-1")
+    await client.close()
+    assert len(paths) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_falls_back_to_app_apigw():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.startswith("/user-apigw/vot-connect-auth-center"):
+            return httpx.Response(
+                200,
+                json={"success": False, "code": "APIGW_-1_7_01_004", "msg": "nope"},
+            )
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"authToken": "tok-123"}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    token = await client.get_mqtt_token()
+    await client.close()
+
+    assert token == "tok-123"
+    assert paths[1] == INTL_CA_APP_APIGW_GET_AUTH_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_mqtt_fallbacks_skip_rate_limit():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"success": False, "code": "CAC_1_1_01_033", "msg": "slow down"},
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    with pytest.raises(DeepalRateLimitError):
+        await client.get_mqtt_config("car-1")
+    await client.close()
+    assert len(paths) == 1
+
+
+@pytest.mark.asyncio
+async def test_mqtt_fallbacks_skip_auth_errors():
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"success": False, "code": "AUTH_1_1_01_001", "msg": "auth"},
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    with pytest.raises(DeepalAuthError):
+        await client.get_mqtt_token()
+    await client.close()
+    assert len(paths) == 1
+
+
+@pytest.mark.asyncio
+async def test_tsp_headers_default_to_access_token():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tsp"] = request.headers.get("X-Tsp-User-Token")
+        captured["vcs"] = request.headers.get("X-VCS-User-Token")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.cac_token = "test_cac_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["tsp"] == "test_token_123"
+    assert captured["vcs"] == "test_token_123"
+
+
+@pytest.mark.asyncio
+async def test_tsp_headers_can_be_forced_to_cac_token():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["tsp"] = request.headers.get("X-Tsp-User-Token")
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = DeepalIntlClient(
+        country="ES",
+        device_id="test-device-id",
+        tsp_token_source="cac",
+        httpx_client=httpx.AsyncClient(transport=transport),
+    )
+    client.access_token = "test_token_123"
+    client.cac_token = "test_cac_123"
+    await client.get_vehicles()
+    await client.close()
+
+    assert captured["tsp"] == "test_cac_123"

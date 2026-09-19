@@ -1,10 +1,108 @@
 """API Endpoints and Base URLs for Changan Deepal API."""
 
+from dataclasses import dataclass
+
 # Base Hostnames
 DEFAULT_BASE_URL = "https://pre-acenter.sda.changan.com.cn"
 GATEWAY_BASE_URL = "https://pre-acenter.sda.changan.com.cn/app-apigw/store-sda-api/api/v2"
 INTL_BASE_URL = "https://m.iov.changanauto.com.de"
 INTL_CA_BASE_URL = "https://ca-m.iov.changanauto.com.de"
+
+
+@dataclass(frozen=True)
+class IntlEnvironment:
+    """Regional gateway definition recovered from the app's LocalEnvironments."""
+
+    id: str
+    label: str
+    app_id: str
+    intl_base_url: str
+    ca_base_url: str
+    intl_path_prefix: str = "/intl-app-gw"
+
+
+INTL_ENVIRONMENTS: dict[str, IntlEnvironment] = {
+    environment.id: environment
+    for environment in (
+        IntlEnvironment(
+            "release_eu",
+            "Europe (production)",
+            "ca",
+            "https://m.iov.changanauto.com.de",
+            "https://ca-m.iov.changanauto.com.de",
+        ),
+        IntlEnvironment(
+            "release_eu_mix",
+            "Europe (migration)",
+            "ca",
+            "https://mix-m.iov.changanauto.com.de",
+            "https://ca-m.iov.changanauto.com.de",
+        ),
+        IntlEnvironment(
+            "preprod_eu",
+            "Europe (preproduction)",
+            "ca",
+            "https://m-uat.iov.changanauto.com.de",
+            "https://ca-m-uat.iov.changanauto.com.de",
+        ),
+        IntlEnvironment(
+            "release_ase",
+            "ASEAN DEEPAL (production)",
+            "ca",
+            "https://m.iov.changanauto.sg",
+            "https://ca-m.iov.changanauto.sg",
+            intl_path_prefix="/appgw",
+        ),
+        IntlEnvironment(
+            "release_ase_connect",
+            "ASEAN CONNECT (production)",
+            "changan",
+            "https://m.iov.changanauto.sg",
+            "https://ca-m.iov.changanauto.sg",
+            intl_path_prefix="/ca-appgw",
+        ),
+        IntlEnvironment(
+            "release_st",
+            "Saudi Arabia (production)",
+            "ca",
+            "https://m.sa.changanauto.link",
+            "https://m.sa.changanauto.link",
+        ),
+        IntlEnvironment(
+            "release_alq",
+            "United Arab Emirates (production)",
+            "ca",
+            "https://m.ae.changanauto.link",
+            "https://m.ae.changanauto.link",
+        ),
+        IntlEnvironment(
+            "release_znm",
+            "Latin America (production)",
+            "ca",
+            "https://m.mx.changanauto.link",
+            "https://m.mx.changanauto.link",
+        ),
+        IntlEnvironment(
+            "release_dlt",
+            "CIS (production)",
+            "ca",
+            "https://m.iov.changanauto.ru",
+            "https://m.iov.changanauto.ru",
+        ),
+    )
+}
+DEFAULT_INTL_ENVIRONMENT = "release_eu"
+
+
+def get_intl_environment(environment: str) -> IntlEnvironment:
+    """Return the environment definition or raise for an unknown identifier."""
+    try:
+        return INTL_ENVIRONMENTS[environment]
+    except KeyError as exc:
+        supported = ", ".join(sorted(INTL_ENVIRONMENTS))
+        raise ValueError(
+            f"Unknown international environment {environment!r}; supported: {supported}."
+        ) from exc
 
 # Authentication Endpoints
 LOGIN_SMS_CODE = "/appauth/sda-app/api/user/login/code"
@@ -39,6 +137,13 @@ INTL_CHARGE_MODIFY_PLAN = "/intl-app-gw/intl-app-car-control/api/charge/modify-p
 # International CA gateway (S05 MQTT telemetry bootstrap)
 INTL_CA_GET_CONN_CONF = "/user-apigw/vot-connect-conf-center/api/device/getConnConf"
 INTL_CA_GET_AUTH_TOKEN = "/user-apigw/vot-connect-auth-center/api/auth/getAuthTokenByUserId"
+# App fallbacks recovered from the 1.12.0 DEX (MqttConstansKt)
+INTL_CA_GET_CAR_CONF_FUNC = (
+    "/user-apigw/vot-connect-conf-center/api/device/appGetCarConfFunc"
+)
+INTL_CA_APP_APIGW_GET_AUTH_TOKEN = (
+    "/app-apigw/vot-auth/api/token/getAuthTokenByUserId"
+)
 
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"

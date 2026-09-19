@@ -14,9 +14,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from .endpoints import (
-    INTL_BASE_URL,
-    INTL_CA_BASE_URL,
+    DEFAULT_INTL_ENVIRONMENT,
+    INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
     INTL_CA_GET_AUTH_TOKEN,
+    INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CA_GET_CONN_CONF,
     INTL_CHARGE_MODIFY_PLAN,
     INTL_CHARGE_PERCENTAGE,
@@ -38,6 +39,7 @@ from .endpoints import (
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
     REQUEST_ENCRYPTION_PUBLIC_KEY,
+    get_intl_environment,
 )
 from .exceptions import (
     DeepalAPIError,
@@ -160,20 +162,33 @@ class DeepalIntlClient:
         language: str = DEFAULT_LANGUAGE,
         app_version: str = INTL_APP_VERSION,
         os_version: str = INTL_OS_VERSION,
-        tsp_token_source: str = "cac",
+        tsp_token_source: str = "access",
+        environment: str = DEFAULT_INTL_ENVIRONMENT,
+        send_timestamps: bool = False,
+        mqtt_config_fallback: bool = True,
+        mqtt_token_fallback: bool = True,
         device_id: Optional[str] = None,
-        base_url: str = INTL_BASE_URL,
+        base_url: Optional[str] = None,
+        ca_base_url: Optional[str] = None,
         timeout: float = 15.0,
         enable_api_logging: bool = False,
         httpx_client: Optional[httpx.AsyncClient] = None,
     ):
+        environment_config = get_intl_environment(environment)
         self.country = country
         self.language = language
         self.app_version = app_version
         self.os_version = os_version
         self.tsp_token_source = tsp_token_source
+        self.environment = environment_config.id
+        self.app_id = environment_config.app_id
+        self._intl_path_prefix = environment_config.intl_path_prefix
+        self.send_timestamps = send_timestamps
+        self.mqtt_config_fallback = mqtt_config_fallback
+        self.mqtt_token_fallback = mqtt_token_fallback
         self.device_id = device_id or secrets.token_hex(16)
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
+        self.ca_base_url = (ca_base_url or environment_config.ca_base_url).rstrip("/")
         self.timeout = timeout
         self.enable_api_logging = enable_api_logging
         self.access_token: Optional[str] = None
@@ -230,7 +245,7 @@ class DeepalIntlClient:
 
     def _get_headers(self) -> dict[str, str]:
         headers = {
-            "appid": INTL_APP_ID,
+            "appid": self.app_id,
             "language": self.language,
             "appversion": self.app_version,
             "apptype": INTL_APP_TYPE,
@@ -242,13 +257,18 @@ class DeepalIntlClient:
             "content-type": "application/json; charset=UTF-8",
             "user-agent": INTL_USER_AGENT,
         }
+        if self.send_timestamps:
+            timestamp = str(int(time.time() * 1000))
+            headers["X-Tsp-Timestamp"] = timestamp
+            headers["X-VCS-Timestamp"] = timestamp
         if self.access_token:
             headers["authorization"] = self._authorization_value()
             tsp_value = {
+                "access": self.access_token,
                 "cac": self.cac_token,
                 "cac_user_id": self.cac_user_id,
                 "ca_user_id": self.ca_user_id,
-            }.get(self.tsp_token_source, self.cac_token)
+            }.get(self.tsp_token_source, self.access_token)
             if tsp_value:
                 headers["X-Tsp-User-Token"] = tsp_value
                 headers["X-VCS-User-Token"] = tsp_value
@@ -270,6 +290,10 @@ class DeepalIntlClient:
         if auth_required and not self.access_token:
             raise DeepalAuthError("Access token is required for this operation.")
 
+        if self._intl_path_prefix != "/intl-app-gw" and path.startswith(
+            "/intl-app-gw"
+        ):
+            path = self._intl_path_prefix + path[len("/intl-app-gw") :]
         url = f"{base_url or self.base_url}{path}" if path.startswith("/") else path
         body = json.dumps(json_data or {}, separators=(",", ":"), ensure_ascii=False)
         headers = self._get_headers()
@@ -775,18 +799,34 @@ class DeepalIntlClient:
 
     async def get_mqtt_config(self, vehicle_id: str) -> dict[str, Any]:
         """Fetch the CA gateway MQTT connection configuration for a vehicle."""
-        data = await self._request(
-            INTL_CA_GET_CONN_CONF,
-            json_data={
-                "deviceId": self.device_id,
-                "carId": vehicle_id,
-                "deviceType": 1,
-                "confTimestamp": 0,
-                "deviceTimestamp": str(int(time.time() * 1000)),
-            },
-            auth_required=True,
-            base_url=INTL_CA_BASE_URL,
-        )
+        payload = {
+            "deviceId": self.device_id,
+            "carId": vehicle_id,
+            "deviceType": 1,
+            "confTimestamp": 0,
+            "deviceTimestamp": str(int(time.time() * 1000)),
+        }
+        try:
+            data = await self._request(
+                INTL_CA_GET_CONN_CONF,
+                json_data=payload,
+                auth_required=True,
+                base_url=self.ca_base_url,
+            )
+        except DeepalRateLimitError:
+            raise
+        except DeepalAPIError as exc:
+            if not self.mqtt_config_fallback:
+                raise
+            logger.warning(
+                "getConnConf failed (%s); retrying with appGetCarConfFunc", exc
+            )
+            data = await self._request(
+                INTL_CA_GET_CAR_CONF_FUNC,
+                json_data=payload,
+                auth_required=True,
+                base_url=self.ca_base_url,
+            )
         if not isinstance(data, dict):
             raise DeepalAPIError("Unexpected S05 MQTT configuration response.")
         return data
@@ -797,12 +837,28 @@ class DeepalIntlClient:
             raise DeepalAPIError(
                 "S05 MQTT telemetry requires the account user id; log in again."
             )
-        data = await self._request(
-            INTL_CA_GET_AUTH_TOKEN,
-            json_data={"userId": self.user_id},
-            auth_required=True,
-            base_url=INTL_CA_BASE_URL,
-        )
+        try:
+            data = await self._request(
+                INTL_CA_GET_AUTH_TOKEN,
+                json_data={"userId": self.user_id},
+                auth_required=True,
+                base_url=self.ca_base_url,
+            )
+        except DeepalRateLimitError:
+            raise
+        except DeepalAPIError as exc:
+            if not self.mqtt_token_fallback:
+                raise
+            logger.warning(
+                "getAuthTokenByUserId failed (%s); retrying with the app-apigw route",
+                exc,
+            )
+            data = await self._request(
+                INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
+                json_data={"userId": self.user_id},
+                auth_required=True,
+                base_url=self.ca_base_url,
+            )
         if not isinstance(data, dict) or not data.get("authToken"):
             raise DeepalAPIError("S05 MQTT auth response did not include authToken.")
         return str(data["authToken"])

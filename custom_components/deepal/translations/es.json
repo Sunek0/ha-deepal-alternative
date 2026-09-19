@@ -86,7 +86,9 @@
           "enable_api_logging": "Registrar tráfico API redactado",
           "enable_mqtt_controls": "Habilitar controles remotos experimentales para vehículos MQTT (S05)",
           "os_version": "Versión de Android declarada (diagnóstico)",
-          "tsp_token_source": "Fuente del token TSP (diagnóstico)"
+          "tsp_token_source": "Fuente del token TSP (diagnóstico)",
+          "environment": "Entorno regional (diagnóstico)",
+          "send_timestamps": "Enviar cabeceras de timestamp TSP/VCS (diagnóstico)"
         }
       }
     }
