@@ -1,0 +1,12 @@
+{
+  "domain": "deepal",
+  "name": "Deepal Alternative",
+  "codeowners": ["@sunek0"],
+  "config_flow": true,
+  "documentation": "https://github.com/sunek0/ha-deepal-alternative",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/sunek0/ha-deepal-alternative/issues",
+  "requirements": ["httpx>=0.25.0", "pydantic>=2.0.0", "cryptography>=41.0.0"],
+  "version": "0.1.0"
+}
