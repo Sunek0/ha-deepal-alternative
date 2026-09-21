@@ -58,7 +58,7 @@ class DeepalCabinClimateEntity(
         self.vehicle = vehicle
         self._car_id = vehicle.car_id
         self._attr_unique_id = f"deepal_{vehicle.car_id}_cabin_climate"
-        self._attr_name = f"{vehicle.series_name} Cabin Climate"
+        self._attr_translation_key = "cabin_climate"
 
     @property
     def device_info(self) -> DeviceInfo:

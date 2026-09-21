@@ -20,6 +20,7 @@ from .deepal import (
     DeepalError,
     DeepalIntlClient,
     Vehicle,
+    VehicleCapabilities,
     VehicleCondition,
 )
 from .const import (
@@ -87,6 +88,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.vehicles: list[Vehicle] = []
         self._command_in_progress = False
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
+        self._capabilities: dict[str, VehicleCapabilities | None] = {}
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -95,6 +97,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
+            await self._async_maybe_fetch_capabilities(vehicle)
             condition = await self._async_fetch_condition(vehicle.car_id)
             condition = await self._overlay_app_comfort(vehicle, condition)
             data[vehicle.car_id] = self._apply_optimistic_hold(
@@ -102,6 +105,32 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
 
         return data
+
+    async def _async_maybe_fetch_capabilities(self, vehicle: Vehicle) -> None:
+        """Fetch the vehicle function configuration once per entry setup.
+
+        The capability list changes with the vehicle, not with telemetry, so it
+        is fetched once and cached until the entry reloads; failures are cached
+        as well because the endpoint is optional and must never affect polling.
+        """
+        if vehicle.car_id in self._capabilities:
+            return
+        if not isinstance(self.client, DeepalIntlClient):
+            return
+        try:
+            capabilities = await self.client.get_vehicle_capabilities(
+                vehicle.car_id, vin=vehicle.vin
+            )
+        except DeepalError as err:
+            _LOGGER.debug(
+                "Deepal capabilities fetch failed for %s: %s", vehicle.car_id, err
+            )
+            capabilities = None
+        self._capabilities[vehicle.car_id] = capabilities
+
+    def vehicle_capabilities(self, car_id: str) -> VehicleCapabilities | None:
+        """Return the cached capabilities of a vehicle, if they were fetched."""
+        return self._capabilities.get(car_id)
 
     async def _overlay_app_comfort(
         self, vehicle: Vehicle, condition: VehicleCondition

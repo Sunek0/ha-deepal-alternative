@@ -58,7 +58,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
         """Initialize the window cover."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_windows_cover"
-        self._attr_name = f"{vehicle.series_name} Windows"
+        self._attr_translation_key = "windows"
 
     @property
     def is_closed(self) -> bool | None:
@@ -103,7 +103,7 @@ class DeepalTrunkCover(DeepalEntity, CoverEntity):
         """Initialize the trunk cover."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_boot_cover"
-        self._attr_name = f"{vehicle.series_name} Trunk"
+        self._attr_translation_key = "trunk"
 
     @property
     def is_closed(self) -> bool | None:

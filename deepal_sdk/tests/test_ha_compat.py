@@ -27,6 +27,8 @@ from custom_components.deepal import (
     climate,
     config_flow,
     cover,
+    diagnostics,
+    image,
     lock,
     number,
     sensor,
@@ -37,8 +39,11 @@ from custom_components.deepal.deepal import (
     DeepalAPIError,
     DeepalAuthError,
     DeepalRateLimitError,
+    VehicleCapabilities,
 )
-from deepal.models import VehicleCondition
+from deepal.models import Vehicle, VehicleCondition
+
+from homeassistant.components.diagnostics.const import REDACTED
 
 INTEGRATION_DIR = REPO_ROOT / "custom_components" / "deepal"
 HACS_METADATA = REPO_ROOT / "hacs.json"
@@ -65,7 +70,13 @@ class FakeCoordinator:
 
 
 def _fake_vehicle() -> SimpleNamespace:
-    return SimpleNamespace(car_id="car-1", series_name="Deepal S05 Max")
+    return SimpleNamespace(
+        car_id="car-1",
+        series_name="Deepal S05 Max",
+        car_name=None,
+        model_name=None,
+        thumbnail_url=None,
+    )
 
 
 def _entities_by_platform() -> dict[str, list]:
@@ -140,7 +151,6 @@ def _entities_by_platform() -> dict[str, list]:
                 coordinator,
                 vehicle,
                 "charge_schedule_start",
-                "Charge Schedule Start",
                 "start",
             )
         ],
@@ -229,12 +239,13 @@ def test_odometer_and_mileage_sensor_names() -> None:
     yesterday = sensor.DeepalMileageYesterdaySensor(coordinator, vehicle)
     trip = sensor.DeepalTripMileageSensor(coordinator, vehicle)
 
-    assert odometer._attr_name == "Deepal S05 Max Odometer"
+    assert odometer._attr_has_entity_name is True
+    assert odometer._attr_translation_key == "total_odometer"
     assert odometer._attr_unique_id == "deepal_car-1_total_odometer"
-    assert yesterday._attr_name == "Deepal S05 Max Mileage Yesterday"
+    assert yesterday._attr_translation_key == "mileage_yesterday"
     assert yesterday._attr_unique_id == "deepal_car-1_mileage_yesterday"
     assert yesterday._attr_state_class is sensor.SensorStateClass.TOTAL
-    assert trip._attr_name == "Deepal S05 Max Trip Mileage"
+    assert trip._attr_translation_key == "trip_mileage"
     assert trip._attr_unique_id == "deepal_car-1_trip_mileage"
     assert trip._attr_state_class is sensor.SensorStateClass.TOTAL
 
@@ -271,17 +282,17 @@ def test_seat_and_steering_entity_contract() -> None:
     assert driver_heat._attr_unique_id == (
         "deepal_car-1_seat_front_left_heating_control"
     )
-    assert driver_heat._attr_name == (
-        "Deepal S05 Max Front Left Seat Heating Level"
-    )
+    assert driver_heat._attr_translation_key == "seat_heating_level"
+    assert driver_heat._attr_translation_placeholders == {"position": "Front Left"}
     assert driver_heat._attr_native_min_value == 0
     assert driver_heat._attr_native_max_value == 3
     assert driver_heat._attr_native_step == 1
     assert passenger_wind._attr_unique_id == (
         "deepal_car-1_seat_front_right_ventilation_control"
     )
+    assert passenger_wind._attr_translation_key == "seat_ventilation_level"
     assert steering._attr_unique_id == "deepal_car-1_steering_wheel_heating"
-    assert steering._attr_name == "Deepal S05 Max Steering Wheel Heating"
+    assert steering._attr_translation_key == "steering_wheel_heating"
 
 
 class _FakeCommandClient:
@@ -408,6 +419,25 @@ def test_translation_files_share_the_same_key_tree() -> None:
         assert tree == trees[0]
 
 
+def test_every_entity_translation_key_ships_in_every_language() -> None:
+    languages = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in TRANSLATION_FILES
+    }
+    entities = _entities_by_platform()
+    entities["image"] = [object.__new__(image.DeepalVehicleImage)]
+
+    for platform, platform_entities in entities.items():
+        for entity in platform_entities:
+            key = entity.translation_key
+            assert key, f"{platform}: entity without a translation key"
+            for name, data in languages.items():
+                translated = data.get("entity", {}).get(platform, {}).get(key)
+                assert translated and translated.get(
+                    "name"
+                ), f"{name}:{platform}.{key}"
+
+
 def test_config_and_options_help_is_complete() -> None:
     for path in TRANSLATION_FILES:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -454,3 +484,218 @@ def test_integration_has_no_removed_api_references() -> None:
     )
     assert "hass.data[DOMAIN]" not in source
     assert "CONCENTRATION_" not in source
+
+
+class _DiagnosticsCoordinator:
+    """Coordinator double for the diagnostics report."""
+
+    def __init__(self, vehicles, conditions, capabilities) -> None:
+        self.vehicles = vehicles
+        self.data = conditions
+        self._capabilities = capabilities
+
+    def vehicle_capabilities(self, car_id: str):
+        return self._capabilities.get(car_id)
+
+
+def _diagnostics_entry(coordinator) -> SimpleNamespace:
+    return SimpleNamespace(
+        data={
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "cac_token": "test-cac-token",
+            "user_id": "test-user-1",
+            "private_key": "test-private-key",
+            "phone": "600000000",
+            "email": "test.user@example.com",
+            "device_id": "test-device-id",
+            "control_pin": "1234",
+            "vehicle_id": "car-1",
+        },
+        options={"scan_interval": 120, "control_pin": "1234"},
+        runtime_data=SimpleNamespace(coordinator=coordinator),
+    )
+
+
+def _mqtt_condition() -> VehicleCondition:
+    condition = VehicleCondition(car_id="car-1", vin="VIN-REAL-1")
+    condition.battery.soc_percentage = 71
+    condition.raw_data = {"vehicleStatus": {"soc": 71, "latitude": 40.4}}
+    condition.mqtt_raw_data = {
+        "soc": 71,
+        "chargeCoverStatus": 3,
+        "latitude": 40.4,
+    }
+    return condition
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None:
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN-REAL-1",
+        series_name="Deepal S05",
+        model_name="S05 Max",
+        model_code="CD701GR1501",
+        protocol_type="MQTT",
+    )
+    capabilities = VehicleCapabilities.from_codes(["#driverSeatVent"])
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": capabilities}
+    )
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    assert report["capabilities"]["car-1"]["trim_hint"] == "max"
+    assert report["mapped_telemetry"]["car-1"]["battery"]["soc_percentage"] == 71
+    assert "raw_data" not in report["mapped_telemetry"]["car-1"]
+    assert "mqtt_raw_data" not in report["mapped_telemetry"]["car-1"]
+    assert report["raw_rest"]["car-1"]["vehicleStatus"]["soc"] == 71
+    assert report["raw_mqtt"]["car-1"]["chargeCoverStatus"] == 3
+    assert report["unmapped_mqtt_keys"]["car-1"] == [
+        "chargeCoverStatus",
+        "latitude",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
+    vehicle = Vehicle(
+        car_id="car-1", vin="VIN-REAL-1", thumbnail_url="https://example.invalid/car.png"
+    )
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
+    )
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+    serialized = json.dumps(report)
+
+    assert "VIN-REAL-1" not in serialized
+    assert "test-access-token" not in serialized
+    assert "test-private-key" not in serialized
+    assert "1234" not in json.dumps(report["config_entry_data"])
+    assert "600000000" not in serialized
+    assert report["vehicles"][0]["vin"] == REDACTED
+    assert report["config_entry_data"]["access_token"] == REDACTED
+    assert report["raw_mqtt"]["car-1"]["latitude"] == REDACTED
+    assert report["capabilities"]["car-1"] is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_survives_an_empty_entry() -> None:
+    coordinator = _DiagnosticsCoordinator([], {}, {})
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    assert report["vehicles"] == []
+    assert report["mapped_telemetry"] == {}
+    assert report["raw_mqtt"] == {}
+    assert report["unmapped_mqtt_keys"] == {}
+
+
+def test_integration_platforms_include_image() -> None:
+    from homeassistant.const import Platform
+
+    from custom_components.deepal import _platforms
+
+    entry = SimpleNamespace(
+        data={"platform": "intl", "private_key": "test-private-key"}
+    )
+    assert Platform.IMAGE in _platforms(entry)
+
+
+@pytest.mark.parametrize(
+    ("series_name", "car_name", "model_name", "expected"),
+    [
+        ("Deepal S05", None, None, "vehicle_s05.svg"),
+        ("Deepal S05 Max", None, None, "vehicle_s05.svg"),
+        ("Deepal S05 Pro", None, None, "vehicle_s05.svg"),
+        ("deepal s05 max", None, None, "vehicle_s05.svg"),
+        ("S05MAX", None, None, "vehicle_s05.svg"),
+        (None, "Mi S05 Pro", None, "vehicle_s05.svg"),
+        ("Deepal S05", None, "S05 Max", "vehicle_s05.svg"),
+        ("Deepal S07", None, None, "vehicle_s07.svg"),
+        ("Deepal SL03", None, None, "vehicle_sl03.svg"),
+        ("Deepal L07", None, None, "vehicle_l07.svg"),
+        ("Deepal X1", None, None, "vehicle_generic.svg"),
+        (None, None, None, "vehicle_generic.svg"),
+    ],
+)
+def test_vehicle_image_asset_selection(
+    series_name, car_name, model_name, expected
+) -> None:
+    path = image.vehicle_image_asset(
+        series_name, car_name, model_name=model_name
+    )
+    assert path.name == expected
+    assert path.exists()
+
+
+def test_bundled_vehicle_assets_are_valid_svg() -> None:
+    import xml.etree.ElementTree as element_tree
+
+    expected = {
+        "vehicle_generic.svg",
+        "vehicle_l07.svg",
+        "vehicle_s05.svg",
+        "vehicle_s07.svg",
+        "vehicle_sl03.svg",
+    }
+    assets = sorted((INTEGRATION_DIR / "assets").glob("*.svg"))
+    assert {path.name for path in assets} == expected
+    for path in assets:
+        root = element_tree.fromstring(path.read_text(encoding="utf-8"))
+        assert root.tag.endswith("svg")
+
+
+@pytest.mark.asyncio
+async def test_vehicle_image_entity_constructor_registers_unique_id(
+    monkeypatch,
+) -> None:
+    async def fake_executor(job, *args):
+        return job(*args)
+
+    monkeypatch.setattr(
+        "homeassistant.components.image.get_async_client",
+        lambda hass, verify_ssl=True: None,
+    )
+    hass = SimpleNamespace(data={}, async_add_executor_job=fake_executor)
+    coordinator = FakeCoordinator()
+    coordinator.hass = hass
+    coordinator.vehicles = [_fake_vehicle()]
+
+    entity = image.DeepalVehicleImage(coordinator, _fake_vehicle())
+
+    assert entity._attr_unique_id == "deepal_car-1_vehicle_image"
+    assert entity._attr_translation_key == "vehicle_image"
+    assert entity._attr_has_entity_name is True
+
+
+def test_vehicle_image_entity_prefers_api_url() -> None:
+    entity = object.__new__(image.DeepalVehicleImage)
+    entity.vehicle = SimpleNamespace(
+        car_id="car-1",
+        series_name="Deepal S05 Max",
+        car_name=None,
+        model_name=None,
+        thumbnail_url="https://example.invalid/car.png",
+    )
+    entity._car_id = "car-1"
+    entity.coordinator = SimpleNamespace()
+    entity._attr_content_type = "image/jpeg"
+
+    assert entity.image_url == "https://example.invalid/car.png"
+    assert entity.content_type == "image/jpeg"
+
+    entity.vehicle.thumbnail_url = None
+    entity._attr_image_last_updated = None
+
+    assert entity.image_url is None
+    assert entity.content_type == "image/svg+xml"
+    assert entity._asset_path().name == "vehicle_s05.svg"

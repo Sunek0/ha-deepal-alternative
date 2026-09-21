@@ -38,7 +38,7 @@ class DeepalDoorsLock(DeepalEntity, LockEntity):
         """Initialize the lock entity."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_doors_lock"
-        self._attr_name = f"{vehicle.series_name} Doors"
+        self._attr_translation_key = "doors"
 
     @property
     def is_locked(self) -> bool | None:

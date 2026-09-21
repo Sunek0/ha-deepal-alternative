@@ -80,6 +80,8 @@ INTL_REFRESH_TOKEN = "/intl-app-gw/intl-app-auth/api/auth/refresh-token"
 # International Vehicle Endpoints
 INTL_GET_MY_CARS = "/intl-app-gw/intl-app-user/api/car/vehicles"
 INTL_GET_VEHICLE_CONDITION = "/intl-app-gw/intl-app-car-condition/api/vehicle/condition"
+# Per-vehicle function configuration (CarApi.getCarConfig in the 1.12.0 DEX)
+INTL_GET_FUNCTION_CONFIG = "/intl-app-gw/intl-app-user/api/vehicle/function-config"
 
 # International Control Endpoints
 INTL_GET_SERIAL_NO = "/intl-app-gw/intl-app-car-control/api/serial-no/get"

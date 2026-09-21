@@ -1,11 +1,14 @@
 """Unit tests for the MQTT transport and S05 helpers."""
 
 import asyncio
+import inspect
 import json
+import re
 
 import pytest
 
 from deepal.mqtt import (
+    MAPPED_S05_KEYS,
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_connect_packet,
@@ -24,6 +27,7 @@ from deepal.mqtt import (
     resolve_mqtt_topics,
     secret_from_login_payload,
     topic_device_id,
+    unmapped_s05_keys,
 )
 
 
@@ -498,3 +502,22 @@ def test_normalize_s05_params_ignores_unknown_fields():
     condition = normalize_s05_params({"chargeCoverStatus": 3})
     assert "chargeCoverStatus" not in condition["charge"]
     assert condition["door"]["hood"] is None
+
+
+def test_mapped_s05_keys_cover_every_key_the_normalization_reads():
+    source = inspect.getsource(normalize_s05_params)
+    keys_read = set(re.findall(r'params\.get\("([A-Za-z0-9_]+)"', source))
+    for call in re.findall(r"_first\(\s*params\s*,\s*([^)]*)\)", source):
+        keys_read.update(re.findall(r'"([A-Za-z0-9_]+)"', call))
+    assert keys_read
+    assert keys_read <= MAPPED_S05_KEYS
+
+
+def test_unmapped_s05_keys_returns_only_unknown_fields():
+    assert unmapped_s05_keys(
+        {"soc": 71, "chargeCoverStatus": 3, "skyWindowDegree": 0}
+    ) == {"chargeCoverStatus", "skyWindowDegree"}
+
+
+def test_unmapped_s05_keys_empty_for_mapped_payload():
+    assert unmapped_s05_keys({key: 0 for key in MAPPED_S05_KEYS}) == set()

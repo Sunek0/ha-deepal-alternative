@@ -22,6 +22,8 @@ from deepal import (
     DeepalConnectionError,
     DeepalIntlClient,
     DeepalRateLimitError,
+    SeatCapabilities,
+    VehicleCapabilities,
     FLASH_HONK_BEE,
     FLASH_HONK_FLASH,
     FLASH_HONK_FLASH_BEE,
@@ -110,6 +112,7 @@ class _FakeMqttBroker:
         secret_key: str = "secret-key-12345",
         reply_condition_after_pings: int = 0,
         connack_reason_code: int = 0,
+        service_code: str = "car_condition",
     ) -> None:
         self.reader = asyncio.StreamReader()
         self.writes: list[bytes] = []
@@ -126,6 +129,7 @@ class _FakeMqttBroker:
         self.secret_key = secret_key
         self.reply_condition_after_pings = reply_condition_after_pings
         self.connack_reason_code = connack_reason_code
+        self.service_code = service_code
         self._condition_sent = False
 
     def write(self, data: bytes) -> None:
@@ -177,7 +181,7 @@ class _FakeMqttBroker:
         self._condition_sent = True
         req_id = payload["r"]
         encrypted = aes_cbc_encrypt(
-            [{"service_code": "car_condition", "params": self.params}],
+            [{"service_code": self.service_code, "params": self.params}],
             self.secret_key,
             req_id,
         )
@@ -858,11 +862,20 @@ async def test_get_vehicles_maps_international_fields():
             "carId": "test-car-1",
             "vin": "LS5AXXXXX123456",
             "seriesName": "Deepal S07",
+            "seriesCode": "C673",
+            "modelName": "S07 Max",
+            "modelCode": "C673-G2",
             "nickName": "Mi coche",
             "licensePlate": "1234ABC",
             "imgUrl": "https://img.example/test.png",
             "protocolType": "MQTT",
-        }
+        },
+        {
+            "carId": "test-car-2",
+            "vin": "LS5AXXXXX654321",
+            "seriesName": "Deepal S05",
+            "vehicleImageUrl": "https://img.example/s05.png",
+        },
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -874,15 +887,19 @@ async def test_get_vehicles_maps_international_fields():
     vehicles = await client.get_vehicles()
     await client.close()
 
-    assert len(vehicles) == 1
+    assert len(vehicles) == 2
     vehicle = vehicles[0]
     assert vehicle.car_id == "test-car-1"
     assert vehicle.vin == "LS5AXXXXX123456"
     assert vehicle.series_name == "Deepal S07"
+    assert vehicle.series_code == "C673"
+    assert vehicle.model_name == "S07 Max"
+    assert vehicle.model_code == "C673-G2"
     assert vehicle.car_name == "Mi coche"
     assert vehicle.license_plate == "1234ABC"
     assert vehicle.thumbnail_url == "https://img.example/test.png"
     assert vehicle.protocol_type == "MQTT"
+    assert vehicles[1].thumbnail_url == "https://img.example/s05.png"
 
 
 @pytest.mark.asyncio
@@ -1641,7 +1658,138 @@ async def test_ca_gateway_error_exposes_code():
 
 
 @pytest.mark.asyncio
+async def test_get_vehicle_capabilities_maps_max_codes():
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "confList": [
+                        "#driverSeatHeat",
+                        "#passengerSeatHeat",
+                        "#driverSeatVent",
+                        "#passengerSeatVent",
+                        "#ota",
+                    ]
+                },
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    capabilities = await client.get_vehicle_capabilities("car-1")
+    await client.close()
+
+    assert captured == [{"carId": "car-1"}]
+    assert capabilities is not None
+    assert capabilities.trim_hint == "max"
+    assert capabilities.seats["front_left"].ventilation is True
+    assert capabilities.seats["front_right"].ventilation is True
+    assert capabilities.seats["rear_left"].ventilation is False
+    assert capabilities.seats["front_left"].heating is True
+    assert capabilities.raw_codes[-1] == "#ota"
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_capabilities_tries_next_body_candidate():
+    captured: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        if "carId" in body:
+            return httpx.Response(
+                200,
+                json={"success": False, "code": "SYS_1_1_01_002", "msg": "bad carId"},
+            )
+        return httpx.Response(
+            200, json={"success": True, "data": {"confList": ["#ota"]}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    capabilities = await client.get_vehicle_capabilities("car-1")
+    await client.close()
+
+    assert captured == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
+    assert capabilities is not None
+    assert capabilities.trim_hint == "pro"
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_capabilities_auth_error_returns_none():
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200, json={"success": False, "code": "APP_1_1_02_004", "msg": "no auth"}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    capabilities = await client.get_vehicle_capabilities("car-1")
+    await client.close()
+
+    assert capabilities is None
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_capabilities_without_conf_list_returns_none():
+    client = _client(
+        lambda request: httpx.Response(200, json={"success": True, "data": {}})
+    )
+    client.access_token = "test_token_123"
+    assert await client.get_vehicle_capabilities("car-1") is None
+    await client.close()
+
+
+def test_vehicle_capabilities_from_codes_keeps_unknown_codes():
+    capabilities = VehicleCapabilities.from_codes(["#weirdCode", "#driverSeatVent"])
+
+    assert capabilities.raw_codes == ["#weirdCode", "#driverSeatVent"]
+    assert capabilities.trim_hint == "max"
+    assert capabilities.seats["rear_left"] == SeatCapabilities()
+
+
+def test_vehicle_capabilities_without_front_ventilation_hints_pro():
+    capabilities = VehicleCapabilities.from_codes(["#ota", "#driverSeatHeat"])
+
+    assert capabilities.trim_hint == "pro"
+    assert capabilities.seats["front_left"].heating is True
+    assert capabilities.seats["front_left"].ventilation is False
+
+
+@pytest.mark.asyncio
 async def test_s05_mqtt_condition_uses_normalized_params():
+    raw_params = {
+        "soc": 71,
+        "remainedPowerMile": 320,
+        "totalOdometer": 12000,
+        "driverDoor": 0,
+        "passengerDoor": 0,
+        "leftRearDoor": 0,
+        "rightRearDoor": 0,
+        "trunk": 0,
+        "driverDoorLock": 0,
+        "passengerDoorLock": 0,
+        "diverWindow": 0,
+        "passengerWindow": 0,
+        "leftRearWindow": 0,
+        "rightRearWindow": 0,
+        "lfTyrePressure": 240,
+        "rfTyrePressure": 241,
+        "lrTyrePressure": 242,
+        "rrTyrePressure": 243,
+        "chargeCoverStatus": 3,
+    }
+
     async def fake_config(vehicle_id: str) -> dict:
         return {}
 
@@ -1649,26 +1797,7 @@ async def test_s05_mqtt_condition_uses_normalized_params():
         return "tsp-token"
 
     async def fake_params(config: dict, token: str) -> dict:
-        return {
-            "soc": 71,
-            "remainedPowerMile": 320,
-            "totalOdometer": 12000,
-            "driverDoor": 0,
-            "passengerDoor": 0,
-            "leftRearDoor": 0,
-            "rightRearDoor": 0,
-            "trunk": 0,
-            "driverDoorLock": 0,
-            "passengerDoorLock": 0,
-            "diverWindow": 0,
-            "passengerWindow": 0,
-            "leftRearWindow": 0,
-            "rightRearWindow": 0,
-            "lfTyrePressure": 240,
-            "rfTyrePressure": 241,
-            "lrTyrePressure": 242,
-            "rrTyrePressure": 243,
-        }
+        return dict(raw_params)
 
     client = _client(lambda request: httpx.Response(200, json={}))
     client.access_token = "test_token_123"
@@ -1685,6 +1814,62 @@ async def test_s05_mqtt_condition_uses_normalized_params():
     assert condition.total_odometer_km == 12000
     assert condition.doors.locked is True
     assert condition.tires.front_left.pressure_bar == 2.4
+    assert condition.mqtt_raw_data == raw_params
+
+
+@pytest.mark.asyncio
+async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
+    params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3, "keyLowPower": 0}
+    broker = _FakeMqttBroker(params)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with caplog.at_level(logging.DEBUG, logger="deepal_sdk"):
+        result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert result["soc"] == 71
+    assert "S05 MQTT unmapped parameters" in caplog.text
+    assert "chargeCoverStatus" in caplog.text
+    assert "keyLowPower" in caplog.text
+    assert '"soc"' not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_read_s05_params_skips_discovery_log_when_debug_disabled(
+    monkeypatch, caplog
+):
+    params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3}
+    broker = _FakeMqttBroker(params)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with caplog.at_level(logging.WARNING, logger="deepal_sdk"):
+        result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert result["soc"] == 71
+    assert "chargeCoverStatus" not in caplog.text
+
+
+def test_s05_payload_logs_unknown_service_code(caplog):
+    req_id = "req-1"
+    encrypted = aes_cbc_encrypt(
+        [{"service_code": "Unknown_Service", "params": {"foo": 1}}],
+        "secret-key-12345",
+        req_id,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="deepal_sdk"):
+        params = DeepalIntlClient._s05_params_from_payload(
+            {"r": req_id, "rs": encrypted}, "secret-key-12345"
+        )
+
+    assert params == {}
+    assert "Unknown_Service" in caplog.text
+    assert "foo" in caplog.text
 
 
 def test_mqtt_constructor_defaults_and_overrides():

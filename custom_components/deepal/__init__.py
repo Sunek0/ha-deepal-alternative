@@ -83,7 +83,7 @@ def _build_client(entry: DeepalConfigEntry) -> DeepalClient | DeepalIntlClient:
 
 def _platforms(entry: DeepalConfigEntry) -> list[Platform]:
     """Return the entity platforms for an entry."""
-    platforms = [Platform.SENSOR, Platform.BINARY_SENSOR]
+    platforms = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.IMAGE]
     if (
         entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
         and entry.data.get(CONF_PRIVATE_KEY)
