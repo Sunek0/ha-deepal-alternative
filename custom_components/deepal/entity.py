@@ -3,7 +3,6 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
@@ -18,6 +17,7 @@ from .const import (
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
+from .runtime_data import DeepalConfigEntry
 
 
 def mqtt_controls_enabled(coordinator: DeepalDataUpdateCoordinator) -> bool:
@@ -79,7 +79,7 @@ class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
 
 def async_setup_control_entities(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
     build_entities: Callable[[Any, Any], list],
 ) -> None:
@@ -88,8 +88,7 @@ def async_setup_control_entities(
     MQTT-backed vehicles stay read-only unless the experimental MQTT controls
     option is enabled.
     """
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
     client = coordinator.client
     if not isinstance(client, DeepalIntlClient) or not client.private_key_pem:
         return

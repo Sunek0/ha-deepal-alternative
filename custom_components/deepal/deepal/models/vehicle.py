@@ -122,7 +122,13 @@ class VehicleCondition(BaseModel):
     """Full Vehicle Status / Telemetry snapshot."""
     car_id: str
     vin: str
-    total_odometer_km: Optional[float] = Field(default=None, description="Total mileage (CdcTotMilg)")
+    total_odometer_km: Optional[float] = Field(default=None, description="Total odometer in km")
+    mileage_yesterday_km: Optional[float] = Field(
+        default=None, description="Mileage driven yesterday in km (MQTT)"
+    )
+    trip_mileage_km: Optional[float] = Field(
+        default=None, description="Mileage since the current ignition cycle in km (MQTT)"
+    )
     speed_kmh: Optional[float] = Field(default=None, description="Vehicle speed in km/h")
     gear: Optional[str] = Field(default=None, description="Raw gear signal value")
     epb_status: Optional[int] = Field(default=None, description="Raw electronic parking brake status")

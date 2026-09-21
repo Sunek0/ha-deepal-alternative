@@ -1,6 +1,7 @@
 """Deepal SDK Data Models."""
 
 from .auth import AuthToken, UserProfile
+from .command import CommandResult, CommandResultStatus
 from .vehicle import (
     Vehicle,
     VehicleCondition,
@@ -18,6 +19,8 @@ from .vehicle import (
 __all__ = [
     "AuthToken",
     "UserProfile",
+    "CommandResult",
+    "CommandResultStatus",
     "Vehicle",
     "VehicleCondition",
     "BatteryCondition",

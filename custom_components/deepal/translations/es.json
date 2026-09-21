@@ -2,63 +2,91 @@
   "config": {
     "step": {
       "user": {
-        "title": "Changan Deepal",
-        "description": "Elige la plataforma que usas en la app My Changan. Las cuentas internacionales inician sesión con código por email o SMS; las cuentas SDA usan un access token pegado.",
+        "title": "Deepal Alternative",
+        "description": "Configura tu cuenta de Changan Deepal. Elige Internacional para la app My Changan (acceso con código por email o SMS); elige SDA (China) solo para una cuenta de China continental con un access token pegado.",
         "data": {
           "platform": "Plataforma"
+        },
+        "data_description": {
+          "platform": "Internacional (Europa) admite acceso con código por email o SMS, telemetría y, con PIN de control, comandos remotos firmados. SDA (China) usa un access token de larga duración de la API SDA."
         }
       },
       "sda": {
         "title": "Access token de SDA (China)",
-        "description": "Pega el access token que imprime el ejemplo de login de SDA.",
+        "description": "Pega un access token emitido por la plataforma SDA. El ejemplo de login del SDK (deepal_sdk/examples/login_example.py) imprime uno.",
         "data": {
           "access_token": "Access token",
           "country": "Código de país",
           "phone": "Teléfono (opcional)"
+        },
+        "data_description": {
+          "access_token": "Token de larga duración usado en cada petición. Se guarda en la entrada de configuración; elimina y vuelve a añadir la integración para reemplazarlo.",
+          "country": "Código ISO del país de la cuenta, por ejemplo CN. Opcional; por defecto ES.",
+          "phone": "Teléfono asociado a la cuenta. Opcional, solo informativo."
         }
       },
       "intl_method": {
         "title": "Login internacional",
-        "description": "Elige cómo inicia sesión tu cuenta de My Changan.",
+        "description": "Elige cómo inicia sesión tu cuenta de My Changan. Ambos métodos envían un código de verificación y guardan los tokens de sesión en Home Assistant.",
         "data": {
           "login_method": "Método de login"
+        },
+        "data_description": {
+          "login_method": "El código por email accede con una dirección de correo; el código por SMS accede con un móvil nacional y su prefijo."
         }
       },
       "intl_email": {
         "title": "Login por email",
-        "description": "Selecciona tu país de venta y el email de la cuenta. Se enviará un código de verificación.",
+        "description": "Selecciona el país de venta registrado en My Changan y el email de la cuenta. Home Assistant solicitará un código de verificación.",
         "data": {
           "country": "País de venta",
           "email": "Email"
+        },
+        "data_description": {
+          "country": "País de venta de la cuenta, por ejemplo España. Se envía como selectcountry y salesCountry; no cambia el gateway de la API.",
+          "email": "Email usado en la app My Changan. Se cifra antes de enviarlo."
         }
       },
       "intl_email_code": {
         "title": "Código de verificación por email",
-        "description": "Introduce el código recibido por email.",
+        "description": "Introduce el código de verificación enviado al email.",
         "data": {
           "auth_code": "Código de verificación"
+        },
+        "data_description": {
+          "auth_code": "Código numérico del email. Caduca pronto; solicita otro si te lo rechaza."
         }
       },
       "intl_phone": {
         "title": "Login por SMS",
-        "description": "Selecciona tu país de venta y el número de móvil nacional (sin prefijo de país).",
+        "description": "Selecciona el país de venta y el número de móvil nacional (sin prefijo de país). Home Assistant solicitará un código por SMS.",
         "data": {
           "country": "País de venta",
           "phone": "Número de móvil"
+        },
+        "data_description": {
+          "country": "País de venta de la cuenta. Su prefijo se envía junto con el número de móvil.",
+          "phone": "Número de móvil nacional sin el prefijo, por ejemplo 600000000 para España (+34)."
         }
       },
       "intl_sms_code": {
         "title": "Código de verificación por SMS",
-        "description": "Introduce el código recibido por SMS.",
+        "description": "Introduce el código de verificación enviado por SMS.",
         "data": {
           "auth_code": "Código de verificación"
+        },
+        "data_description": {
+          "auth_code": "Código numérico del SMS. Caduca pronto; solicita otro si te lo rechaza."
         }
       },
       "sda_reauth": {
         "title": "Reautenticación de SDA",
-        "description": "Pega un access token nuevo para esta cuenta.",
+        "description": "Pega un access token nuevo para esta cuenta. Home Assistant lo verifica antes de reemplazar el guardado.",
         "data": {
           "access_token": "Access token"
+        },
+        "data_description": {
+          "access_token": "Nuevo access token SDA de larga duración. El anterior solo se reemplaza tras verificarlo."
         }
       }
     },
@@ -79,16 +107,25 @@
   "options": {
     "step": {
       "init": {
-        "title": "Opciones de Changan Deepal",
+        "title": "Opciones de Deepal Alternative",
         "data": {
           "scan_interval": "Intervalo de sondeo (segundos)",
           "control_pin": "PIN de control remoto",
           "enable_api_logging": "Registrar tráfico API redactado",
           "enable_mqtt_controls": "Habilitar controles remotos experimentales para vehículos MQTT (S05)",
           "os_version": "Versión de Android declarada (diagnóstico)",
-          "tsp_token_source": "Fuente del token TSP (diagnóstico)",
           "environment": "Entorno regional (diagnóstico)",
-          "send_timestamps": "Enviar cabeceras de timestamp TSP/VCS (diagnóstico)"
+          "send_timestamps": "Enviar la cabecera X-Tsp-Timestamp (diagnóstico)"
+        },
+        "description": "Ajusta el sondeo y los diagnósticos. El PIN de control habilita los comandos remotos firmados; las opciones de diagnóstico cambian cómo ve la API al cliente, tócalas solo al solucionar problemas.",
+        "data_description": {
+          "scan_interval": "Cada cuánto consulta Home Assistant el vehículo cuando no hay telemetría MQTT, en segundos (30-3600).",
+          "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero; se canjea por un token que caduca periódicamente y se vuelve a pedir cuando ocurre.",
+          "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie redactados. Actívalo solo al solucionar problemas.",
+          "enable_mqtt_controls": "Permite comandos remotos en vehículos MQTT (S05). Experimental: el envío de comandos por MQTT aún no está verificado.",
+          "os_version": "Versión de Android declarada en la cabecera x-os-version. El valor por defecto (9) coincide con la captura verificada de la app; cámbialo solo para diagnosticar peticiones rechazadas por el gateway.",
+          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto; las entradas que guardaron los entornos retirados de migración o preproducción de la UE caen a Europa.",
+          "send_timestamps": "Envía la cabecera diagnóstica X-Tsp-Timestamp (epoch en milisegundos) en cada petición. Desactivada por defecto."
         }
       }
     }

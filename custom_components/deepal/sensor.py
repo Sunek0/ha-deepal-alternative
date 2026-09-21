@@ -8,14 +8,14 @@ from typing import Any
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    PERCENTAGE,
     UnitOfDensity,
     UnitOfElectricCurrent,
     UnitOfLength,
+    UnitOfRatio,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfTime,
@@ -28,16 +28,16 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
+from .runtime_data import DeepalConfigEntry
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Deepal sensors based on a config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: DeepalDataUpdateCoordinator = data["coordinator"]
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
 
     entities: list[SensorEntity] = []
 
@@ -47,6 +47,12 @@ async def async_setup_entry(
             DeepalRemainingRangeSensor(coordinator, vehicle),
             DeepalOdometerSensor(coordinator, vehicle),
         ])
+
+        if coordinator.vehicle_uses_mqtt(vehicle.car_id):
+            entities.extend([
+                DeepalMileageYesterdaySensor(coordinator, vehicle),
+                DeepalTripMileageSensor(coordinator, vehicle),
+            ])
 
         if isinstance(coordinator.client, DeepalIntlClient):
             for key, label in (
@@ -109,7 +115,7 @@ class DeepalBatterySocSensor(DeepalBaseSensor):
 
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
     _attr_icon = "mdi:car-battery"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
@@ -155,13 +161,53 @@ class DeepalOdometerSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_total_odometer"
-        self._attr_name = f"{vehicle.series_name} Total Mileage"
+        self._attr_name = f"{vehicle.series_name} Odometer"
 
     @property
     def native_value(self) -> float | None:
-        """Return odometer value (CdcTotMilg)."""
+        """Return the total odometer in km."""
         cond = self.coordinator.data.get(self._car_id)
         return cond.total_odometer_km if cond else None
+
+
+class DeepalMileageYesterdaySensor(DeepalBaseSensor):
+    """Mileage driven yesterday (km) sensor, MQTT-backed vehicles only."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_mileage_yesterday"
+        self._attr_name = f"{vehicle.series_name} Mileage Yesterday"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return yesterday's mileage in km."""
+        cond = self.coordinator.data.get(self._car_id)
+        return cond.mileage_yesterday_km if cond else None
+
+
+class DeepalTripMileageSensor(DeepalBaseSensor):
+    """Mileage since the current ignition cycle (km), MQTT-backed vehicles only."""
+
+    _attr_device_class = SensorDeviceClass.DISTANCE
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
+    _attr_icon = "mdi:map-marker-path"
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_trip_mileage"
+        self._attr_name = f"{vehicle.series_name} Trip Mileage"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the trip mileage in km."""
+        cond = self.coordinator.data.get(self._car_id)
+        return cond.trip_mileage_km if cond else None
 
 
 class DeepalTirePressureSensor(DeepalBaseSensor):
@@ -170,7 +216,7 @@ class DeepalTirePressureSensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.PRESSURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "bar"
-    _attr_icon = "mdi:car-tire-alert"
+    _attr_icon = "mdi:tire"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str, label: str) -> None:
         super().__init__(coordinator, vehicle)
@@ -235,204 +281,197 @@ class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
         return cond.climate.steering_wheel_heater_level if cond else None
 
 
-@dataclass(frozen=True)
-class DeepalSensorDescription:
+@dataclass(frozen=True, kw_only=True)
+class DeepalSensorDescription(SensorEntityDescription):
     """Description of an extended international sensor."""
 
-    key: str
-    name: str
     value_fn: Callable[[Any, Any], Any]
-    device_class: SensorDeviceClass | None = None
-    state_class: SensorStateClass | None = None
-    unit: str | None = None
-    icon: str | None = None
-    entity_category: EntityCategory | None = None
 
 
 SENSORS: tuple[DeepalSensorDescription, ...] = (
     DeepalSensorDescription(
-        "speed",
-        "Speed",
-        lambda cond, vehicle: cond.speed_kmh,
-        SensorDeviceClass.SPEED,
-        SensorStateClass.MEASUREMENT,
-        UnitOfSpeed.KILOMETERS_PER_HOUR,
-        "mdi:speedometer",
+        key="speed",
+        name="Speed",
+        value_fn=lambda cond, vehicle: cond.speed_kmh,
+        device_class=SensorDeviceClass.SPEED,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfSpeed.KILOMETERS_PER_HOUR,
+        icon="mdi:speedometer",
     ),
     DeepalSensorDescription(
-        "inside_temperature",
-        "Inside Temperature",
-        lambda cond, vehicle: cond.climate.inside_temperature_c,
-        SensorDeviceClass.TEMPERATURE,
-        SensorStateClass.MEASUREMENT,
-        UnitOfTemperature.CELSIUS,
-        "mdi:thermometer",
+        key="inside_temperature",
+        name="Inside Temperature",
+        value_fn=lambda cond, vehicle: cond.climate.inside_temperature_c,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        icon="mdi:thermometer",
     ),
     DeepalSensorDescription(
-        "outside_temperature",
-        "Outside Temperature",
-        lambda cond, vehicle: cond.climate.outside_temperature_c,
-        SensorDeviceClass.TEMPERATURE,
-        SensorStateClass.MEASUREMENT,
-        UnitOfTemperature.CELSIUS,
-        "mdi:thermometer-lines",
+        key="outside_temperature",
+        name="Outside Temperature",
+        value_fn=lambda cond, vehicle: cond.climate.outside_temperature_c,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        icon="mdi:thermometer-lines",
     ),
     DeepalSensorDescription(
-        "cabin_humidity",
-        "Cabin Humidity",
-        lambda cond, vehicle: cond.climate.humidity,
-        SensorDeviceClass.HUMIDITY,
-        SensorStateClass.MEASUREMENT,
-        PERCENTAGE,
-        "mdi:water-percent",
+        key="cabin_humidity",
+        name="Cabin Humidity",
+        value_fn=lambda cond, vehicle: cond.climate.humidity,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+        icon="mdi:water-percent",
     ),
     DeepalSensorDescription(
-        "inside_pm25",
-        "Inside PM2.5",
-        lambda cond, vehicle: cond.climate.inside_pm25,
-        None,
-        SensorStateClass.MEASUREMENT,
-        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
-        "mdi:blur",
+        key="inside_pm25",
+        name="Inside PM2.5",
+        value_fn=lambda cond, vehicle: cond.climate.inside_pm25,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+        icon="mdi:blur",
     ),
     DeepalSensorDescription(
-        "air_quality_level",
-        "Air Quality Level",
-        lambda cond, vehicle: cond.climate.air_quality_level,
-        None,
-        None,
-        None,
-        "mdi:air-filter",
-        EntityCategory.DIAGNOSTIC,
+        key="air_quality_level",
+        name="Air Quality Level",
+        value_fn=lambda cond, vehicle: cond.climate.air_quality_level,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:air-filter",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "charge_status",
-        "Charge Status",
-        lambda cond, vehicle: cond.battery.charging_status,
-        None,
-        None,
-        None,
-        "mdi:battery-charging",
-        EntityCategory.DIAGNOSTIC,
+        key="charge_status",
+        name="Charge Status",
+        value_fn=lambda cond, vehicle: cond.battery.charging_status,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:battery-charging",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "charge_current",
-        "Charge Current",
-        lambda cond, vehicle: cond.battery.charge_current_a,
-        SensorDeviceClass.CURRENT,
-        SensorStateClass.MEASUREMENT,
-        UnitOfElectricCurrent.AMPERE,
-        "mdi:current-ac",
+        key="charge_current",
+        name="Charge Current",
+        value_fn=lambda cond, vehicle: cond.battery.charge_current_a,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        icon="mdi:current-ac",
     ),
     DeepalSensorDescription(
-        "ac_charge_current",
-        "AC Charge Current",
-        lambda cond, vehicle: cond.battery.ac_charge_current_a,
-        SensorDeviceClass.CURRENT,
-        SensorStateClass.MEASUREMENT,
-        UnitOfElectricCurrent.AMPERE,
-        "mdi:current-ac",
+        key="ac_charge_current",
+        name="AC Charge Current",
+        value_fn=lambda cond, vehicle: cond.battery.ac_charge_current_a,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        icon="mdi:current-ac",
     ),
     DeepalSensorDescription(
-        "dc_charge_current",
-        "DC Charge Current",
-        lambda cond, vehicle: cond.battery.dc_charge_current_a,
-        SensorDeviceClass.CURRENT,
-        SensorStateClass.MEASUREMENT,
-        UnitOfElectricCurrent.AMPERE,
-        "mdi:current-dc",
+        key="dc_charge_current",
+        name="DC Charge Current",
+        value_fn=lambda cond, vehicle: cond.battery.dc_charge_current_a,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        icon="mdi:current-dc",
     ),
     DeepalSensorDescription(
-        "remaining_charge_time",
-        "Remaining Charge Time",
-        lambda cond, vehicle: cond.battery.remaining_charge_time_min,
-        SensorDeviceClass.DURATION,
-        SensorStateClass.MEASUREMENT,
-        UnitOfTime.MINUTES,
-        "mdi:timer-sand",
+        key="remaining_charge_time",
+        name="Remaining Charge Time",
+        value_fn=lambda cond, vehicle: cond.battery.remaining_charge_time_min,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        icon="mdi:timer-sand",
     ),
     DeepalSensorDescription(
-        "charge_limit",
-        "Charge Limit",
-        lambda cond, vehicle: cond.battery.charge_limit_percent,
-        None,
-        SensorStateClass.MEASUREMENT,
-        PERCENTAGE,
-        "mdi:battery-lock",
+        key="charge_limit",
+        name="Charge Limit",
+        value_fn=lambda cond, vehicle: cond.battery.charge_limit_percent,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+        icon="mdi:battery-lock",
     ),
     DeepalSensorDescription(
-        "charge_schedule_start",
-        "Charge Schedule Start",
-        lambda cond, vehicle: cond.battery.charge_schedule_start,
-        None,
-        None,
-        None,
-        "mdi:clock-start",
-        EntityCategory.DIAGNOSTIC,
+        key="charge_schedule_start",
+        name="Charge Schedule Start",
+        value_fn=lambda cond, vehicle: cond.battery.charge_schedule_start,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:clock-start",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "charge_schedule_end",
-        "Charge Schedule End",
-        lambda cond, vehicle: cond.battery.charge_schedule_end,
-        None,
-        None,
-        None,
-        "mdi:clock-end",
-        EntityCategory.DIAGNOSTIC,
+        key="charge_schedule_end",
+        name="Charge Schedule End",
+        value_fn=lambda cond, vehicle: cond.battery.charge_schedule_end,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:clock-end",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "vehicle_status",
-        "Vehicle Status",
-        lambda cond, vehicle: cond.vehicle_status,
-        None,
-        None,
-        None,
-        "mdi:car-info",
-        EntityCategory.DIAGNOSTIC,
+        key="vehicle_status",
+        name="Vehicle Status",
+        value_fn=lambda cond, vehicle: cond.vehicle_status,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:car-info",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "power_status",
-        "Power Status",
-        lambda cond, vehicle: cond.power_status,
-        None,
-        None,
-        None,
-        "mdi:power",
-        EntityCategory.DIAGNOSTIC,
+        key="power_status",
+        name="Power Status",
+        value_fn=lambda cond, vehicle: cond.power_status,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:power",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "gear",
-        "Gear",
-        lambda cond, vehicle: cond.gear,
-        None,
-        None,
-        None,
-        "mdi:car-shift-pattern",
-        EntityCategory.DIAGNOSTIC,
+        key="gear",
+        name="Gear",
+        value_fn=lambda cond, vehicle: cond.gear,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:car-shift-pattern",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "epb_status",
-        "Electronic Parking Brake",
-        lambda cond, vehicle: cond.epb_status,
-        None,
-        None,
-        None,
-        "mdi:car-brake-parking",
-        EntityCategory.DIAGNOSTIC,
+        key="epb_status",
+        name="Electronic Parking Brake",
+        value_fn=lambda cond, vehicle: cond.epb_status,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:car-brake-parking",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
-        "last_updated",
-        "Last Updated",
-        lambda cond, vehicle: (
+        key="last_updated",
+        name="Last Updated",
+        value_fn=lambda cond, vehicle: (
             datetime.fromtimestamp(cond.last_updated_timestamp, tz=UTC)
             if cond.last_updated_timestamp is not None
             else None
         ),
-        SensorDeviceClass.TIMESTAMP,
-        None,
-        None,
-        "mdi:clock-outline",
-        EntityCategory.DIAGNOSTIC,
+        device_class=SensorDeviceClass.TIMESTAMP,
+        state_class=None,
+        native_unit_of_measurement=None,
+        icon="mdi:clock-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
 
@@ -457,8 +496,10 @@ class DeepalSensor(DeepalBaseSensor):
             self._attr_device_class = description.device_class
         if description.state_class is not None:
             self._attr_state_class = description.state_class
-        if description.unit is not None:
-            self._attr_native_unit_of_measurement = description.unit
+        if description.native_unit_of_measurement is not None:
+            self._attr_native_unit_of_measurement = (
+                description.native_unit_of_measurement
+            )
         if description.icon is not None:
             self._attr_icon = description.icon
         if description.entity_category is not None:
