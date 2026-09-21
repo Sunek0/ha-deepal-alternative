@@ -690,6 +690,18 @@ def _as_int(value: Any) -> Optional[int]:
         return None
 
 
+# The app reports 8191 in chargDeltMins when it has no remaining-time estimate.
+CHARGE_TIME_SENTINEL = 8191
+
+
+def _as_charge_time(value: Any) -> Optional[int]:
+    """Return remaining charge minutes, mapping the app sentinel to unknown."""
+    minutes = _as_int(value)
+    if minutes == CHARGE_TIME_SENTINEL:
+        return None
+    return minutes
+
+
 def _as_float(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -784,7 +796,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "chargeCurrent": _as_float(
                 _first(params, "BattACChrgInCurr", "BattDCChrgInCurr")
             ),
-            "remainChargeTime": _as_int(params.get("chargDeltMins")),
+            "remainChargeTime": _as_charge_time(params.get("chargDeltMins")),
             "dcChargeGunConnectStatus": _as_int(
                 _first(
                     params,

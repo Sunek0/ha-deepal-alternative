@@ -462,6 +462,14 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["lamp"]["lowBeam"] == 0
 
 
+def test_normalize_s05_params_maps_remain_charge_time_sentinel():
+    sentinel = normalize_s05_params({"chargDeltMins": 8191})
+    normal = normalize_s05_params({"chargDeltMins": 120})
+
+    assert sentinel["charge"]["remainChargeTime"] is None
+    assert normal["charge"]["remainChargeTime"] == 120
+
+
 def test_normalize_s05_params_maps_seat_sides_and_scales():
     condition = normalize_s05_params(
         {

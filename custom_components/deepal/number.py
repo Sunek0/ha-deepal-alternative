@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import is_s05
 
 
 SEAT_LABELS = {"front_left": "Front Left", "front_right": "Front Right"}
@@ -17,6 +18,30 @@ SEAT_FUNCTIONS = {
     "heating": ("control_seats_heat", "heating_level", "mdi:car-seat-heater"),
     "ventilation": ("control_seats_wind", "ventilation_level", "mdi:car-seat-cooler"),
 }
+
+
+def supports_charge_limit(vehicle: Any) -> bool:
+    """Return whether the vehicle supports setting the AC charge limit.
+
+    The S05 does not: its function configuration reports no SOC-set code and
+    the signed charge_max command is accepted without changing the limit on
+    real cars. Only that model is excluded; missing or unknown model data keeps
+    the control, so no other vehicle loses it.
+    """
+    return not is_s05(vehicle)
+
+
+def build_control_numbers(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[Any]:
+    """Build the charge limit and seat level numbers for one vehicle."""
+    entities: list[Any] = []
+    if supports_charge_limit(vehicle):
+        entities.append(DeepalChargeLimitNumber(coordinator, vehicle))
+    for seat in SEAT_LABELS:
+        for function in SEAT_FUNCTIONS:
+            entities.append(DeepalSeatLevelNumber(coordinator, vehicle, seat, function))
+    return entities
 
 
 def _set_charge_limit(condition: Any, percentage: int) -> Any:
@@ -35,17 +60,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge limit and seat level numbers."""
-
-    def _build(coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> list[Any]:
-        entities: list[Any] = [DeepalChargeLimitNumber(coordinator, vehicle)]
-        for seat in SEAT_LABELS:
-            for function in SEAT_FUNCTIONS:
-                entities.append(
-                    DeepalSeatLevelNumber(coordinator, vehicle, seat, function)
-                )
-        return entities
-
-    async_setup_control_entities(hass, entry, async_add_entities, _build)
+    async_setup_control_entities(hass, entry, async_add_entities, build_control_numbers)
 
 
 class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):

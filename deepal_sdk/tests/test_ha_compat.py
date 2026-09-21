@@ -41,9 +41,11 @@ from custom_components.deepal import time as time_platform
 from custom_components.deepal.deepal import (
     DeepalAPIError,
     DeepalAuthError,
+    DeepalIntlClient,
     DeepalRateLimitError,
     VehicleCapabilities,
 )
+from custom_components.deepal.vehicle_model import is_s05
 from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
@@ -85,6 +87,11 @@ class FakeCoordinator:
         self.update_interval = None
         self.client = None
         self.hass = _fake_hass()
+        self.mqtt_vehicles: set[str] = set()
+
+    def vehicle_uses_mqtt(self, car_id: str) -> bool:
+        """Return whether the vehicle is marked as MQTT-backed."""
+        return car_id in self.mqtt_vehicles
 
 
 def _fake_vehicle() -> SimpleNamespace:
@@ -361,6 +368,99 @@ def test_seat_and_steering_entity_contract() -> None:
     assert steering._attr_translation_key == "steering_wheel_heating"
 
 
+def _model_vehicle(car_id: str, **fields) -> SimpleNamespace:
+    values = {
+        "car_id": car_id,
+        "vin": "test-vin",
+        "series_name": None,
+        "series_code": None,
+        "model_name": None,
+        "model_code": None,
+        "car_name": None,
+        "thumbnail_url": None,
+    }
+    values.update(fields)
+    return SimpleNamespace(**values)
+
+
+def test_charge_limit_is_not_offered_on_the_s05() -> None:
+    s05 = _model_vehicle(
+        "car-1",
+        series_name="S05",
+        series_code="C857-EU",
+        model_code="SC6464AAKBEV",
+    )
+    s05_by_code = _model_vehicle("car-2", series_code="c857-eu")
+    s05_by_name = _model_vehicle("car-3", model_name="Deepal S05")
+
+    assert number.supports_charge_limit(s05) is False
+    assert number.supports_charge_limit(s05_by_code) is False
+    assert number.supports_charge_limit(s05_by_name) is False
+
+
+def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
+    s07 = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+    unknown = _model_vehicle("car-2", series_name="Deepal X")
+    missing = _model_vehicle("car-3")
+
+    assert number.supports_charge_limit(s07) is True
+    assert number.supports_charge_limit(unknown) is True
+    assert number.supports_charge_limit(missing) is True
+
+
+def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
+    coordinator = FakeCoordinator()
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+
+    s05_ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, s05)
+    ]
+    s07_ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, s07)
+    ]
+
+    assert "deepal_car-1_charge_limit" not in s05_ids
+    assert len(s05_ids) == 4
+    assert any(uid.endswith("seat_front_left_heating_control") for uid in s05_ids)
+    assert "deepal_car-2_charge_limit" in s07_ids
+    assert len(s07_ids) == 5
+
+
+def test_is_s05_matches_name_and_code() -> None:
+    assert is_s05(_model_vehicle("car-1", series_name="S05")) is True
+    assert is_s05(_model_vehicle("car-2", series_code="c857-eu")) is True
+    assert is_s05(_model_vehicle("car-3", model_name="Deepal S05")) is True
+    assert (
+        is_s05(_model_vehicle("car-4", series_name="S07", series_code="C673-EU"))
+        is False
+    )
+    assert is_s05(_model_vehicle("car-5")) is False
+
+
+def test_build_sensors_skips_s05_unsupported_entities() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    coordinator.mqtt_vehicles = {"car-1", "car-2"}
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+
+    s05_keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, s05)
+    }
+    s07_keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, s07)
+    }
+
+    assert sensor.S05_UNSUPPORTED_SENSOR_KEYS.isdisjoint(s05_keys)
+    assert sensor.S05_UNSUPPORTED_SENSOR_KEYS <= s07_keys
+    assert "inside_temperature" in s05_keys
+    assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s05_keys)
+    assert {"mileage_yesterday", "trip_mileage"} <= s07_keys
+
+
 class _FakeCommandClient:
     """Capture the comfort commands sent by the entities."""
 
@@ -481,6 +581,17 @@ def test_translation_files_share_the_same_key_tree() -> None:
     ]
     for tree in trees[1:]:
         assert tree == trees[0]
+
+
+def test_spanish_entity_names_are_corrected() -> None:
+    data = json.loads(
+        (INTEGRATION_DIR / "translations" / "es.json").read_text(encoding="utf-8")
+    )
+    assert (
+        data["entity"]["button"]["flash_lights"]["name"]
+        == "Encender luces de emergencia"
+    )
+    assert data["entity"]["sensor"]["total_odometer"]["name"] == "Kilometraje total"
 
 
 def test_every_entity_translation_key_ships_in_every_language() -> None:

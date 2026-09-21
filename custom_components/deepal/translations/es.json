@@ -144,7 +144,7 @@
         "name": "Autonomía restante"
       },
       "total_odometer": {
-        "name": "Odómetro total"
+        "name": "Kilometraje total"
       },
       "mileage_yesterday": {
         "name": "Kilometraje de ayer"
@@ -367,7 +367,7 @@
         "name": "Actualizar datos del vehículo"
       },
       "flash_lights": {
-        "name": "Destellar luces"
+        "name": "Encender luces de emergencia"
       },
       "honk_horn": {
         "name": "Tocar el claxon"
