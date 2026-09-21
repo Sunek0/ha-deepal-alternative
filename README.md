@@ -1,12 +1,7 @@
 # ha-deepal-alternative
 
 Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05 Max, S07, SL03,
-L07) over the official international API, plus a standalone async Python SDK reverse-engineered from
-the official Android app.
-
-This repository is the `ha-deepal-alternative` fork of the original work. The Home Assistant
-**domain stays `deepal`** (`custom_components/deepal/`): existing config entries, entity ids and
-entity unique ids keep working after updating from the upstream project.
+L07) over the official international and chinese API.
 
 ## Important warnings
 
@@ -47,7 +42,7 @@ secondary account only for Home Assistant:
 ### HACS
 
 1. In HACS, add this repository as a custom repository of type **Integration**:
-   `https://github.com/dbarreiro/ha-deepal-alternative`.
+   `https://github.com/sunek0/ha-deepal-alternative`.
 2. Install **Deepal Alternative** and restart Home Assistant.
 3. Add the integration from **Settings > Devices & services**, choose the international platform and
    log in with an email or SMS code (use the secondary account from above).
@@ -77,6 +72,10 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - Email-code and SMS-code login, automatic session refresh.
 - REST telemetry (battery, range, doors, windows, climate, seats, tires, lamps).
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway.
+- Vehicle image per car: the photo returned by the API, with a bundled fallback (official S05 and
+  S07 renders and text placeholders for SL03, L07 and unknown models).
+- Per-vehicle capabilities fetched from the app backend (seat heating/ventilation, roof); download
+  the **diagnostics** from the device page to see the raw function codes your car reports.
 - Signed remote commands: climate, doors, windows, trunk, charging limit/schedule, lights/horn,
   and optional app commands (defrost, seats, steering-wheel heat, charge and departure plans).
 
@@ -92,6 +91,9 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   device. Sign in again; using the secondary account avoids most of these.
 - **Values look stale**: the vehicle only reports telemetry while it is awake; the integration shows
   the last known snapshot until the car reports again.
+- **A telemetry field is missing**: download the diagnostics from the device page and check
+  `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
+  Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
 
 ## Repository layout
 
@@ -113,6 +115,10 @@ diff -r -x "__pycache__" -x "*.pyc" deepal_sdk/deepal custom_components/deepal/d
 
 The last command must only report the rewritten relative imports: the vendored copy has to stay in
 sync with the SDK.
+
+Releases are published from `master` as `vX.Y.Z` tags; the `Release` workflow verifies that the tag
+matches `custom_components/deepal/manifest.json` before creating the GitHub release. The full
+Gitflow checklist lives in [`docs/releasing.md`](docs/releasing.md).
 
 ## Disclaimer
 

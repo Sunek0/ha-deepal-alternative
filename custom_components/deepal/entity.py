@@ -30,6 +30,8 @@ def mqtt_controls_enabled(coordinator: DeepalDataUpdateCoordinator) -> bool:
 class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
     """Base entity with device information and command helpers."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
     ) -> None:

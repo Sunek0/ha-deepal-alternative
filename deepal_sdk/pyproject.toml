@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepal-sdk"
+version = "0.1.0"
+description = "Python SDK for Changan Deepal (S05, S07, SL03) Vehicle Telemetry and API"
+authors = [
+    { name = "David Barreiro", email = "dbarreiro@example.com" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.25.0",
+    "pydantic>=2.0.0",
+    "cryptography>=41.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]

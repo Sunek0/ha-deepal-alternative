@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the SDK with its test dependencies
+        run: pip install -e "deepal_sdk[dev]"
+
+      - name: Compile every Python file
+        run: python -m compileall -q custom_components/deepal deepal_sdk
+
+      - name: Validate every JSON file
+        run: |
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+
+          for path in Path("custom_components/deepal").rglob("*.json"):
+              json.loads(path.read_text(encoding="utf-8"))
+          json.loads(Path("hacs.json").read_text(encoding="utf-8"))
+          print("JSON OK")
+          EOF
+
+      - name: Run the test suite
+        run: pytest deepal_sdk/tests -q

@@ -124,9 +124,253 @@
           "enable_api_logging": "Écrit chaque requête et réponse API dans le journal de Home Assistant, avec jetons, clés, VIN, e-mail, téléphone, PIN et numéro de série expurgés. À activer uniquement en cas de dépannage.",
           "enable_mqtt_controls": "Autoriser les commandes à distance pour les véhicules MQTT (S05). Expérimental : l'envoi de commandes MQTT n'est pas encore vérifié.",
           "os_version": "Version d'Android déclarée dans l'en-tête x-os-version. La valeur par défaut (9) correspond à la capture vérifiée de l'application ; modifiez-la uniquement pour diagnostiquer des requêtes rejetées par la passerelle.",
-          "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut ; les entrées qui avaient enregistré les environnements supprimés de migration UE ou de préproduction reviennent à Europe.",
+          "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut.",
           "send_timestamps": "Envoie l'en-tête de diagnostic X-Tsp-Timestamp (epoch en millisecondes) avec chaque requête. Désactivé par défaut."
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Niveau de batterie"
+      },
+      "remaining_range": {
+        "name": "Autonomie restante"
+      },
+      "total_odometer": {
+        "name": "Kilométrage total"
+      },
+      "mileage_yesterday": {
+        "name": "Kilométrage d'hier"
+      },
+      "trip_mileage": {
+        "name": "Kilométrage du trajet"
+      },
+      "tire_pressure": {
+        "name": "Pression du pneu {position}"
+      },
+      "seat_heating_level": {
+        "name": "Niveau de chauffage du siège {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Niveau de ventilation du siège {position}"
+      },
+      "steering_wheel_heater_level": {
+        "name": "Niveau de chauffage du volant"
+      },
+      "speed": {
+        "name": "Vitesse"
+      },
+      "inside_temperature": {
+        "name": "Température intérieure"
+      },
+      "outside_temperature": {
+        "name": "Température extérieure"
+      },
+      "cabin_humidity": {
+        "name": "Humidité de l'habitacle"
+      },
+      "inside_pm25": {
+        "name": "PM2.5 intérieur"
+      },
+      "air_quality_level": {
+        "name": "Niveau de qualité de l'air"
+      },
+      "charge_status": {
+        "name": "État de charge"
+      },
+      "charge_current": {
+        "name": "Courant de charge"
+      },
+      "ac_charge_current": {
+        "name": "Courant de charge CA"
+      },
+      "dc_charge_current": {
+        "name": "Courant de charge CC"
+      },
+      "remaining_charge_time": {
+        "name": "Temps de charge restant"
+      },
+      "charge_limit": {
+        "name": "Limite de charge"
+      },
+      "charge_schedule_start": {
+        "name": "Début de la plage de charge"
+      },
+      "charge_schedule_end": {
+        "name": "Fin de la plage de charge"
+      },
+      "vehicle_status": {
+        "name": "État du véhicule"
+      },
+      "power_status": {
+        "name": "État d'alimentation"
+      },
+      "gear": {
+        "name": "Rapport"
+      },
+      "epb_status": {
+        "name": "Frein de stationnement électronique"
+      },
+      "last_updated": {
+        "name": "Dernière mise à jour"
+      }
+    },
+    "binary_sensor": {
+      "charger_plugged": {
+        "name": "Chargeur branché"
+      },
+      "doors_lock_state": {
+        "name": "État du verrouillage"
+      },
+      "tire_alarm": {
+        "name": "Alarme du pneu {position}"
+      },
+      "window_open": {
+        "name": "Vitre {position} ouverte"
+      },
+      "steering_wheel_heater": {
+        "name": "Chauffage du volant"
+      },
+      "engine": {
+        "name": "Moteur"
+      },
+      "defrost": {
+        "name": "Dégivrage avant"
+      },
+      "connected": {
+        "name": "Connexion au cloud"
+      },
+      "high_beam": {
+        "name": "Feux de route"
+      },
+      "low_beam": {
+        "name": "Feux de croisement"
+      },
+      "position_lamp": {
+        "name": "Feux de position"
+      },
+      "left_turn_signal": {
+        "name": "Clignotant gauche"
+      },
+      "right_turn_signal": {
+        "name": "Clignotant droit"
+      },
+      "any_door_open": {
+        "name": "Une porte ouverte"
+      },
+      "door_front_left": {
+        "name": "Porte avant gauche"
+      },
+      "door_front_right": {
+        "name": "Porte avant droite"
+      },
+      "door_rear_left": {
+        "name": "Porte arrière gauche"
+      },
+      "door_rear_right": {
+        "name": "Porte arrière droite"
+      },
+      "trunk": {
+        "name": "Coffre"
+      },
+      "hood": {
+        "name": "Capot"
+      },
+      "driver_door_unlocked": {
+        "name": "Porte conducteur déverrouillée"
+      },
+      "passenger_door_unlocked": {
+        "name": "Porte passager déverrouillée"
+      },
+      "dc_gun_connected": {
+        "name": "Pistolet DC connecté"
+      },
+      "charging": {
+        "name": "En charge"
+      },
+      "charge_schedule_enabled": {
+        "name": "Plage de charge activée"
+      },
+      "front_left_seat_heating": {
+        "name": "Chauffage du siège avant gauche"
+      },
+      "front_right_seat_heating": {
+        "name": "Chauffage du siège avant droit"
+      },
+      "rear_left_seat_heating": {
+        "name": "Chauffage du siège arrière gauche"
+      },
+      "rear_right_seat_heating": {
+        "name": "Chauffage du siège arrière droit"
+      },
+      "front_left_seat_ventilation": {
+        "name": "Ventilation du siège avant gauche"
+      },
+      "front_right_seat_ventilation": {
+        "name": "Ventilation du siège avant droit"
+      }
+    },
+    "button": {
+      "refresh_vehicle_data": {
+        "name": "Actualiser les données du véhicule"
+      },
+      "flash_lights": {
+        "name": "Appels de phares"
+      },
+      "honk_horn": {
+        "name": "Klaxonner"
+      }
+    },
+    "climate": {
+      "cabin_climate": {
+        "name": "Climatisation de l'habitacle"
+      }
+    },
+    "cover": {
+      "windows": {
+        "name": "Vitres"
+      },
+      "trunk": {
+        "name": "Coffre"
+      }
+    },
+    "lock": {
+      "doors": {
+        "name": "Portes"
+      }
+    },
+    "number": {
+      "charge_limit": {
+        "name": "Limite de charge"
+      },
+      "seat_heating_level": {
+        "name": "Niveau de chauffage du siège {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Niveau de ventilation du siège {position}"
+      }
+    },
+    "switch": {
+      "charge_schedule": {
+        "name": "Plage de charge"
+      },
+      "steering_wheel_heating": {
+        "name": "Chauffage du volant"
+      }
+    },
+    "time": {
+      "charge_schedule_start": {
+        "name": "Début de la plage de charge"
+      },
+      "charge_schedule_end": {
+        "name": "Fin de la plage de charge"
+      }
+    },
+    "image": {
+      "vehicle_image": {
+        "name": "Image du véhicule"
       }
     }
   }

@@ -120,13 +120,257 @@
         "description": "Ajusta el sondeo y los diagnósticos. El PIN de control habilita los comandos remotos firmados; las opciones de diagnóstico cambian cómo ve la API al cliente, tócalas solo al solucionar problemas.",
         "data_description": {
           "scan_interval": "Cada cuánto consulta Home Assistant el vehículo cuando no hay telemetría MQTT, en segundos (30-3600).",
-          "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero; se canjea por un token que caduca periódicamente y se vuelve a pedir cuando ocurre.",
+          "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero.",
           "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie redactados. Actívalo solo al solucionar problemas.",
           "enable_mqtt_controls": "Permite comandos remotos en vehículos MQTT (S05). Experimental: el envío de comandos por MQTT aún no está verificado.",
           "os_version": "Versión de Android declarada en la cabecera x-os-version. El valor por defecto (9) coincide con la captura verificada de la app; cámbialo solo para diagnosticar peticiones rechazadas por el gateway.",
-          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto; las entradas que guardaron los entornos retirados de migración o preproducción de la UE caen a Europa.",
+          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto.",
           "send_timestamps": "Envía la cabecera diagnóstica X-Tsp-Timestamp (epoch en milisegundos) en cada petición. Desactivada por defecto."
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Nivel de batería"
+      },
+      "remaining_range": {
+        "name": "Autonomía restante"
+      },
+      "total_odometer": {
+        "name": "Odómetro total"
+      },
+      "mileage_yesterday": {
+        "name": "Kilometraje de ayer"
+      },
+      "trip_mileage": {
+        "name": "Kilometraje del trayecto"
+      },
+      "tire_pressure": {
+        "name": "Presión del neumático {position}"
+      },
+      "seat_heating_level": {
+        "name": "Nivel de calefacción del asiento {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Nivel de ventilación del asiento {position}"
+      },
+      "steering_wheel_heater_level": {
+        "name": "Nivel de calefacción del volante"
+      },
+      "speed": {
+        "name": "Velocidad"
+      },
+      "inside_temperature": {
+        "name": "Temperatura interior"
+      },
+      "outside_temperature": {
+        "name": "Temperatura exterior"
+      },
+      "cabin_humidity": {
+        "name": "Humedad del habitáculo"
+      },
+      "inside_pm25": {
+        "name": "PM2.5 interior"
+      },
+      "air_quality_level": {
+        "name": "Calidad del aire"
+      },
+      "charge_status": {
+        "name": "Estado de carga"
+      },
+      "charge_current": {
+        "name": "Corriente de carga"
+      },
+      "ac_charge_current": {
+        "name": "Corriente de carga CA"
+      },
+      "dc_charge_current": {
+        "name": "Corriente de carga CC"
+      },
+      "remaining_charge_time": {
+        "name": "Tiempo de carga restante"
+      },
+      "charge_limit": {
+        "name": "Límite de carga"
+      },
+      "charge_schedule_start": {
+        "name": "Inicio del horario de carga"
+      },
+      "charge_schedule_end": {
+        "name": "Fin del horario de carga"
+      },
+      "vehicle_status": {
+        "name": "Estado del vehículo"
+      },
+      "power_status": {
+        "name": "Estado de alimentación"
+      },
+      "gear": {
+        "name": "Marcha"
+      },
+      "epb_status": {
+        "name": "Freno de estacionamiento electrónico"
+      },
+      "last_updated": {
+        "name": "Última actualización"
+      }
+    },
+    "binary_sensor": {
+      "charger_plugged": {
+        "name": "Cargador conectado"
+      },
+      "doors_lock_state": {
+        "name": "Estado del bloqueo"
+      },
+      "tire_alarm": {
+        "name": "Alarma del neumático {position}"
+      },
+      "window_open": {
+        "name": "Ventanilla {position} abierta"
+      },
+      "steering_wheel_heater": {
+        "name": "Calefacción del volante"
+      },
+      "engine": {
+        "name": "Motor"
+      },
+      "defrost": {
+        "name": "Desempañado delantero"
+      },
+      "connected": {
+        "name": "Conexión a la nube"
+      },
+      "high_beam": {
+        "name": "Luz de carretera"
+      },
+      "low_beam": {
+        "name": "Luz de cruce"
+      },
+      "position_lamp": {
+        "name": "Luz de posición"
+      },
+      "left_turn_signal": {
+        "name": "Intermitente izquierdo"
+      },
+      "right_turn_signal": {
+        "name": "Intermitente derecho"
+      },
+      "any_door_open": {
+        "name": "Alguna puerta abierta"
+      },
+      "door_front_left": {
+        "name": "Puerta delantera izquierda"
+      },
+      "door_front_right": {
+        "name": "Puerta delantera derecha"
+      },
+      "door_rear_left": {
+        "name": "Puerta trasera izquierda"
+      },
+      "door_rear_right": {
+        "name": "Puerta trasera derecha"
+      },
+      "trunk": {
+        "name": "Maletero"
+      },
+      "hood": {
+        "name": "Capó"
+      },
+      "driver_door_unlocked": {
+        "name": "Puerta del conductor desbloqueada"
+      },
+      "passenger_door_unlocked": {
+        "name": "Puerta del acompañante desbloqueada"
+      },
+      "dc_gun_connected": {
+        "name": "Pistola DC conectada"
+      },
+      "charging": {
+        "name": "Cargando"
+      },
+      "charge_schedule_enabled": {
+        "name": "Horario de carga activado"
+      },
+      "front_left_seat_heating": {
+        "name": "Calefacción del asiento delantero izquierdo"
+      },
+      "front_right_seat_heating": {
+        "name": "Calefacción del asiento delantero derecho"
+      },
+      "rear_left_seat_heating": {
+        "name": "Calefacción del asiento trasero izquierdo"
+      },
+      "rear_right_seat_heating": {
+        "name": "Calefacción del asiento trasero derecho"
+      },
+      "front_left_seat_ventilation": {
+        "name": "Ventilación del asiento delantero izquierdo"
+      },
+      "front_right_seat_ventilation": {
+        "name": "Ventilación del asiento delantero derecho"
+      }
+    },
+    "button": {
+      "refresh_vehicle_data": {
+        "name": "Actualizar datos del vehículo"
+      },
+      "flash_lights": {
+        "name": "Destellar luces"
+      },
+      "honk_horn": {
+        "name": "Tocar el claxon"
+      }
+    },
+    "climate": {
+      "cabin_climate": {
+        "name": "Climatización del habitáculo"
+      }
+    },
+    "cover": {
+      "windows": {
+        "name": "Ventanillas"
+      },
+      "trunk": {
+        "name": "Maletero"
+      }
+    },
+    "lock": {
+      "doors": {
+        "name": "Puertas"
+      }
+    },
+    "number": {
+      "charge_limit": {
+        "name": "Límite de carga"
+      },
+      "seat_heating_level": {
+        "name": "Nivel de calefacción del asiento {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Nivel de ventilación del asiento {position}"
+      }
+    },
+    "switch": {
+      "charge_schedule": {
+        "name": "Horario de carga"
+      },
+      "steering_wheel_heating": {
+        "name": "Calefacción del volante"
+      }
+    },
+    "time": {
+      "charge_schedule_start": {
+        "name": "Inicio del horario de carga"
+      },
+      "charge_schedule_end": {
+        "name": "Fin del horario de carga"
+      }
+    },
+    "image": {
+      "vehicle_image": {
+        "name": "Imagen del vehículo"
       }
     }
   }
