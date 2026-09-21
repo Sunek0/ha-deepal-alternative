@@ -31,7 +31,6 @@ from custom_components.deepal import (
     config_flow,
     cover,
     diagnostics,
-    image,
     lock,
     number,
     sensor,
@@ -78,7 +77,6 @@ def _fake_vehicle() -> SimpleNamespace:
         series_name="Deepal S05 Max",
         car_name=None,
         model_name=None,
-        thumbnail_url=None,
     )
 
 
@@ -425,7 +423,6 @@ def test_every_entity_translation_key_ships_in_every_language() -> None:
         for path in TRANSLATION_FILES
     }
     entities = _entities_by_platform()
-    entities["image"] = [object.__new__(image.DeepalVehicleImage)]
 
     for platform, platform_entities in entities.items():
         for entity in platform_entities:
@@ -609,7 +606,7 @@ def test_config_flow_defaults_to_the_international_platform() -> None:
     }
 
 
-def test_integration_platforms_include_image() -> None:
+def test_integration_platforms_exclude_image() -> None:
     from homeassistant.const import Platform
 
     from custom_components.deepal import _platforms
@@ -617,130 +614,7 @@ def test_integration_platforms_include_image() -> None:
     entry = SimpleNamespace(
         data={"platform": "intl", "private_key": "test-private-key"}
     )
-    assert Platform.IMAGE in _platforms(entry)
+    assert Platform.IMAGE not in _platforms(entry)
 
 
-@pytest.mark.parametrize(
-    ("series_name", "car_name", "model_name", "expected"),
-    [
-        ("Deepal S05", None, None, "vehicle_s05.svg"),
-        ("Deepal S05 Max", None, None, "vehicle_s05.svg"),
-        ("Deepal S05 Pro", None, None, "vehicle_s05.svg"),
-        ("deepal s05 max", None, None, "vehicle_s05.svg"),
-        ("S05MAX", None, None, "vehicle_s05.svg"),
-        (None, "Mi S05 Pro", None, "vehicle_s05.svg"),
-        ("Deepal S05", None, "S05 Max", "vehicle_s05.svg"),
-        ("Deepal S07", None, None, "vehicle_s07.svg"),
-        ("Deepal SL03", None, None, "vehicle_sl03.svg"),
-        ("Deepal L07", None, None, "vehicle_l07.svg"),
-        ("Deepal X1", None, None, "vehicle_generic.svg"),
-        (None, None, None, "vehicle_generic.svg"),
-    ],
-)
-def test_vehicle_image_asset_selection(
-    series_name, car_name, model_name, expected
-) -> None:
-    path = image.vehicle_image_asset(
-        series_name, car_name, model_name=model_name
-    )
-    assert path.name == expected
-    assert path.exists()
 
-
-def test_bundled_vehicle_assets_are_valid_svg() -> None:
-    import xml.etree.ElementTree as element_tree
-
-    expected = {
-        "vehicle_generic.svg",
-        "vehicle_l07.svg",
-        "vehicle_s05.svg",
-        "vehicle_s07.svg",
-        "vehicle_sl03.svg",
-    }
-    assets = sorted((INTEGRATION_DIR / "assets").glob("*.svg"))
-    assert {path.name for path in assets} == expected
-    for path in assets:
-        root = element_tree.fromstring(path.read_text(encoding="utf-8"))
-        assert root.tag.endswith("svg")
-
-
-@pytest.mark.asyncio
-async def test_vehicle_image_entity_constructor_registers_unique_id(
-    monkeypatch,
-) -> None:
-    async def fake_executor(job, *args):
-        return job(*args)
-
-    monkeypatch.setattr(
-        "homeassistant.components.image.get_async_client",
-        lambda hass, verify_ssl=True: None,
-    )
-    hass = SimpleNamespace(data={}, async_add_executor_job=fake_executor)
-    coordinator = FakeCoordinator()
-    coordinator.hass = hass
-    coordinator.vehicles = [_fake_vehicle()]
-
-    entity = image.DeepalVehicleImage(coordinator, _fake_vehicle())
-
-    assert entity._attr_unique_id == "deepal_car-1_vehicle_image"
-    assert entity._attr_translation_key == "vehicle_image"
-    assert entity._attr_has_entity_name is True
-
-
-@pytest.mark.asyncio
-async def test_vehicle_image_falls_back_when_api_image_fails(monkeypatch) -> None:
-    async def fake_executor(job, *args):
-        return job(*args)
-
-    async def failing_fetch(self, url):
-        return None
-
-    monkeypatch.setattr(
-        "homeassistant.components.image.get_async_client",
-        lambda hass, verify_ssl=True: None,
-    )
-    monkeypatch.setattr(
-        "homeassistant.components.image.ImageEntity._async_load_image_from_url",
-        failing_fetch,
-    )
-
-    hass = SimpleNamespace(data={}, async_add_executor_job=fake_executor)
-    coordinator = FakeCoordinator()
-    coordinator.hass = hass
-    coordinator.data = {}
-    vehicle = _fake_vehicle()
-    vehicle.thumbnail_url = "https://example.invalid/car.png"
-    vehicle.series_name = "Deepal S05"
-
-    entity = image.DeepalVehicleImage(coordinator, vehicle)
-    entity.platform_data = SimpleNamespace(platform_name="deepal", domain="image")
-
-    picture = await entity.async_image()
-
-    assert b"<svg" in picture[:400]
-    assert entity.content_type == "image/svg+xml"
-    assert entity.image_last_updated is not None
-
-
-def test_vehicle_image_entity_prefers_api_url() -> None:
-    entity = object.__new__(image.DeepalVehicleImage)
-    entity.vehicle = SimpleNamespace(
-        car_id="car-1",
-        series_name="Deepal S05 Max",
-        car_name=None,
-        model_name=None,
-        thumbnail_url="https://example.invalid/car.png",
-    )
-    entity._car_id = "car-1"
-    entity.coordinator = SimpleNamespace()
-    entity._attr_content_type = "image/jpeg"
-
-    assert entity.image_url == "https://example.invalid/car.png"
-    assert entity.content_type == "image/jpeg"
-
-    entity.vehicle.thumbnail_url = None
-    entity._attr_image_last_updated = None
-
-    assert entity.image_url is None
-    assert entity.content_type == "image/svg+xml"
-    assert entity._asset_path().name == "vehicle_s05.svg"
