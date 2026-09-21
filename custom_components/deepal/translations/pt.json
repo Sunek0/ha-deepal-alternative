@@ -430,11 +430,6 @@
       "charge_schedule_end": {
         "name": "Fim do horário de carga"
       }
-    },
-    "image": {
-      "vehicle_image": {
-        "name": "Imagem do veículo"
-      }
     }
   }
 }

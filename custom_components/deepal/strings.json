@@ -430,11 +430,6 @@
       "charge_schedule_end": {
         "name": "Charge schedule end"
       }
-    },
-    "image": {
-      "vehicle_image": {
-        "name": "Vehicle image"
-      }
     }
   }
 }

@@ -72,8 +72,6 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - Email-code and SMS-code login, automatic session refresh.
 - REST telemetry (battery, range, doors, windows, climate, seats, tires, lamps).
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway.
-- Vehicle image per car: the photo returned by the API, with a bundled fallback (official S05 and
-  S07 renders and text placeholders for SL03, L07 and unknown models).
 - Per-vehicle capabilities fetched from the app backend (seat heating/ventilation, roof); download
   the **diagnostics** from the device page to see the raw function codes your car reports.
 - Signed remote commands: climate, doors, windows, trunk, charging limit/schedule, lights/horn,
