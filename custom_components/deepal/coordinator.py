@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -34,7 +35,34 @@ _LOGGER = logging.getLogger(__name__)
 _COMMAND_RESULT_INTERVAL = 0.5
 _COMMAND_TIMEOUT = 60.0
 _CONDITION_FETCH_INTERVAL = 2.0
+_OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
+
+
+def _diff_paths(before: Any, after: Any, prefix: str = "") -> dict[str, Any]:
+    """Return the dotted paths whose value differs between two model dumps."""
+    changes: dict[str, Any] = {}
+    if isinstance(after, dict):
+        before_dict = before if isinstance(before, dict) else {}
+        for key, value in after.items():
+            path = f"{prefix}.{key}" if prefix else key
+            changes.update(_diff_paths(before_dict.get(key), value, path))
+    elif before != after:
+        changes[prefix] = after
+    return changes
+
+
+def _path_get(obj: Any, path: str) -> Any:
+    for part in path.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def _path_set(obj: Any, path: str, value: Any) -> None:
+    parts = path.split(".")
+    for part in parts[:-1]:
+        obj = getattr(obj, part)
+    setattr(obj, parts[-1], value)
 
 
 class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleCondition]]):
@@ -58,6 +86,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.client = client
         self.vehicles: list[Vehicle] = []
         self._command_in_progress = False
+        self._optimistic_holds: dict[str, dict[str, Any]] = {}
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -66,9 +95,91 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
-            data[vehicle.car_id] = await self._async_fetch_condition(vehicle.car_id)
+            condition = await self._async_fetch_condition(vehicle.car_id)
+            condition = await self._overlay_app_comfort(vehicle, condition)
+            data[vehicle.car_id] = self._apply_optimistic_hold(
+                vehicle.car_id, condition
+            )
 
         return data
+
+    async def _overlay_app_comfort(
+        self, vehicle: Vehicle, condition: VehicleCondition
+    ) -> VehicleCondition:
+        """Overlay the app's seat and steering state onto an MQTT snapshot.
+
+        The S05 seat modules report sentinel values over MQTT while they are
+        asleep, and the MQTT ``steeringWheelHeating`` field does not follow the
+        switch the app shows. The server condition endpoint returns the same
+        report already normalized the way the app displays it.
+        """
+        if not self._uses_mqtt(vehicle):
+            return condition
+        try:
+            app_condition = await self.client.get_vehicle_condition(
+                vehicle.car_id, vin=vehicle.vin
+            )
+        except DeepalError as err:
+            _LOGGER.debug(
+                "Deepal app condition overlay failed for %s: %s", vehicle.car_id, err
+            )
+            return condition
+        mqtt_ts = condition.last_updated_timestamp
+        app_ts = app_condition.last_updated_timestamp
+        if mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts:
+            return condition
+        raw = app_condition.raw_data or {}
+        if raw.get("seat"):
+            condition.seats = app_condition.seats
+        if (raw.get("vehicleStatus") or {}).get("steeringWheelHeater") is not None:
+            condition.climate.steering_wheel_heater_on = (
+                app_condition.climate.steering_wheel_heater_on
+            )
+            condition.climate.steering_wheel_heater_level = (
+                app_condition.climate.steering_wheel_heater_level
+            )
+        return condition
+
+    def _register_optimistic_hold(
+        self, vehicle_id: str, before: dict[str, Any], after: dict[str, Any]
+    ) -> None:
+        """Remember the fields a command changed so reports cannot revert them."""
+        changes = _diff_paths(before, after)
+        if changes:
+            self._optimistic_holds[vehicle_id] = {
+                "expires": time.monotonic() + _OPTIMISTIC_HOLD_SECONDS,
+                "values": changes,
+            }
+
+    def _apply_optimistic_hold(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> VehicleCondition:
+        """Keep the optimistic values until the vehicle confirms them.
+
+        The car applies commands with a delay (and the account is rate limited),
+        so reports generated before the command took effect would otherwise
+        revert the entity to the previous value.
+        """
+        hold = self._optimistic_holds.get(vehicle_id)
+        if hold is None:
+            return condition
+        if time.monotonic() >= hold["expires"]:
+            self._optimistic_holds.pop(vehicle_id, None)
+            return condition
+        remaining: dict[str, Any] = {}
+        for path, value in hold["values"].items():
+            try:
+                if _path_get(condition, path) == value:
+                    continue
+                _path_set(condition, path, value)
+            except AttributeError:
+                continue
+            remaining[path] = value
+        if remaining:
+            hold["values"] = remaining
+        else:
+            self._optimistic_holds.pop(vehicle_id, None)
+        return condition
 
     async def _async_fetch_condition(self, vehicle_id: str) -> VehicleCondition:
         """Fetch one condition through MQTT when available, REST otherwise."""
@@ -115,7 +226,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             "Deepal MQTT token rejected (%s); refreshing the session and retrying",
             err,
         )
-        return await self._async_refresh_tokens()
+        return await self._async_refresh_tokens(force=True)
 
     def _merge_condition(
         self, vehicle_id: str, condition: VehicleCondition
@@ -130,6 +241,24 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if previous is not None and condition.climate.power_on is None:
             condition.climate.power_on = previous.climate.power_on
         return condition
+
+    @staticmethod
+    def _condition_is_fresh(
+        condition: VehicleCondition, current: VehicleCondition | None
+    ) -> bool:
+        """Return whether a fetched condition may replace the current state.
+
+        MQTT snapshots can be stale (the car reports only when it is awake), so
+        a condition whose report timestamp did not advance must not overwrite
+        the optimistic state applied by a command.
+        """
+        if current is None:
+            return True
+        if condition.last_updated_timestamp is None:
+            return True
+        if current.last_updated_timestamp is None:
+            return True
+        return condition.last_updated_timestamp > current.last_updated_timestamp
 
     def _uses_mqtt(self, vehicle: Vehicle) -> bool:
         """Return whether this vehicle should use the MQTT telemetry path.
@@ -169,7 +298,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         _LOGGER.debug("Deepal access token close to expiry; refreshing proactively")
         await self._async_refresh_tokens()
 
-    async def _async_refresh_tokens(self) -> bool:
+    async def _async_refresh_tokens(self, force: bool = False) -> bool:
         """Refresh the international session and persist the new tokens.
 
         The SDK decides whether a request actually happens (its throttle may
@@ -182,7 +311,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         previous_access_token = getattr(self.client, "access_token", None)
         try:
-            token = await refresh()
+            token = await refresh(force=force)
         except DeepalError as err:
             _LOGGER.error("Deepal token refresh failed: %s", err)
             return False
@@ -213,7 +342,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return await self._async_fetch()
         except DeepalAuthError as err:
             _LOGGER.warning("Deepal authentication failed, attempting token refresh")
-            if await self._async_refresh_tokens():
+            if await self._async_refresh_tokens(force=True):
                 try:
                     return await self._async_fetch()
                 except DeepalError as retry_err:
@@ -242,6 +371,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
 
         self._command_in_progress = True
+        applied_optimistic = False
         try:
             current = (self.data or {}).get(vehicle_id)
             previous_last_updated = current.last_updated_timestamp if current else None
@@ -250,10 +380,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
             if optimistic_update is not None and current is not None:
                 try:
+                    before = current.model_dump()
                     updated = optimistic_update(current.model_copy(deep=True))
                     data = dict(self.data or {})
                     data[vehicle_id] = updated
                     self.async_set_updated_data(data)
+                    applied_optimistic = True
+                    self._register_optimistic_hold(
+                        vehicle_id, before, updated.model_dump()
+                    )
                 except Exception:  # noqa: BLE001 - never break the command
                     _LOGGER.exception("Deepal optimistic state update failed")
 
@@ -262,16 +397,44 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             except DeepalError as err:
                 _LOGGER.warning("Deepal condition inquiry failed: %s", err)
 
-            await self._async_poll_command(
-                vehicle_id,
-                command_id,
-                previous_last_updated,
-                timeout,
-                interval,
-                is_done,
-            )
+            try:
+                await self._async_poll_command(
+                    vehicle_id,
+                    command_id,
+                    previous_last_updated,
+                    timeout,
+                    interval,
+                    is_done,
+                    applied_optimistic=applied_optimistic,
+                )
+            except HomeAssistantError:
+                if applied_optimistic and current is not None:
+                    self._restore_condition(vehicle_id, current)
+                raise
         finally:
             self._command_in_progress = False
+
+    def _restore_condition(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Undo an optimistic update after a command failure.
+
+        The snapshot is only restored when no newer report has replaced it, so
+        a fresh condition that arrived while polling is never discarded.
+        """
+        self._optimistic_holds.pop(vehicle_id, None)
+        data = dict(self.data or {})
+        current = data.get(vehicle_id)
+        if current is None:
+            return
+        if (
+            current.last_updated_timestamp is not None
+            and condition.last_updated_timestamp is not None
+            and current.last_updated_timestamp != condition.last_updated_timestamp
+        ):
+            return
+        data[vehicle_id] = condition
+        self.async_set_updated_data(data)
 
     def vehicle_uses_mqtt(self, car_id: str) -> bool:
         """Return whether a vehicle reports telemetry over MQTT."""
@@ -289,6 +452,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         interval: float,
         is_done: Callable[[], bool] | None = None,
         condition_interval: float = _CONDITION_FETCH_INTERVAL,
+        applied_optimistic: bool = False,
     ) -> None:
         """Poll the command result while bounding the condition request rate."""
         loop = asyncio.get_running_loop()
@@ -299,18 +463,27 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         while True:
             result = await self.client.control_result_status(vehicle_id, command_id)
             if result.status is CommandResultStatus.FAILED:
-                raise HomeAssistantError(
+                message = (
                     f"Deepal command failed with result code {result.code}: "
                     f"{result.error_message}"
                 )
+                if "TBOX_" in (result.error_message or ""):
+                    message += (
+                        " (the vehicle did not accept the command; it may be "
+                        "offline or busy, try again when it is awake)"
+                    )
+                raise HomeAssistantError(message)
 
             now = loop.time()
             if now >= next_condition_at:
                 condition = await self._async_fetch_condition(vehicle_id)
+                condition = self._apply_optimistic_hold(vehicle_id, condition)
                 next_condition_at = now + condition_interval
-                data = dict(self.data or {})
-                data[vehicle_id] = condition
-                self.async_set_updated_data(data)
+                current = (self.data or {}).get(vehicle_id)
+                if self._condition_is_fresh(condition, current):
+                    data = dict(self.data or {})
+                    data[vehicle_id] = condition
+                    self.async_set_updated_data(data)
                 if (
                     condition.last_updated_timestamp is not None
                     and condition.last_updated_timestamp != previous_last_updated
@@ -322,7 +495,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 CommandResultStatus.ALREADY_DONE,
             ):
                 state_done = is_done() if is_done is not None else True
-                if state_done and (is_done is not None or condition_changed):
+                confirmed = (
+                    is_done is not None or applied_optimistic or condition_changed
+                )
+                if state_done and confirmed:
                     return
 
             if loop.time() >= deadline:

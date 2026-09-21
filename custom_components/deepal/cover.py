@@ -94,7 +94,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
 class DeepalTrunkCover(DeepalEntity, CoverEntity):
     """Trunk cover."""
 
-    _attr_device_class = CoverDeviceClass.DOOR
+    _attr_device_class = CoverDeviceClass.GARAGE
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
 
     def __init__(
