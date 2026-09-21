@@ -31,6 +31,7 @@ from custom_components.deepal import (
     config_flow,
     cover,
     diagnostics,
+    image,
     lock,
     number,
     sensor,
@@ -46,6 +47,8 @@ from custom_components.deepal.deepal import (
 from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
+from homeassistant.helpers.httpx_client import DATA_ASYNC_CLIENT
+from homeassistant.util.ssl import SSL_ALPN_HTTP11
 
 INTEGRATION_DIR = REPO_ROOT / "custom_components" / "deepal"
 HACS_METADATA = REPO_ROOT / "hacs.json"
@@ -62,6 +65,18 @@ TRANSLATION_FILES = [
 ALLOWED_DEVICE_INFO_FIELDS = {"identifiers", "name", "manufacturer", "model"}
 
 
+def _fake_hass() -> SimpleNamespace:
+    """Minimal hass double for entities that initialize their HTTP client."""
+
+    async def async_add_executor_job(func, *args):
+        return func(*args)
+
+    return SimpleNamespace(
+        data={DATA_ASYNC_CLIENT: {(False, SSL_ALPN_HTTP11): SimpleNamespace()}},
+        async_add_executor_job=async_add_executor_job,
+    )
+
+
 class FakeCoordinator:
     """Minimal coordinator double for entity construction."""
 
@@ -69,6 +84,7 @@ class FakeCoordinator:
         self.data: dict = {}
         self.update_interval = None
         self.client = None
+        self.hass = _fake_hass()
 
 
 def _fake_vehicle() -> SimpleNamespace:
@@ -77,6 +93,7 @@ def _fake_vehicle() -> SimpleNamespace:
         series_name="Deepal S05 Max",
         car_name=None,
         model_name=None,
+        thumbnail_url=None,
     )
 
 
@@ -153,6 +170,7 @@ def _entities_by_platform() -> dict[str, list]:
                 "start",
             )
         ],
+        "image": [image.DeepalVehicleImage(coordinator, vehicle)],
     }
 
 
@@ -212,6 +230,32 @@ def test_duplicate_vehicle_guard_returns_owning_entry(monkeypatch) -> None:
         primary_config_entry = "entry-1"
 
     class FakeRegistry:
+        def async_get_devices(self, identifiers):
+            if identifiers == {("deepal", "car-1")}:
+                return [FakeDevice()]
+            return []
+
+    class FakeConfigEntries:
+        def async_get_entry(self, entry_id):
+            assert entry_id == "entry-1"
+            return owner_entry
+
+    monkeypatch.setattr(config_flow.dr, "async_get", lambda hass: FakeRegistry())
+    hass = SimpleNamespace(config_entries=FakeConfigEntries())
+
+    owner = config_flow._vehicle_device_entry(hass, "car-1")
+    assert owner is owner_entry
+    assert owner.entry_id != "current-entry"
+    assert config_flow._vehicle_device_entry(hass, "car-unknown") is None
+
+
+def test_duplicate_vehicle_guard_supports_the_2026_3_registry(monkeypatch) -> None:
+    owner_entry = SimpleNamespace(entry_id="entry-1")
+
+    class FakeDevice:
+        primary_config_entry = "entry-1"
+
+    class FakeRegistry:
         def async_get_device(self, identifiers):
             if identifiers == {("deepal", "car-1")}:
                 return FakeDevice()
@@ -225,9 +269,31 @@ def test_duplicate_vehicle_guard_returns_owning_entry(monkeypatch) -> None:
     monkeypatch.setattr(config_flow.dr, "async_get", lambda hass: FakeRegistry())
     hass = SimpleNamespace(config_entries=FakeConfigEntries())
 
-    owner = config_flow._vehicle_device_entry(hass, "car-1")
-    assert owner is owner_entry
-    assert owner.entry_id != "current-entry"
+    assert config_flow._vehicle_device_entry(hass, "car-1") is owner_entry
+    assert config_flow._vehicle_device_entry(hass, "car-unknown") is None
+
+
+def test_duplicate_vehicle_guard_supports_the_2026_3_registry(monkeypatch) -> None:
+    owner_entry = SimpleNamespace(entry_id="entry-1")
+
+    class FakeDevice:
+        primary_config_entry = "entry-1"
+
+    class FakeRegistry:
+        def async_get_device(self, *, identifiers):
+            if identifiers == {("deepal", "car-1")}:
+                return FakeDevice()
+            return None
+
+    class FakeConfigEntries:
+        def async_get_entry(self, entry_id):
+            assert entry_id == "entry-1"
+            return owner_entry
+
+    monkeypatch.setattr(config_flow.dr, "async_get", lambda hass: FakeRegistry())
+    hass = SimpleNamespace(config_entries=FakeConfigEntries())
+
+    assert config_flow._vehicle_device_entry(hass, "car-1") is owner_entry
     assert config_flow._vehicle_device_entry(hass, "car-unknown") is None
 
 
@@ -606,15 +672,17 @@ def test_config_flow_defaults_to_the_international_platform() -> None:
     }
 
 
-def test_integration_platforms_exclude_image() -> None:
+def test_integration_platforms_include_image() -> None:
     from homeassistant.const import Platform
 
     from custom_components.deepal import _platforms
 
-    entry = SimpleNamespace(
+    intl_entry = SimpleNamespace(
         data={"platform": "intl", "private_key": "test-private-key"}
     )
-    assert Platform.IMAGE not in _platforms(entry)
+    sda_entry = SimpleNamespace(data={})
+    assert Platform.IMAGE in _platforms(intl_entry)
+    assert Platform.IMAGE in _platforms(sda_entry)
 
 
 

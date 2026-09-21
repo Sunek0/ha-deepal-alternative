@@ -119,10 +119,21 @@ def _vehicle_device_entry(
     hass: HomeAssistant, car_id: str
 ) -> config_entries.ConfigEntry | None:
     """Return the config entry that owns a vehicle device, if any."""
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, car_id)})
-    if device is None or device.primary_config_entry is None:
-        return None
-    return hass.config_entries.async_get_entry(device.primary_config_entry)
+    registry = dr.async_get(hass)
+    # 2026.3 only has async_get_device; newer releases deprecate it because
+    # identifiers are no longer unique across config entries, so prefer the
+    # plural lookup when the running Home Assistant provides it.
+    async_get_devices = getattr(registry, "async_get_devices", None)
+    if async_get_devices is not None:
+        devices = async_get_devices(identifiers={(DOMAIN, car_id)})
+    else:
+        device = registry.async_get_device(identifiers={(DOMAIN, car_id)})
+        devices = [] if device is None else [device]
+
+    for device in devices:
+        if device.primary_config_entry is not None:
+            return hass.config_entries.async_get_entry(device.primary_config_entry)
+    return None
 
 
 class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):

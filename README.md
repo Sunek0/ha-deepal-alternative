@@ -76,6 +76,9 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   the **diagnostics** from the device page to see the raw function codes your car reports.
 - Signed remote commands: climate, doors, windows, trunk, charging limit/schedule, lights/horn,
   and optional app commands (defrost, seats, steering-wheel heat, charge and departure plans).
+- One vehicle image per car: the API picture when it loads, and a bundled per-model render
+  (S05, S07, SL03, L07 or a generic Deepal image) served instantly otherwise, so the device page
+  always shows a picture even when the API image is slow or missing.
 
 ## Troubleshooting
 
@@ -92,6 +95,12 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
+- **"Login attempt or request with invalid authentication" with `/api/image_proxy/...`**: the
+  browser replayed a stale vehicle image URL, something that happens after a reload, a tab resume
+  or a network change and also with other image entities. The vehicle image itself keeps working:
+  the integration falls back to the bundled render. It is a known Home Assistant issue
+  ([core#173230](https://github.com/home-assistant/core/issues/173230)); with `ip_ban_enabled`
+  disabled (the default) the warning is harmless, and a hard refresh drops the stale URL.
 
 ## Repository layout
 
