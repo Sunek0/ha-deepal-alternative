@@ -18,6 +18,52 @@ SEAT_FUNCTIONS = {
     "ventilation": ("control_seats_wind", "ventilation_level", "mdi:car-seat-cooler"),
 }
 
+# Models whose signed charge_max command is known not to change the limit: the
+# S05 reports charging info and schedule codes but no SOC-set code, and on real
+# cars the command is accepted without effect (verified live on a C857-EU).
+_UNSUPPORTED_CHARGE_LIMIT_MODELS = ("S05", "C857")
+
+
+def _normalize(value: str | None) -> str:
+    """Upper-case alphanumerics of a model field, for containment checks."""
+    return "".join(
+        character for character in (value or "").upper() if character.isalnum()
+    )
+
+
+def supports_charge_limit(vehicle: Any) -> bool:
+    """Return whether the vehicle supports setting the AC charge limit.
+
+    Only the known-unsupported models are excluded and the check is
+    case-insensitive; missing or unknown model data keeps the control, so no
+    other vehicle loses it.
+    """
+    model = " ".join(
+        filter(
+            None,
+            (
+                _normalize(vehicle.series_name),
+                _normalize(vehicle.series_code),
+                _normalize(vehicle.model_name),
+                _normalize(vehicle.model_code),
+            ),
+        )
+    )
+    return not any(code in model for code in _UNSUPPORTED_CHARGE_LIMIT_MODELS)
+
+
+def build_control_numbers(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[Any]:
+    """Build the charge limit and seat level numbers for one vehicle."""
+    entities: list[Any] = []
+    if supports_charge_limit(vehicle):
+        entities.append(DeepalChargeLimitNumber(coordinator, vehicle))
+    for seat in SEAT_LABELS:
+        for function in SEAT_FUNCTIONS:
+            entities.append(DeepalSeatLevelNumber(coordinator, vehicle, seat, function))
+    return entities
+
 
 def _set_charge_limit(condition: Any, percentage: int) -> Any:
     condition.battery.charge_limit_percent = percentage
@@ -35,17 +81,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge limit and seat level numbers."""
-
-    def _build(coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> list[Any]:
-        entities: list[Any] = [DeepalChargeLimitNumber(coordinator, vehicle)]
-        for seat in SEAT_LABELS:
-            for function in SEAT_FUNCTIONS:
-                entities.append(
-                    DeepalSeatLevelNumber(coordinator, vehicle, seat, function)
-                )
-        return entities
-
-    async_setup_control_entities(hass, entry, async_add_entities, _build)
+    async_setup_control_entities(hass, entry, async_add_entities, build_control_numbers)
 
 
 class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
