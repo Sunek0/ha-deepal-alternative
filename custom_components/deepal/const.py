@@ -1,5 +1,16 @@
 """Constants for the Deepal Alternative Home Assistant integration."""
 
+try:  # Home Assistant 2026.4 and later expose the density unit enum.
+    from homeassistant.const import UnitOfDensity
+
+    DENSITY_MICROGRAMS_PER_CUBIC_METER = (
+        UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
+    )
+except ImportError:  # Home Assistant 2026.3 only ships the legacy constant.
+    from homeassistant.const import (
+        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER as DENSITY_MICROGRAMS_PER_CUBIC_METER,
+    )
+
 DOMAIN = "deepal"
 
 PLATFORM_SDA = "sda"

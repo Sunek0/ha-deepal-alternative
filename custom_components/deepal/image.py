@@ -93,11 +93,11 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
         self._attr_unique_id = f"deepal_{vehicle.car_id}_vehicle_image"
         ImageEntity.__init__(self, coordinator.hass)
         self._asset_cache: dict[Path, bytes] = {}
+        # The state must never be None: the bundled asset (or the API image
+        # once fetched) always has a known "last updated" time.
+        self._attr_image_last_updated = datetime.now(UTC)
         if not self.vehicle.thumbnail_url:
-            # Static bundled image: content type and "last updated" only need
-            # to be set once, at startup.
             self._attr_content_type = SVG_CONTENT_TYPE
-            self._attr_image_last_updated = datetime.now(UTC)
 
     @property
     def image_url(self) -> str | None:
@@ -114,13 +114,11 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
     @property
     def image_last_updated(self) -> datetime | None:
         """Return the report time used to refresh the image cache."""
-        if self.vehicle.thumbnail_url:
-            condition = self.coordinator.data.get(self._car_id)
-            if condition is not None and condition.last_updated_timestamp is not None:
-                return datetime.fromtimestamp(
-                    condition.last_updated_timestamp, tz=UTC
-                )
-            return self._attr_image_last_updated
+        condition = self.coordinator.data.get(self._car_id)
+        if condition is not None and condition.last_updated_timestamp is not None:
+            return datetime.fromtimestamp(
+                condition.last_updated_timestamp, tz=UTC
+            )
         return self._attr_image_last_updated
 
     def _asset_path(self) -> Path:
@@ -132,12 +130,20 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
         )
 
     async def async_image(self) -> bytes | None:
-        """Return the API image bytes, or the bundled fallback."""
+        """Return the API image bytes, or the bundled fallback.
+
+        The API image is preferred, but a missing, unreachable or non-image
+        response must never leave the entity without a picture.
+        """
         if self.vehicle.thumbnail_url:
-            return await super().async_image()
+            image = await super().async_image()
+            if image:
+                return image
+
+        self._attr_content_type = SVG_CONTENT_TYPE
         path = self._asset_path()
         if path not in self._asset_cache:
-            self._asset_cache[path] = await self.hass.async_add_executor_job(
+            self._asset_cache[path] = await self.coordinator.hass.async_add_executor_job(
                 path.read_bytes
             )
         return self._asset_cache[path]
