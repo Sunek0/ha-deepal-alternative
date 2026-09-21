@@ -55,29 +55,16 @@ async def async_setup_entry(
             ])
 
         if isinstance(coordinator.client, DeepalIntlClient):
-            for key, label in (
-                ("front_left", "Front Left"),
-                ("front_right", "Front Right"),
-                ("rear_left", "Rear Left"),
-                ("rear_right", "Rear Right"),
-            ):
-                entities.append(DeepalTirePressureSensor(coordinator, vehicle, key, label))
+            for key in ("front_left", "front_right", "rear_left", "rear_right"):
+                entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
 
-            for position, label in (
-                ("front_left", "Front Left"),
-                ("front_right", "Front Right"),
-                ("rear_left", "Rear Left"),
-                ("rear_right", "Rear Right"),
-            ):
+            for position in ("front_left", "front_right", "rear_left", "rear_right"):
                 entities.append(
-                    DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level", label, "Heating")
+                    DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level")
                 )
-            for position, label in (
-                ("front_left", "Front Left"),
-                ("front_right", "Front Right"),
-            ):
+            for position in ("front_left", "front_right"):
                 entities.append(
-                    DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level", label, "Ventilation")
+                    DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level")
                 )
 
             entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
@@ -220,12 +207,11 @@ class DeepalTirePressureSensor(DeepalBaseSensor):
     _attr_native_unit_of_measurement = "bar"
     _attr_icon = "mdi:tire"
 
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str, label: str) -> None:
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
         self._key = key
         self._attr_unique_id = f"deepal_{vehicle.car_id}_tire_{key}_pressure"
-        self._attr_translation_key = "tire_pressure"
-        self._attr_translation_placeholders = {"position": label}
+        self._attr_translation_key = f"tire_pressure_{key}"
 
     @property
     def native_value(self) -> float | None:
@@ -248,19 +234,12 @@ class DeepalSeatLevelSensor(DeepalBaseSensor):
         vehicle: Any,
         position: str,
         kind: str,
-        label: str,
-        title: str,
     ) -> None:
         super().__init__(coordinator, vehicle)
         self._position = position
         self._kind = kind
         self._attr_unique_id = f"deepal_{vehicle.car_id}_seat_{position}_{kind}"
-        self._attr_translation_key = (
-            "seat_heating_level"
-            if kind == "heating_level"
-            else "seat_ventilation_level"
-        )
-        self._attr_translation_placeholders = {"position": label}
+        self._attr_translation_key = f"seat_{kind}_{position}"
 
     @property
     def native_value(self) -> int | None:

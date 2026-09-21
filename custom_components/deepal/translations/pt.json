@@ -147,14 +147,41 @@
       "trip_mileage": {
         "name": "Quilómetros da viagem"
       },
-      "tire_pressure": {
-        "name": "Pressão do pneu {position}"
+      "tire_pressure_front_left": {
+        "name": "Pressão do pneu dianteiro esquerdo"
       },
-      "seat_heating_level": {
-        "name": "Nível de aquecimento do assento {position}"
+      "tire_pressure_front_right": {
+        "name": "Pressão do pneu dianteiro direito"
       },
-      "seat_ventilation_level": {
-        "name": "Nível de ventilação do assento {position}"
+      "tire_pressure_rear_left": {
+        "name": "Pressão do pneu traseiro esquerdo"
+      },
+      "tire_pressure_rear_right": {
+        "name": "Pressão do pneu traseiro direito"
+      },
+      "seat_heating_level_front_left": {
+        "name": "Nível de aquecimento do assento dianteiro esquerdo"
+      },
+      "seat_heating_level_front_right": {
+        "name": "Nível de aquecimento do assento dianteiro direito"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Nível de aquecimento do assento traseiro esquerdo"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Nível de aquecimento do assento traseiro direito"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Nível de ventilação do assento dianteiro esquerdo"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Nível de ventilação do assento dianteiro direito"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Nível de ventilação do assento traseiro esquerdo"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Nível de ventilação do assento traseiro direito"
       },
       "steering_wheel_heater_level": {
         "name": "Nível de aquecimento do volante"
@@ -224,11 +251,29 @@
       "doors_lock_state": {
         "name": "Estado do bloqueio"
       },
-      "tire_alarm": {
-        "name": "Alarme do pneu {position}"
+      "tire_alarm_front_left": {
+        "name": "Alarme do pneu dianteiro esquerdo"
       },
-      "window_open": {
-        "name": "Janela {position} aberta"
+      "tire_alarm_front_right": {
+        "name": "Alarme do pneu dianteiro direito"
+      },
+      "tire_alarm_rear_left": {
+        "name": "Alarme do pneu traseiro esquerdo"
+      },
+      "tire_alarm_rear_right": {
+        "name": "Alarme do pneu traseiro direito"
+      },
+      "window_open_front_left": {
+        "name": "Janela dianteira esquerda aberta"
+      },
+      "window_open_front_right": {
+        "name": "Janela dianteira direita aberta"
+      },
+      "window_open_rear_left": {
+        "name": "Janela traseira esquerda aberta"
+      },
+      "window_open_rear_right": {
+        "name": "Janela traseira direita aberta"
       },
       "steering_wheel_heater": {
         "name": "Aquecimento do volante"
@@ -345,11 +390,29 @@
       "charge_limit": {
         "name": "Limite de carga"
       },
-      "seat_heating_level": {
-        "name": "Nível de aquecimento do assento {position}"
+      "seat_heating_level_front_left": {
+        "name": "Nível de aquecimento do assento dianteiro esquerdo"
       },
-      "seat_ventilation_level": {
-        "name": "Nível de ventilação do assento {position}"
+      "seat_heating_level_front_right": {
+        "name": "Nível de aquecimento do assento dianteiro direito"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Nível de aquecimento do assento traseiro esquerdo"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Nível de aquecimento do assento traseiro direito"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Nível de ventilação do assento dianteiro esquerdo"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Nível de ventilação do assento dianteiro direito"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Nível de ventilação do assento traseiro esquerdo"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Nível de ventilação do assento traseiro direito"
       }
     },
     "switch": {

@@ -37,21 +37,16 @@ async def async_setup_entry(
         ])
 
         if isinstance(coordinator.client, DeepalIntlClient):
-            for key, label in (
-                ("front_left", "Front Left"),
-                ("front_right", "Front Right"),
-                ("rear_left", "Rear Left"),
-                ("rear_right", "Rear Right"),
-            ):
-                entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key, label))
+            for key in ("front_left", "front_right", "rear_left", "rear_right"):
+                entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key))
 
-            for key, label in (
-                ("front_left_open", "Front Left"),
-                ("front_right_open", "Front Right"),
-                ("rear_left_open", "Rear Left"),
-                ("rear_right_open", "Rear Right"),
+            for key in (
+                "front_left_open",
+                "front_right_open",
+                "rear_left_open",
+                "rear_right_open",
             ):
-                entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key, label))
+                entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key))
 
             entities.append(DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle))
 
@@ -126,12 +121,11 @@ class DeepalTireAlarmBinarySensor(DeepalBaseBinarySensor):
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_icon = "mdi:car-tire-alert"
 
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str, label: str) -> None:
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
         self._key = key
         self._attr_unique_id = f"deepal_{vehicle.car_id}_tire_{key}_alarm"
-        self._attr_translation_key = "tire_alarm"
-        self._attr_translation_placeholders = {"position": label}
+        self._attr_translation_key = f"tire_alarm_{key}"
 
     @property
     def is_on(self) -> bool | None:
@@ -148,12 +142,11 @@ class DeepalWindowBinarySensor(DeepalBaseBinarySensor):
     _attr_device_class = BinarySensorDeviceClass.WINDOW
     _attr_icon = "mdi:window-closed-variant"
 
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str, label: str) -> None:
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
         self._key = key
         self._attr_unique_id = f"deepal_{vehicle.car_id}_window_{key}"
-        self._attr_translation_key = "window_open"
-        self._attr_translation_placeholders = {"position": label}
+        self._attr_translation_key = f"window_open_{key.removesuffix('_open')}"
 
     @property
     def is_on(self) -> bool | None:

@@ -147,14 +147,41 @@
       "trip_mileage": {
         "name": "Kilométrage du trajet"
       },
-      "tire_pressure": {
-        "name": "Pression du pneu {position}"
+      "tire_pressure_front_left": {
+        "name": "Pression du pneu avant gauche"
       },
-      "seat_heating_level": {
-        "name": "Niveau de chauffage du siège {position}"
+      "tire_pressure_front_right": {
+        "name": "Pression du pneu avant droit"
       },
-      "seat_ventilation_level": {
-        "name": "Niveau de ventilation du siège {position}"
+      "tire_pressure_rear_left": {
+        "name": "Pression du pneu arrière gauche"
+      },
+      "tire_pressure_rear_right": {
+        "name": "Pression du pneu arrière droit"
+      },
+      "seat_heating_level_front_left": {
+        "name": "Niveau de chauffage du siège avant gauche"
+      },
+      "seat_heating_level_front_right": {
+        "name": "Niveau de chauffage du siège avant droit"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Niveau de chauffage du siège arrière gauche"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Niveau de chauffage du siège arrière droit"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Niveau de ventilation du siège avant gauche"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Niveau de ventilation du siège avant droit"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Niveau de ventilation du siège arrière gauche"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Niveau de ventilation du siège arrière droit"
       },
       "steering_wheel_heater_level": {
         "name": "Niveau de chauffage du volant"
@@ -224,11 +251,29 @@
       "doors_lock_state": {
         "name": "État du verrouillage"
       },
-      "tire_alarm": {
-        "name": "Alarme du pneu {position}"
+      "tire_alarm_front_left": {
+        "name": "Alarme du pneu avant gauche"
       },
-      "window_open": {
-        "name": "Vitre {position} ouverte"
+      "tire_alarm_front_right": {
+        "name": "Alarme du pneu avant droit"
+      },
+      "tire_alarm_rear_left": {
+        "name": "Alarme du pneu arrière gauche"
+      },
+      "tire_alarm_rear_right": {
+        "name": "Alarme du pneu arrière droit"
+      },
+      "window_open_front_left": {
+        "name": "Vitre avant gauche ouverte"
+      },
+      "window_open_front_right": {
+        "name": "Vitre avant droit ouverte"
+      },
+      "window_open_rear_left": {
+        "name": "Vitre arrière gauche ouverte"
+      },
+      "window_open_rear_right": {
+        "name": "Vitre arrière droit ouverte"
       },
       "steering_wheel_heater": {
         "name": "Chauffage du volant"
@@ -345,11 +390,29 @@
       "charge_limit": {
         "name": "Limite de charge"
       },
-      "seat_heating_level": {
-        "name": "Niveau de chauffage du siège {position}"
+      "seat_heating_level_front_left": {
+        "name": "Niveau de chauffage du siège avant gauche"
       },
-      "seat_ventilation_level": {
-        "name": "Niveau de ventilation du siège {position}"
+      "seat_heating_level_front_right": {
+        "name": "Niveau de chauffage du siège avant droit"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Niveau de chauffage du siège arrière gauche"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Niveau de chauffage du siège arrière droit"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Niveau de ventilation du siège avant gauche"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Niveau de ventilation du siège avant droit"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Niveau de ventilation du siège arrière gauche"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Niveau de ventilation du siège arrière droit"
       }
     },
     "switch": {
