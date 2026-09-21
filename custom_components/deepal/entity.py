@@ -84,15 +84,21 @@ def async_setup_control_entities(
     entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
     build_entities: Callable[[Any, Any], list],
+    *,
+    requires_control_pin: bool = False,
 ) -> None:
     """Set up control entities for international, command-capable vehicles.
 
     MQTT-backed vehicles stay read-only unless the experimental MQTT controls
-    option is enabled.
+    option is enabled. Platforms whose commands require an ``rcToken`` pass
+    ``requires_control_pin`` so their entities are only created once the entry
+    stores the control PIN.
     """
     coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
     client = coordinator.client
     if not isinstance(client, DeepalIntlClient) or not client.private_key_pem:
+        return
+    if requires_control_pin and not client.control_pin:
         return
 
     entities = []
