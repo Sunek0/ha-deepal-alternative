@@ -37,11 +37,13 @@ from .vehicle_model import is_s05
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
 # payload has no speed, gear, outside temperature, PM2.5, air quality, charge
-# limit or vehicle status fields, so the entities would stay unknown forever.
+# limit, parking brake or vehicle status fields, so the entities would stay
+# unknown forever.
 S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
     {
         "air_quality_level",
         "charge_limit",
+        "epb_status",
         "gear",
         "inside_pm25",
         "outside_temperature",
@@ -49,6 +51,9 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
         "vehicle_status",
     }
 )
+
+# The S05 has no rear seat heating hardware (the app disables those controls).
+S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
 
 
 def build_sensors(
@@ -74,6 +79,8 @@ def build_sensors(
             entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
 
         for position in ("front_left", "front_right", "rear_left", "rear_right"):
+            if s05 and position in S05_UNSUPPORTED_SEAT_POSITIONS:
+                continue
             entities.append(
                 DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level")
             )

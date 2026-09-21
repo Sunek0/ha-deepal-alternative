@@ -459,6 +459,30 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     assert "inside_temperature" in s05_keys
     assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s05_keys)
     assert {"mileage_yesterday", "trip_mileage"} <= s07_keys
+    rear_seats = {"seat_heating_level_rear_left", "seat_heating_level_rear_right"}
+    assert rear_seats.isdisjoint(s05_keys)
+    assert rear_seats <= s07_keys
+
+
+def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+
+    s05_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, s05)
+    }
+    s07_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, s07)
+    }
+
+    assert binary_sensor.S05_UNSUPPORTED_BINARY_SENSOR_KEYS.isdisjoint(s05_keys)
+    assert binary_sensor.S05_UNSUPPORTED_BINARY_SENSOR_KEYS <= s07_keys
+    assert "front_left_seat_heating" in s05_keys
+    assert "front_left_seat_heating" in s07_keys
 
 
 class _FakeCommandClient:
