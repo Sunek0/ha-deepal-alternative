@@ -33,6 +33,64 @@ from .const import (
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import is_s05
+
+# Sensors the S05 does not report (verified live on a C857-EU): the MQTT
+# payload has no speed, gear, outside temperature, PM2.5, air quality, charge
+# limit or vehicle status fields, so the entities would stay unknown forever.
+S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
+    {
+        "air_quality_level",
+        "charge_limit",
+        "gear",
+        "inside_pm25",
+        "outside_temperature",
+        "speed",
+        "vehicle_status",
+    }
+)
+
+
+def build_sensors(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[SensorEntity]:
+    """Build the sensors for one vehicle, skipping what its model does not report."""
+    entities: list[SensorEntity] = [
+        DeepalBatterySocSensor(coordinator, vehicle),
+        DeepalRemainingRangeSensor(coordinator, vehicle),
+        DeepalOdometerSensor(coordinator, vehicle),
+    ]
+
+    s05 = is_s05(vehicle)
+
+    if coordinator.vehicle_uses_mqtt(vehicle.car_id) and not s05:
+        entities.extend([
+            DeepalMileageYesterdaySensor(coordinator, vehicle),
+            DeepalTripMileageSensor(coordinator, vehicle),
+        ])
+
+    if isinstance(coordinator.client, DeepalIntlClient):
+        for key in ("front_left", "front_right", "rear_left", "rear_right"):
+            entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
+
+        for position in ("front_left", "front_right", "rear_left", "rear_right"):
+            entities.append(
+                DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level")
+            )
+        for position in ("front_left", "front_right"):
+            entities.append(
+                DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level")
+            )
+
+        entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
+
+        entities.extend(
+            DeepalSensor(coordinator, vehicle, description)
+            for description in SENSORS
+            if not (s05 and description.key in S05_UNSUPPORTED_SENSOR_KEYS)
+        )
+
+    return entities
 
 
 async def async_setup_entry(
@@ -46,37 +104,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
 
     for vehicle in coordinator.vehicles:
-        entities.extend([
-            DeepalBatterySocSensor(coordinator, vehicle),
-            DeepalRemainingRangeSensor(coordinator, vehicle),
-            DeepalOdometerSensor(coordinator, vehicle),
-        ])
-
-        if coordinator.vehicle_uses_mqtt(vehicle.car_id):
-            entities.extend([
-                DeepalMileageYesterdaySensor(coordinator, vehicle),
-                DeepalTripMileageSensor(coordinator, vehicle),
-            ])
-
-        if isinstance(coordinator.client, DeepalIntlClient):
-            for key in ("front_left", "front_right", "rear_left", "rear_right"):
-                entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
-
-            for position in ("front_left", "front_right", "rear_left", "rear_right"):
-                entities.append(
-                    DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level")
-                )
-            for position in ("front_left", "front_right"):
-                entities.append(
-                    DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level")
-                )
-
-            entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
-
-            entities.extend(
-                DeepalSensor(coordinator, vehicle, description)
-                for description in SENSORS
-            )
+        entities.extend(build_sensors(coordinator, vehicle))
 
     async_add_entities(entities)
 

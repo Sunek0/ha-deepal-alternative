@@ -20,7 +20,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 / S05 Max (`C857` in Europe) | Telemetry over MQTT. Remote controls are experimental and opt-in. The car does not support the charge limit: the sensor and the charging schedule stay, the number does not. |
+| S05 / S05 Max (`C857` in Europe) | Telemetry over MQTT. Remote controls are experimental and opt-in. The car does not report speed, gear, outside temperature, PM2.5, air quality, vehicle status, mileage yesterday/trip or the charge limit, so those entities are not created; the charging schedule and the remaining charge time stay. |
 | S07 | Telemetry and signed remote controls through the REST API, including the charge limit. |
 | SL03 | Telemetry and signed remote controls through the REST API. No official render is bundled, so the fallback image is a text placeholder. |
 | L07 | Telemetry and signed remote controls through the REST API. No official render is bundled, so the fallback image is a text placeholder. |
@@ -139,9 +139,13 @@ status.
   the last known snapshot until the car reports again.
 - **"Límite de carga" does not appear on an S05**: the signed `charge_max` command is accepted by
   the API but does not change the limit on that model and its function configuration reports no
-  SOC-set capability, so the integration does not create the number. The charge limit sensor and
-  the charging schedule remain available; delete the orphaned `number.*_charge_limit` entity from
-  the entity registry after updating.
+  SOC-set capability, so the integration does not create the number or the sensor. The charging
+  schedule stays available; delete the orphaned `number.*_charge_limit` entity from the entity
+  registry after updating.
+- **Some sensors are missing on an S05**: speed, gear, outside temperature, PM2.5, air quality,
+  vehicle status, mileage yesterday/trip and the charge limit are not created because the car does
+  not report them. The remaining charge time shows `unknown` while the car has no estimate. Delete
+  the orphaned sensor entries from the entity registry after updating.
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.

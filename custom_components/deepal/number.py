@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import is_s05
 
 
 SEAT_LABELS = {"front_left": "Front Left", "front_right": "Front Right"}
@@ -18,38 +19,16 @@ SEAT_FUNCTIONS = {
     "ventilation": ("control_seats_wind", "ventilation_level", "mdi:car-seat-cooler"),
 }
 
-# Models whose signed charge_max command is known not to change the limit: the
-# S05 reports charging info and schedule codes but no SOC-set code, and on real
-# cars the command is accepted without effect (verified live on a C857-EU).
-_UNSUPPORTED_CHARGE_LIMIT_MODELS = ("S05", "C857")
-
-
-def _normalize(value: str | None) -> str:
-    """Upper-case alphanumerics of a model field, for containment checks."""
-    return "".join(
-        character for character in (value or "").upper() if character.isalnum()
-    )
-
 
 def supports_charge_limit(vehicle: Any) -> bool:
     """Return whether the vehicle supports setting the AC charge limit.
 
-    Only the known-unsupported models are excluded and the check is
-    case-insensitive; missing or unknown model data keeps the control, so no
-    other vehicle loses it.
+    The S05 does not: its function configuration reports no SOC-set code and
+    the signed charge_max command is accepted without changing the limit on
+    real cars. Only that model is excluded; missing or unknown model data keeps
+    the control, so no other vehicle loses it.
     """
-    model = " ".join(
-        filter(
-            None,
-            (
-                _normalize(vehicle.series_name),
-                _normalize(vehicle.series_code),
-                _normalize(vehicle.model_name),
-                _normalize(vehicle.model_code),
-            ),
-        )
-    )
-    return not any(code in model for code in _UNSUPPORTED_CHARGE_LIMIT_MODELS)
+    return not is_s05(vehicle)
 
 
 def build_control_numbers(
