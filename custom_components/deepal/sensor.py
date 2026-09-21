@@ -93,6 +93,8 @@ async def async_setup_entry(
 class DeepalBaseSensor(CoordinatorEntity[DeepalDataUpdateCoordinator], SensorEntity):
     """Base class for Deepal sensors."""
 
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         """Initialize base sensor."""
         super().__init__(coordinator)
@@ -121,7 +123,7 @@ class DeepalBatterySocSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_battery_soc"
-        self._attr_name = f"{vehicle.series_name} Battery Level"
+        self._attr_translation_key = "battery_level"
 
     @property
     def native_value(self) -> int | None:
@@ -141,7 +143,7 @@ class DeepalRemainingRangeSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_remaining_range"
-        self._attr_name = f"{vehicle.series_name} Remaining Range"
+        self._attr_translation_key = "remaining_range"
 
     @property
     def native_value(self) -> int | None:
@@ -161,7 +163,7 @@ class DeepalOdometerSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_total_odometer"
-        self._attr_name = f"{vehicle.series_name} Odometer"
+        self._attr_translation_key = "total_odometer"
 
     @property
     def native_value(self) -> float | None:
@@ -181,7 +183,7 @@ class DeepalMileageYesterdaySensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_mileage_yesterday"
-        self._attr_name = f"{vehicle.series_name} Mileage Yesterday"
+        self._attr_translation_key = "mileage_yesterday"
 
     @property
     def native_value(self) -> float | None:
@@ -201,7 +203,7 @@ class DeepalTripMileageSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_trip_mileage"
-        self._attr_name = f"{vehicle.series_name} Trip Mileage"
+        self._attr_translation_key = "trip_mileage"
 
     @property
     def native_value(self) -> float | None:
@@ -222,7 +224,8 @@ class DeepalTirePressureSensor(DeepalBaseSensor):
         super().__init__(coordinator, vehicle)
         self._key = key
         self._attr_unique_id = f"deepal_{vehicle.car_id}_tire_{key}_pressure"
-        self._attr_name = f"{vehicle.series_name} Tire {label} Pressure"
+        self._attr_translation_key = "tire_pressure"
+        self._attr_translation_placeholders = {"position": label}
 
     @property
     def native_value(self) -> float | None:
@@ -252,7 +255,12 @@ class DeepalSeatLevelSensor(DeepalBaseSensor):
         self._position = position
         self._kind = kind
         self._attr_unique_id = f"deepal_{vehicle.car_id}_seat_{position}_{kind}"
-        self._attr_name = f"{vehicle.series_name} {label} Seat {title}"
+        self._attr_translation_key = (
+            "seat_heating_level"
+            if kind == "heating_level"
+            else "seat_ventilation_level"
+        )
+        self._attr_translation_placeholders = {"position": label}
 
     @property
     def native_value(self) -> int | None:
@@ -272,7 +280,7 @@ class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_steering_wheel_heater_level"
-        self._attr_name = f"{vehicle.series_name} Steering Wheel Heater Level"
+        self._attr_translation_key = "steering_wheel_heater_level"
 
     @property
     def native_value(self) -> int | None:
@@ -480,7 +488,6 @@ class DeepalSensor(DeepalBaseSensor):
     """Extended international sensor driven by a description."""
 
     entity_description: DeepalSensorDescription
-    _attr_has_entity_name = False
 
     def __init__(
         self,
@@ -491,7 +498,7 @@ class DeepalSensor(DeepalBaseSensor):
         super().__init__(coordinator, vehicle)
         self.entity_description = description
         self._attr_unique_id = f"deepal_{vehicle.car_id}_{description.key}"
-        self._attr_name = f"{vehicle.series_name} {description.name}"
+        self._attr_translation_key = description.key
         if description.device_class is not None:
             self._attr_device_class = description.device_class
         if description.state_class is not None:

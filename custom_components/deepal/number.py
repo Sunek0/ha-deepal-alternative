@@ -64,7 +64,7 @@ class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
         """Initialize the charge limit number."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_charge_limit"
-        self._attr_name = f"{vehicle.series_name} Charge Limit"
+        self._attr_translation_key = "charge_limit"
 
     @property
     def native_value(self) -> int | None:
@@ -103,9 +103,12 @@ class DeepalSeatLevelNumber(DeepalEntity, NumberEntity):
         self._attr_unique_id = (
             f"deepal_{vehicle.car_id}_seat_{seat}_{function}_control"
         )
-        self._attr_name = (
-            f"{vehicle.series_name} {SEAT_LABELS[seat]} Seat {function.title()} Level"
+        self._attr_translation_key = (
+            "seat_heating_level"
+            if function == "heating"
+            else "seat_ventilation_level"
         )
+        self._attr_translation_placeholders = {"position": SEAT_LABELS[seat]}
         self._attr_icon = SEAT_FUNCTIONS[function][2]
 
     @property

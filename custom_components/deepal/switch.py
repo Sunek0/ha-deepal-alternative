@@ -50,7 +50,7 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
         """Initialize the charge schedule switch."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_charge_schedule"
-        self._attr_name = f"{vehicle.series_name} Charge Schedule"
+        self._attr_translation_key = "charge_schedule"
 
     @property
     def is_on(self) -> bool | None:
@@ -96,7 +96,7 @@ class DeepalSteeringWheelHeatSwitch(DeepalEntity, SwitchEntity):
         """Initialize the steering wheel heating switch."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_steering_wheel_heating"
-        self._attr_name = f"{vehicle.series_name} Steering Wheel Heating"
+        self._attr_translation_key = "steering_wheel_heating"
 
     @property
     def is_on(self) -> bool | None:

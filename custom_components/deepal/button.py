@@ -42,7 +42,7 @@ class DeepalRefreshButton(DeepalEntity, ButtonEntity):
         """Initialize the refresh button."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_refresh"
-        self._attr_name = f"{vehicle.series_name} Refresh Vehicle Data"
+        self._attr_translation_key = "refresh_vehicle_data"
 
     async def async_press(self) -> None:
         """Request fresh data and refresh the coordinator."""
@@ -64,7 +64,7 @@ class DeepalFlashLightsButton(DeepalEntity, ButtonEntity):
         """Initialize the flash lights button."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_flash_lights"
-        self._attr_name = f"{vehicle.series_name} Flash Lights"
+        self._attr_translation_key = "flash_lights"
 
     async def async_press(self) -> None:
         """Flash the lights."""
@@ -86,7 +86,7 @@ class DeepalHonkHornButton(DeepalEntity, ButtonEntity):
         """Initialize the horn button."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_honk_horn"
-        self._attr_name = f"{vehicle.series_name} Honk Horn"
+        self._attr_translation_key = "honk_horn"
 
     async def async_press(self) -> None:
         """Sound the horn."""

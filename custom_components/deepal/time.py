@@ -25,10 +25,10 @@ async def async_setup_entry(
         async_add_entities,
         lambda coordinator, vehicle: [
             DeepalChargeScheduleTime(
-                coordinator, vehicle, "charge_schedule_start", "Charge Schedule Start", "start"
+                coordinator, vehicle, "charge_schedule_start", "start"
             ),
             DeepalChargeScheduleTime(
-                coordinator, vehicle, "charge_schedule_end", "Charge Schedule End", "end"
+                coordinator, vehicle, "charge_schedule_end", "end"
             ),
         ],
     )
@@ -61,14 +61,13 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
         coordinator: DeepalDataUpdateCoordinator,
         vehicle: Any,
         key: str,
-        name: str,
         field: str,
     ) -> None:
         """Initialize the schedule time entity."""
         super().__init__(coordinator, vehicle)
         self._field = field
         self._attr_unique_id = f"deepal_{vehicle.car_id}_{key}"
-        self._attr_name = f"{vehicle.series_name} {name}"
+        self._attr_translation_key = key
 
     @property
     def native_value(self) -> time | None:

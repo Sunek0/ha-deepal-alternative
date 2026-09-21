@@ -120,13 +120,257 @@
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
         "data_description": {
           "scan_interval": "How often Home Assistant polls the vehicle when no MQTT telemetry is available, in seconds (30-3600).",
-          "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
+          "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk.",
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number redacted. Enable only while troubleshooting.",
           "enable_mqtt_controls": "Allow remote commands for MQTT-backed vehicles (S05). Experimental: MQTT command sending is not verified yet.",
           "os_version": "Android version declared in the x-os-version header. The default (9) matches the verified app capture; change it only to diagnose requests rejected by the gateway.",
-          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
+          "environment": "Regional gateway set used for the international API. Europe by default.",
           "send_timestamps": "Send the diagnostic X-Tsp-Timestamp header (epoch milliseconds) with every request. Disabled by default."
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Battery level"
+      },
+      "remaining_range": {
+        "name": "Remaining range"
+      },
+      "total_odometer": {
+        "name": "Total odometer"
+      },
+      "mileage_yesterday": {
+        "name": "Mileage yesterday"
+      },
+      "trip_mileage": {
+        "name": "Trip mileage"
+      },
+      "tire_pressure": {
+        "name": "{position} tire pressure"
+      },
+      "seat_heating_level": {
+        "name": "{position} seat heating level"
+      },
+      "seat_ventilation_level": {
+        "name": "{position} seat ventilation level"
+      },
+      "steering_wheel_heater_level": {
+        "name": "Steering wheel heater level"
+      },
+      "speed": {
+        "name": "Speed"
+      },
+      "inside_temperature": {
+        "name": "Inside temperature"
+      },
+      "outside_temperature": {
+        "name": "Outside temperature"
+      },
+      "cabin_humidity": {
+        "name": "Cabin humidity"
+      },
+      "inside_pm25": {
+        "name": "Inside PM2.5"
+      },
+      "air_quality_level": {
+        "name": "Air quality level"
+      },
+      "charge_status": {
+        "name": "Charge status"
+      },
+      "charge_current": {
+        "name": "Charge current"
+      },
+      "ac_charge_current": {
+        "name": "AC charge current"
+      },
+      "dc_charge_current": {
+        "name": "DC charge current"
+      },
+      "remaining_charge_time": {
+        "name": "Remaining charge time"
+      },
+      "charge_limit": {
+        "name": "Charge limit"
+      },
+      "charge_schedule_start": {
+        "name": "Charge schedule start"
+      },
+      "charge_schedule_end": {
+        "name": "Charge schedule end"
+      },
+      "vehicle_status": {
+        "name": "Vehicle status"
+      },
+      "power_status": {
+        "name": "Power status"
+      },
+      "gear": {
+        "name": "Gear"
+      },
+      "epb_status": {
+        "name": "Electronic parking brake"
+      },
+      "last_updated": {
+        "name": "Last updated"
+      }
+    },
+    "binary_sensor": {
+      "charger_plugged": {
+        "name": "Charger plugged"
+      },
+      "doors_lock_state": {
+        "name": "Doors lock state"
+      },
+      "tire_alarm": {
+        "name": "{position} tire alarm"
+      },
+      "window_open": {
+        "name": "{position} window open"
+      },
+      "steering_wheel_heater": {
+        "name": "Steering wheel heater"
+      },
+      "engine": {
+        "name": "Engine"
+      },
+      "defrost": {
+        "name": "Front defrost"
+      },
+      "connected": {
+        "name": "Cloud connection"
+      },
+      "high_beam": {
+        "name": "High beam"
+      },
+      "low_beam": {
+        "name": "Low beam"
+      },
+      "position_lamp": {
+        "name": "Position lamp"
+      },
+      "left_turn_signal": {
+        "name": "Left turn signal"
+      },
+      "right_turn_signal": {
+        "name": "Right turn signal"
+      },
+      "any_door_open": {
+        "name": "Any door open"
+      },
+      "door_front_left": {
+        "name": "Front left door"
+      },
+      "door_front_right": {
+        "name": "Front right door"
+      },
+      "door_rear_left": {
+        "name": "Rear left door"
+      },
+      "door_rear_right": {
+        "name": "Rear right door"
+      },
+      "trunk": {
+        "name": "Trunk"
+      },
+      "hood": {
+        "name": "Hood"
+      },
+      "driver_door_unlocked": {
+        "name": "Driver door unlocked"
+      },
+      "passenger_door_unlocked": {
+        "name": "Passenger door unlocked"
+      },
+      "dc_gun_connected": {
+        "name": "DC gun connected"
+      },
+      "charging": {
+        "name": "Charging"
+      },
+      "charge_schedule_enabled": {
+        "name": "Charge schedule enabled"
+      },
+      "front_left_seat_heating": {
+        "name": "Front left seat heating"
+      },
+      "front_right_seat_heating": {
+        "name": "Front right seat heating"
+      },
+      "rear_left_seat_heating": {
+        "name": "Rear left seat heating"
+      },
+      "rear_right_seat_heating": {
+        "name": "Rear right seat heating"
+      },
+      "front_left_seat_ventilation": {
+        "name": "Front left seat ventilation"
+      },
+      "front_right_seat_ventilation": {
+        "name": "Front right seat ventilation"
+      }
+    },
+    "button": {
+      "refresh_vehicle_data": {
+        "name": "Refresh vehicle data"
+      },
+      "flash_lights": {
+        "name": "Flash lights"
+      },
+      "honk_horn": {
+        "name": "Honk horn"
+      }
+    },
+    "climate": {
+      "cabin_climate": {
+        "name": "Cabin climate"
+      }
+    },
+    "cover": {
+      "windows": {
+        "name": "Windows"
+      },
+      "trunk": {
+        "name": "Trunk"
+      }
+    },
+    "lock": {
+      "doors": {
+        "name": "Doors"
+      }
+    },
+    "number": {
+      "charge_limit": {
+        "name": "Charge limit"
+      },
+      "seat_heating_level": {
+        "name": "{position} seat heating level"
+      },
+      "seat_ventilation_level": {
+        "name": "{position} seat ventilation level"
+      }
+    },
+    "switch": {
+      "charge_schedule": {
+        "name": "Charge schedule"
+      },
+      "steering_wheel_heating": {
+        "name": "Steering wheel heating"
+      }
+    },
+    "time": {
+      "charge_schedule_start": {
+        "name": "Charge schedule start"
+      },
+      "charge_schedule_end": {
+        "name": "Charge schedule end"
+      }
+    },
+    "image": {
+      "vehicle_image": {
+        "name": "Vehicle image"
       }
     }
   }

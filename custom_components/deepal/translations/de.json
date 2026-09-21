@@ -120,13 +120,257 @@
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
         "data_description": {
           "scan_interval": "Wie oft Home Assistant das Fahrzeug abfragt, wenn keine MQTT-Telemetrie verfügbar ist, in Sekunden (30-3600).",
-          "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums; er wird gegen ein Token getauscht, das regelmäßig abläuft und dann erneut abgefragt wird.",
+          "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit redigierten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
           "enable_mqtt_controls": "Fernbefehle für MQTT-Fahrzeuge (S05) erlauben. Experimentell: Das Senden von MQTT-Befehlen ist noch nicht verifiziert.",
           "os_version": "Im x-os-version-Header gemeldete Android-Version. Der Standard (9) entspricht dem verifizierten App-Mitschnitt; ändere ihn nur, um vom Gateway abgelehnte Anfragen zu diagnostizieren.",
-          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa; Einträge, die die entfernten EU-Migrations- oder Vorproduktionsumgebungen gespeichert hatten, fallen auf Europa zurück.",
+          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa.",
           "send_timestamps": "Sendet den diagnostischen X-Tsp-Timestamp-Header (Epoch in Millisekunden) mit jeder Anfrage. Standardmäßig deaktiviert."
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery_level": {
+        "name": "Batteriestand"
+      },
+      "remaining_range": {
+        "name": "Restreichweite"
+      },
+      "total_odometer": {
+        "name": "Gesamtkilometerstand"
+      },
+      "mileage_yesterday": {
+        "name": "Kilometer gestern"
+      },
+      "trip_mileage": {
+        "name": "Kilometer der Fahrt"
+      },
+      "tire_pressure": {
+        "name": "Reifendruck {position}"
+      },
+      "seat_heating_level": {
+        "name": "Sitzheizungsstufe {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Sitzbelüftungsstufe {position}"
+      },
+      "steering_wheel_heater_level": {
+        "name": "Lenkradheizungsstufe"
+      },
+      "speed": {
+        "name": "Geschwindigkeit"
+      },
+      "inside_temperature": {
+        "name": "Innentemperatur"
+      },
+      "outside_temperature": {
+        "name": "Außentemperatur"
+      },
+      "cabin_humidity": {
+        "name": "Luftfeuchtigkeit im Innenraum"
+      },
+      "inside_pm25": {
+        "name": "PM2.5 innen"
+      },
+      "air_quality_level": {
+        "name": "Luftqualitätsstufe"
+      },
+      "charge_status": {
+        "name": "Ladestatus"
+      },
+      "charge_current": {
+        "name": "Ladestrom"
+      },
+      "ac_charge_current": {
+        "name": "Wechselstrom-Ladestrom"
+      },
+      "dc_charge_current": {
+        "name": "Gleichstrom-Ladestrom"
+      },
+      "remaining_charge_time": {
+        "name": "Restladezeit"
+      },
+      "charge_limit": {
+        "name": "Ladelimit"
+      },
+      "charge_schedule_start": {
+        "name": "Start Ladezeitplan"
+      },
+      "charge_schedule_end": {
+        "name": "Ende Ladezeitplan"
+      },
+      "vehicle_status": {
+        "name": "Fahrzeugstatus"
+      },
+      "power_status": {
+        "name": "Leistungsstatus"
+      },
+      "gear": {
+        "name": "Gang"
+      },
+      "epb_status": {
+        "name": "Elektrische Feststellbremse"
+      },
+      "last_updated": {
+        "name": "Letzte Aktualisierung"
+      }
+    },
+    "binary_sensor": {
+      "charger_plugged": {
+        "name": "Ladegerät angeschlossen"
+      },
+      "doors_lock_state": {
+        "name": "Türverriegelungsstatus"
+      },
+      "tire_alarm": {
+        "name": "Reifenalarm {position}"
+      },
+      "window_open": {
+        "name": "Fenster {position} offen"
+      },
+      "steering_wheel_heater": {
+        "name": "Lenkradheizung"
+      },
+      "engine": {
+        "name": "Motor"
+      },
+      "defrost": {
+        "name": "Frontscheibenenteisung"
+      },
+      "connected": {
+        "name": "Cloud-Verbindung"
+      },
+      "high_beam": {
+        "name": "Fernlicht"
+      },
+      "low_beam": {
+        "name": "Abblendlicht"
+      },
+      "position_lamp": {
+        "name": "Standlicht"
+      },
+      "left_turn_signal": {
+        "name": "Blinker links"
+      },
+      "right_turn_signal": {
+        "name": "Blinker rechts"
+      },
+      "any_door_open": {
+        "name": "Irgendeine Tür offen"
+      },
+      "door_front_left": {
+        "name": "Vordere linke Tür"
+      },
+      "door_front_right": {
+        "name": "Vordere rechte Tür"
+      },
+      "door_rear_left": {
+        "name": "Hintere linke Tür"
+      },
+      "door_rear_right": {
+        "name": "Hintere rechte Tür"
+      },
+      "trunk": {
+        "name": "Kofferraum"
+      },
+      "hood": {
+        "name": "Motorhaube"
+      },
+      "driver_door_unlocked": {
+        "name": "Fahrertür entriegelt"
+      },
+      "passenger_door_unlocked": {
+        "name": "Beifahrertür entriegelt"
+      },
+      "dc_gun_connected": {
+        "name": "DC-Stecker angeschlossen"
+      },
+      "charging": {
+        "name": "Lädt"
+      },
+      "charge_schedule_enabled": {
+        "name": "Ladezeitplan aktiviert"
+      },
+      "front_left_seat_heating": {
+        "name": "Sitzheizung vorne links"
+      },
+      "front_right_seat_heating": {
+        "name": "Sitzheizung vorne rechts"
+      },
+      "rear_left_seat_heating": {
+        "name": "Sitzheizung hinten links"
+      },
+      "rear_right_seat_heating": {
+        "name": "Sitzheizung hinten rechts"
+      },
+      "front_left_seat_ventilation": {
+        "name": "Sitzbelüftung vorne links"
+      },
+      "front_right_seat_ventilation": {
+        "name": "Sitzbelüftung vorne rechts"
+      }
+    },
+    "button": {
+      "refresh_vehicle_data": {
+        "name": "Fahrzeugdaten aktualisieren"
+      },
+      "flash_lights": {
+        "name": "Lichthupe"
+      },
+      "honk_horn": {
+        "name": "Hupen"
+      }
+    },
+    "climate": {
+      "cabin_climate": {
+        "name": "Innenraumklima"
+      }
+    },
+    "cover": {
+      "windows": {
+        "name": "Fenster"
+      },
+      "trunk": {
+        "name": "Kofferraum"
+      }
+    },
+    "lock": {
+      "doors": {
+        "name": "Türen"
+      }
+    },
+    "number": {
+      "charge_limit": {
+        "name": "Ladelimit"
+      },
+      "seat_heating_level": {
+        "name": "Sitzheizungsstufe {position}"
+      },
+      "seat_ventilation_level": {
+        "name": "Sitzbelüftungsstufe {position}"
+      }
+    },
+    "switch": {
+      "charge_schedule": {
+        "name": "Ladezeitplan"
+      },
+      "steering_wheel_heating": {
+        "name": "Lenkradheizung"
+      }
+    },
+    "time": {
+      "charge_schedule_start": {
+        "name": "Start Ladezeitplan"
+      },
+      "charge_schedule_end": {
+        "name": "Ende Ladezeitplan"
+      }
+    },
+    "image": {
+      "vehicle_image": {
+        "name": "Fahrzeugbild"
       }
     }
   }
