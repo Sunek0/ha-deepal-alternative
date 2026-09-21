@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Verify the tag matches the manifest version
+        run: |
+          python - <<'EOF'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          version = json.loads(
+              Path("custom_components/deepal/manifest.json").read_text(encoding="utf-8")
+          )["version"]
+          if tag != version:
+              sys.exit(f"Tag {tag} does not match manifest version {version}")
+          print(f"Tag {tag} matches manifest version")
+          EOF
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}"
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag
+          fi
