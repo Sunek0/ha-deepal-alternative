@@ -31,6 +31,7 @@ from custom_components.deepal import (
     config_flow,
     cover,
     diagnostics,
+    entity,
     image,
     lock,
     number,
@@ -88,6 +89,7 @@ class FakeCoordinator:
         self.client = None
         self.hass = _fake_hass()
         self.mqtt_vehicles: set[str] = set()
+        self.entry = SimpleNamespace(options={})
 
     def vehicle_uses_mqtt(self, car_id: str) -> bool:
         """Return whether the vehicle is marked as MQTT-backed."""
@@ -459,6 +461,65 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     assert "inside_temperature" in s05_keys
     assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s05_keys)
     assert {"mileage_yesterday", "trip_mileage"} <= s07_keys
+    rear_seats = {"seat_heating_level_rear_left", "seat_heating_level_rear_right"}
+    assert rear_seats.isdisjoint(s05_keys)
+    assert rear_seats <= s07_keys
+
+
+def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+
+    s05_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, s05)
+    }
+    s07_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, s07)
+    }
+
+    assert binary_sensor.S05_UNSUPPORTED_BINARY_SENSOR_KEYS.isdisjoint(s05_keys)
+    assert binary_sensor.S05_UNSUPPORTED_BINARY_SENSOR_KEYS <= s07_keys
+    assert "front_left_seat_heating" in s05_keys
+    assert "front_left_seat_heating" in s07_keys
+
+
+def _control_client(control_pin: str | None) -> DeepalIntlClient:
+    client = object.__new__(DeepalIntlClient)
+    client.private_key_pem = "test-private-key"
+    client.control_pin = control_pin
+    return client
+
+
+@pytest.mark.parametrize(
+    ("control_pin", "requires_pin", "expected"),
+    [
+        (None, True, 0),
+        (None, False, 1),
+        ("1234", True, 1),
+    ],
+)
+def test_control_entities_require_the_control_pin(
+    control_pin: str | None, requires_pin: bool, expected: int
+) -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = _control_client(control_pin)
+    coordinator.vehicles = [_fake_vehicle()]
+    entry = SimpleNamespace(runtime_data=SimpleNamespace(coordinator=coordinator))
+    added: list = []
+
+    entity.async_setup_control_entities(
+        None,
+        entry,
+        added.extend,
+        lambda coordinator, vehicle: [object()],
+        requires_control_pin=requires_pin,
+    )
+
+    assert len(added) == expected
 
 
 class _FakeCommandClient:

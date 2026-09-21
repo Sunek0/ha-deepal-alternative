@@ -18,6 +18,49 @@ from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import is_s05
+
+# The S05 has no rear seat heating hardware (the app disables those controls).
+S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
+    {
+        "rear_left_seat_heating",
+        "rear_right_seat_heating",
+    }
+)
+
+
+def build_binary_sensors(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[BinarySensorEntity]:
+    """Build the binary sensors for one vehicle, skipping what its model lacks."""
+    entities: list[BinarySensorEntity] = [
+        DeepalChargerPluggedBinarySensor(coordinator, vehicle),
+        DeepalDoorsLockedBinarySensor(coordinator, vehicle),
+    ]
+
+    s05 = is_s05(vehicle)
+
+    if isinstance(coordinator.client, DeepalIntlClient):
+        for key in ("front_left", "front_right", "rear_left", "rear_right"):
+            entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key))
+
+        for key in (
+            "front_left_open",
+            "front_right_open",
+            "rear_left_open",
+            "rear_right_open",
+        ):
+            entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key))
+
+        entities.append(DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle))
+
+        entities.extend(
+            DeepalBinarySensor(coordinator, vehicle, description)
+            for description in BINARY_SENSORS
+            if not (s05 and description.key in S05_UNSUPPORTED_BINARY_SENSOR_KEYS)
+        )
+
+    return entities
 
 
 async def async_setup_entry(
@@ -31,29 +74,7 @@ async def async_setup_entry(
     entities: list[BinarySensorEntity] = []
 
     for vehicle in coordinator.vehicles:
-        entities.extend([
-            DeepalChargerPluggedBinarySensor(coordinator, vehicle),
-            DeepalDoorsLockedBinarySensor(coordinator, vehicle),
-        ])
-
-        if isinstance(coordinator.client, DeepalIntlClient):
-            for key in ("front_left", "front_right", "rear_left", "rear_right"):
-                entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key))
-
-            for key in (
-                "front_left_open",
-                "front_right_open",
-                "rear_left_open",
-                "rear_right_open",
-            ):
-                entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key))
-
-            entities.append(DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle))
-
-            entities.extend(
-                DeepalBinarySensor(coordinator, vehicle, description)
-                for description in BINARY_SENSORS
-            )
+        entities.extend(build_binary_sensors(coordinator, vehicle))
 
     async_add_entities(entities)
 

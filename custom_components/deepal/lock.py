@@ -23,7 +23,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up the door lock entity."""
     async_setup_control_entities(
-        hass, entry, async_add_entities, lambda coordinator, vehicle: [DeepalDoorsLock(coordinator, vehicle)]
+        hass,
+        entry,
+        async_add_entities,
+        lambda coordinator, vehicle: [DeepalDoorsLock(coordinator, vehicle)],
+        requires_control_pin=True,
     )
 
 

@@ -43,6 +43,7 @@ async def async_setup_entry(
             DeepalWindowsCover(coordinator, vehicle),
             DeepalTrunkCover(coordinator, vehicle),
         ],
+        requires_control_pin=True,
     )
 
 
