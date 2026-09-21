@@ -42,7 +42,7 @@ secondary account only for Home Assistant:
 ### HACS
 
 1. In HACS, add this repository as a custom repository of type **Integration**:
-   `https://github.com/sunek0/ha-deepal-alternative`.
+   `https://github.com/Sunek0/ha-deepal-alternative`.
 2. Install **Deepal Alternative** and restart Home Assistant.
 3. Add the integration from **Settings > Devices & services**, choose the international platform and
    log in with an email or SMS code (use the secondary account from above).
