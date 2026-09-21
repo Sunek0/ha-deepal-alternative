@@ -108,7 +108,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - On the S05 the controls are experimental and opt-in over MQTT, and the charge limit number is
   not created because the car does not support it.
 - The door lock, window and trunk commands require the remote control PIN created with the account
-  Home Assistant signs in with.
+  Home Assistant signs in with; their entities are only created once the PIN is saved in the
+  integration options.
 
 ### Vehicle image
 
