@@ -1,6 +1,9 @@
 """Tests for the Home Assistant coordinator command flow."""
 
 import pytest
+
+pytest.importorskip("homeassistant")
+
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.deepal.coordinator import DeepalDataUpdateCoordinator

@@ -22,3 +22,7 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
+          # Store-listing checks that need GitHub repository settings (description,
+          # topics) and README images. Remove them once the repository is ready for
+          # a default-store submission; custom repositories do not need them.
+          ignore: description topics images
