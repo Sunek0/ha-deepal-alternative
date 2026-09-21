@@ -54,9 +54,11 @@ from .deepal.endpoints import INTL_ENVIRONMENTS
 
 _LOGGER = logging.getLogger(__name__)
 
+DEFAULT_PLATFORM = PLATFORM_INTL
+
 PLATFORM_OPTIONS = {
-    PLATFORM_SDA: "SDA (China)",
     PLATFORM_INTL: "International (Europe)",
+    PLATFORM_SDA: "SDA (China)",
 }
 
 LOGIN_METHOD_EMAIL = "email"
@@ -145,7 +147,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_PLATFORM, default=PLATFORM_SDA): vol.In(
+                vol.Required(CONF_PLATFORM, default=DEFAULT_PLATFORM): vol.In(
                     PLATFORM_OPTIONS
                 ),
             }

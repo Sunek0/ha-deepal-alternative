@@ -600,6 +600,15 @@ async def test_diagnostics_report_survives_an_empty_entry() -> None:
     assert report["unmapped_mqtt_keys"] == {}
 
 
+def test_config_flow_defaults_to_the_international_platform() -> None:
+    assert config_flow.DEFAULT_PLATFORM == config_flow.PLATFORM_INTL
+    assert next(iter(config_flow.PLATFORM_OPTIONS)) == config_flow.PLATFORM_INTL
+    assert set(config_flow.PLATFORM_OPTIONS) == {
+        config_flow.PLATFORM_INTL,
+        config_flow.PLATFORM_SDA,
+    }
+
+
 def test_integration_platforms_include_image() -> None:
     from homeassistant.const import Platform
 
