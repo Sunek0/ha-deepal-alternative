@@ -122,10 +122,6 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
   keys and the per-vehicle capability codes reported by the app backend.
 
-See [`docs/intl-api.md`](docs/intl-api.md) for the protocol notes and
-[`docs/mqtt-parameter-inventory.md`](docs/mqtt-parameter-inventory.md) for the MQTT parameter
-status.
-
 ## Troubleshooting
 
 - **No control can be changed**: check first whether the official app can change it with the same
@@ -157,31 +153,6 @@ status.
   the integration falls back to the bundled render. It is a known Home Assistant issue
   ([core#173230](https://github.com/home-assistant/core/issues/173230)); with `ip_ban_enabled`
   disabled (the default) the warning is harmless, and a hard refresh drops the stale URL.
-
-## Repository layout
-
-| Path | Purpose |
-| --- | --- |
-| `deepal_sdk/` | Standalone async Python SDK (`httpx` + `pydantic`). |
-| `custom_components/deepal/` | Home Assistant integration. |
-| `custom_components/deepal/deepal/` | Vendored SDK copy used by the integration (relative imports). |
-| `docs/` | Protocol notes, recovered-app evidence and validation guides. |
-| `openspec/` | Change proposals and capability specs. |
-
-## Development
-
-```bash
-.venv/bin/pip install -e "deepal_sdk[dev,ha]"
-.venv/bin/python -m pytest deepal_sdk/tests -q
-diff -r -x "__pycache__" -x "*.pyc" deepal_sdk/deepal custom_components/deepal/deepal
-```
-
-The last command must only report the rewritten relative imports: the vendored copy has to stay in
-sync with the SDK.
-
-Releases are published from `master` as `vX.Y.Z` tags; the `Release` workflow verifies that the tag
-matches `custom_components/deepal/manifest.json` before creating the GitHub release. The full
-Gitflow checklist lives in [`docs/releasing.md`](docs/releasing.md).
 
 ## Disclaimer
 
