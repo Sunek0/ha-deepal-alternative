@@ -83,7 +83,7 @@ def _build_client(entry: DeepalConfigEntry) -> DeepalClient | DeepalIntlClient:
 
 def _platforms(entry: DeepalConfigEntry) -> list[Platform]:
     """Return the entity platforms for an entry."""
-    platforms = [Platform.SENSOR, Platform.BINARY_SENSOR]
+    platforms = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.IMAGE]
     if (
         entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
         and entry.data.get(CONF_PRIVATE_KEY)
@@ -140,7 +140,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
 
     entry.runtime_data = DeepalRuntimeData(client=client, coordinator=coordinator)
 
-    await hass.config_entries.async_forward_entry_setups(entry, _platforms(entry))
+    platforms = _platforms(entry)
+    _LOGGER.debug(
+        "Deepal setting up platforms: %s", [platform.value for platform in platforms]
+    )
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     return True
 

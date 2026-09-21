@@ -131,6 +131,11 @@
     }
   },
   "entity": {
+    "image": {
+      "vehicle_image": {
+        "name": "Image du véhicule"
+      }
+    },
     "sensor": {
       "battery_level": {
         "name": "Niveau de batterie"
