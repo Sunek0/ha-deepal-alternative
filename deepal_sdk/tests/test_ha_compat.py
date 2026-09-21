@@ -1,4 +1,4 @@
-"""Home Assistant 2026.9 compatibility regression tests.
+"""Home Assistant integration regression tests (2026.3 baseline).
 
 The tests exercise units, device information, unique ids and the
 duplicate-vehicle guard without starting a Home Assistant runtime.
@@ -15,7 +15,10 @@ import pytest
 
 pytest.importorskip("homeassistant")
 
-from homeassistant.const import UnitOfDensity, UnitOfRatio
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    PERCENTAGE,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -158,7 +161,7 @@ def _entities_by_platform() -> dict[str, list]:
 def test_hacs_metadata_declares_supported_baseline() -> None:
     metadata = json.loads(HACS_METADATA.read_text(encoding="utf-8"))
     assert metadata["name"] == "Deepal Alternative"
-    assert metadata["homeassistant"] == "2026.9.0"
+    assert metadata["homeassistant"] == "2026.3.0"
     assert "ES" in metadata["country"]
 
 
@@ -169,15 +172,15 @@ def test_percentage_entities_use_ratio_enumerator() -> None:
     charge_limit = number.DeepalChargeLimitNumber(coordinator, vehicle)
     descriptions = {description.key: description for description in sensor.SENSORS}
 
-    assert battery._attr_native_unit_of_measurement is UnitOfRatio.PERCENTAGE
-    assert charge_limit._attr_native_unit_of_measurement is UnitOfRatio.PERCENTAGE
+    assert battery._attr_native_unit_of_measurement is PERCENTAGE
+    assert charge_limit._attr_native_unit_of_measurement is PERCENTAGE
     assert (
         descriptions["cabin_humidity"].native_unit_of_measurement
-        is UnitOfRatio.PERCENTAGE
+        is PERCENTAGE
     )
     assert (
         descriptions["charge_limit"].native_unit_of_measurement
-        is UnitOfRatio.PERCENTAGE
+        is PERCENTAGE
     )
 
 
@@ -185,7 +188,7 @@ def test_density_entity_uses_density_enumerator() -> None:
     descriptions = {description.key: description for description in sensor.SENSORS}
     assert (
         descriptions["inside_pm25"].native_unit_of_measurement
-        is UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
+        is CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
     )
 
 
@@ -481,7 +484,7 @@ def test_integration_has_no_removed_api_references() -> None:
         for path in sorted(INTEGRATION_DIR.rglob("*.py"))
     )
     assert "hass.data[DOMAIN]" not in source
-    assert "CONCENTRATION_" not in source
+    assert "UnitOfRatio" not in source
 
 
 class _DiagnosticsCoordinator:
@@ -673,6 +676,41 @@ async def test_vehicle_image_entity_constructor_registers_unique_id(
     assert entity._attr_unique_id == "deepal_car-1_vehicle_image"
     assert entity._attr_translation_key == "vehicle_image"
     assert entity._attr_has_entity_name is True
+
+
+@pytest.mark.asyncio
+async def test_vehicle_image_falls_back_when_api_image_fails(monkeypatch) -> None:
+    async def fake_executor(job, *args):
+        return job(*args)
+
+    async def failing_fetch(self, url):
+        return None
+
+    monkeypatch.setattr(
+        "homeassistant.components.image.get_async_client",
+        lambda hass, verify_ssl=True: None,
+    )
+    monkeypatch.setattr(
+        "homeassistant.components.image.ImageEntity._async_load_image_from_url",
+        failing_fetch,
+    )
+
+    hass = SimpleNamespace(data={}, async_add_executor_job=fake_executor)
+    coordinator = FakeCoordinator()
+    coordinator.hass = hass
+    coordinator.data = {}
+    vehicle = _fake_vehicle()
+    vehicle.thumbnail_url = "https://example.invalid/car.png"
+    vehicle.series_name = "Deepal S05"
+
+    entity = image.DeepalVehicleImage(coordinator, vehicle)
+    entity.platform_data = SimpleNamespace(platform_name="deepal", domain="image")
+
+    picture = await entity.async_image()
+
+    assert b"<svg" in picture[:400]
+    assert entity.content_type == "image/svg+xml"
+    assert entity.image_last_updated is not None
 
 
 def test_vehicle_image_entity_prefers_api_url() -> None:

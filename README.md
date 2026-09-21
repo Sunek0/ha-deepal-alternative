@@ -32,8 +32,8 @@ secondary account only for Home Assistant:
 
 ## Requirements
 
-- Home Assistant 2026.9.0 or newer (Python 3.14.2+), matching the `homeassistant` baseline in
-  `hacs.json`.
+- Home Assistant 2026.3.0 or newer, matching the `homeassistant` baseline in `hacs.json`
+  (Python 3.13+; Home Assistant 2026.9 uses Python 3.14).
 - An international My Changan account (email or SMS login). The HACS metadata advertises `ES` as
   the supported country.
 

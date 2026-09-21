@@ -12,10 +12,9 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    UnitOfDensity,
+    PERCENTAGE,
     UnitOfElectricCurrent,
     UnitOfLength,
-    UnitOfRatio,
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfTime,
@@ -25,7 +24,12 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
+from .const import (
+    DEFAULT_MODEL,
+    DENSITY_MICROGRAMS_PER_CUBIC_METER,
+    DOMAIN,
+    MANUFACTURER,
+)
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
@@ -104,7 +108,7 @@ class DeepalBatterySocSensor(DeepalBaseSensor):
 
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
+    _attr_native_unit_of_measurement = PERCENTAGE
     _attr_icon = "mdi:car-battery"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
@@ -309,7 +313,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.climate.humidity,
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+        native_unit_of_measurement=PERCENTAGE,
         icon="mdi:water-percent",
     ),
     DeepalSensorDescription(
@@ -318,7 +322,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.climate.inside_pm25,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=DENSITY_MICROGRAMS_PER_CUBIC_METER,
         icon="mdi:blur",
     ),
     DeepalSensorDescription(
@@ -383,7 +387,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.battery.charge_limit_percent,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfRatio.PERCENTAGE,
+        native_unit_of_measurement=PERCENTAGE,
         icon="mdi:battery-lock",
     ),
     DeepalSensorDescription(

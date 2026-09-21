@@ -3,7 +3,7 @@
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import UnitOfRatio
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -54,7 +54,7 @@ class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
     _attr_native_min_value = 60
     _attr_native_max_value = 100
     _attr_native_step = 1
-    _attr_native_unit_of_measurement = UnitOfRatio.PERCENTAGE
+    _attr_native_unit_of_measurement = PERCENTAGE
     _attr_mode = NumberMode.SLIDER
     _attr_icon = "mdi:battery-heart"
 
