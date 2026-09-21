@@ -13,6 +13,23 @@ L07) over the official international and chinese API.
   in to the app again can invalidate the Home Assistant session. Use a **secondary account** shared
   from your main account to avoid this (see below).
 
+## Supported vehicles
+
+The integration talks to the official international My Changan platform and targets the European
+models; Chinese SDA accounts can also be configured by pasting an access token.
+
+| Model | Notes |
+| --- | --- |
+| S05 / S05 Max (`C857` in Europe) | Telemetry over MQTT. Remote controls are experimental and opt-in. The car does not support the charge limit: the sensor and the charging schedule stay, the number does not. |
+| S07 | Telemetry and signed remote controls through the REST API, including the charge limit. |
+| SL03 | Telemetry and signed remote controls through the REST API. No official render is bundled, so the fallback image is a text placeholder. |
+| L07 | Telemetry and signed remote controls through the REST API. No official render is bundled, so the fallback image is a text placeholder. |
+
+Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
+CA/MQTT gateway and stay read-only unless you enable the experimental remote controls option;
+the rest use the signed REST command flow. Controls also depend on what each car and account
+allow. For a model not listed here, telemetry and the generic vehicle image still work.
+
 ## Recommended setup: use a secondary account
 
 Logging in to Home Assistant with your main My Changan account can sign it out of your phone. The
@@ -67,18 +84,46 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Scan interval**, **API logging** and the diagnostic options: polling cadence and troubleshooting
   helpers. Leave the defaults unless you are debugging.
 
-## Features
+## Supported features
 
-- Email-code and SMS-code login, automatic session refresh.
-- REST telemetry (battery, range, doors, windows, climate, seats, tires, lamps).
-- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway.
-- Per-vehicle capabilities fetched from the app backend (seat heating/ventilation, roof); download
-  the **diagnostics** from the device page to see the raw function codes your car reports.
-- Signed remote commands: climate, doors, windows, trunk, charging limit/schedule, lights/horn,
-  and optional app commands (defrost, seats, steering-wheel heat, charge and departure plans).
-- One vehicle image per car: the API picture when it loads, and a bundled per-model render
-  (S05, S07, SL03, L07 or a generic Deepal image) served instantly otherwise, so the device page
-  always shows a picture even when the API image is slow or missing.
+### Authentication and session
+
+- Email-code and SMS-code login on the international platform, with automatic token refresh and a
+  reauthentication flow.
+- Integration options for the scan interval, API logging and the diagnostic headers.
+
+### Telemetry
+
+- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
+  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
+- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
+  fields.
+- One Home Assistant device per vehicle, with translated entity names.
+
+### Remote controls
+
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
+  and horn.
+- Comfort commands: seat heating and ventilation levels and steering-wheel heating.
+- On the S05 the controls are experimental and opt-in over MQTT, and the charge limit number is
+  not created because the car does not support it.
+- The door lock, window and trunk commands require the remote control PIN created with the account
+  Home Assistant signs in with.
+
+### Vehicle image
+
+- One image entity per vehicle: the API picture when it loads, and a bundled per-model render
+  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  page always shows a picture even when the API image is slow or missing.
+
+### Diagnostics
+
+- Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
+  keys and the per-vehicle capability codes reported by the app backend.
+
+See [`docs/intl-api.md`](docs/intl-api.md) for the protocol notes and
+[`docs/mqtt-parameter-inventory.md`](docs/mqtt-parameter-inventory.md) for the MQTT parameter
+status.
 
 ## Troubleshooting
 
