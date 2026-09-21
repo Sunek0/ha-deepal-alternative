@@ -544,6 +544,17 @@ def test_translation_files_share_the_same_key_tree() -> None:
         assert tree == trees[0]
 
 
+def test_spanish_entity_names_are_corrected() -> None:
+    data = json.loads(
+        (INTEGRATION_DIR / "translations" / "es.json").read_text(encoding="utf-8")
+    )
+    assert (
+        data["entity"]["button"]["flash_lights"]["name"]
+        == "Encender luces de emergencia"
+    )
+    assert data["entity"]["sensor"]["total_odometer"]["name"] == "Kilometraje total"
+
+
 def test_every_entity_translation_key_ships_in_every_language() -> None:
     languages = {
         path.name: json.loads(path.read_text(encoding="utf-8"))
