@@ -1,7 +1,26 @@
 """Vehicle telematics data models."""
 
-from typing import Optional, Any
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
+
+S05_TRIM_MAX = "max"
+S05_TRIM_PRO = "pro"
+S05_TRIM_UNKNOWN = "unknown"
+
+# Function codes used by the app for the seat comfort capabilities
+# (FunctionConfigManager.SeatHeatType / SeatVentType in the 1.12.0 DEX).
+SEAT_HEAT_FUNCTION_CODES = {
+    "front_left": "#driverSeatHeat",
+    "front_right": "#passengerSeatHeat",
+    "rear_left": "#LeftRearSeatHeat",
+    "rear_right": "#RightRearSeatHeat",
+}
+SEAT_VENT_FUNCTION_CODES = {
+    "front_left": "#driverSeatVent",
+    "front_right": "#passengerSeatVent",
+    "rear_left": "#LeftRearSeatVent",
+    "rear_right": "#RightRearSeatVent",
+}
 
 
 class Vehicle(BaseModel):
@@ -9,12 +28,55 @@ class Vehicle(BaseModel):
     car_id: str = Field(..., description="Unique vehicle ID")
     vin: str = Field(..., description="Vehicle Identification Number (VIN)")
     series_name: Optional[str] = Field(default="Deepal S05", description="Vehicle series/model name")
+    series_code: Optional[str] = Field(default=None, description="Vehicle series code (for example CD701)")
+    model_name: Optional[str] = Field(default=None, description="Vehicle model name reported by the API")
+    model_code: Optional[str] = Field(default=None, description="Vehicle model code reported by the API")
     car_name: Optional[str] = Field(default=None, description="Custom vehicle nickname")
     license_plate: Optional[str] = Field(default=None, description="License plate number")
     thumbnail_url: Optional[str] = Field(default=None, description="Image URL of the vehicle model")
     protocol_type: Optional[str] = Field(
         default=None, description="Backend telemetry protocol, 'MQTT' for MQTT-backed vehicles"
     )
+
+
+class SeatCapabilities(BaseModel):
+    """Heating and ventilation availability of one seat position."""
+
+    heating: bool = False
+    ventilation: bool = False
+
+
+class VehicleCapabilities(BaseModel):
+    """Per-vehicle function configuration reported by the app backend."""
+
+    raw_codes: list[str] = Field(default_factory=list, description="Raw function codes")
+    seats: dict[str, SeatCapabilities] = Field(
+        default_factory=dict, description="Seat capabilities by position"
+    )
+    trim_hint: Literal["max", "pro", "unknown"] = Field(
+        default=S05_TRIM_UNKNOWN,
+        description="S05 trim hint derived from the capabilities, never from telemetry",
+    )
+
+    @classmethod
+    def from_codes(cls, codes: list[str]) -> "VehicleCapabilities":
+        """Build the typed capabilities from the raw function code list."""
+        known = {str(code) for code in codes}
+        seats = {
+            position: SeatCapabilities(
+                heating=heat_code in known,
+                ventilation=SEAT_VENT_FUNCTION_CODES[position] in known,
+            )
+            for position, heat_code in SEAT_HEAT_FUNCTION_CODES.items()
+        }
+        front_ventilation = (
+            seats["front_left"].ventilation or seats["front_right"].ventilation
+        )
+        return cls(
+            raw_codes=[str(code) for code in codes],
+            seats=seats,
+            trim_hint=S05_TRIM_MAX if front_ventilation else S05_TRIM_PRO,
+        )
 
 
 class TireStatus(BaseModel):
@@ -145,3 +207,7 @@ class VehicleCondition(BaseModel):
     lamps: LampsCondition = Field(default_factory=LampsCondition)
     last_updated_timestamp: Optional[int] = Field(default=None, description="Unix timestamp of last report")
     raw_data: Optional[dict[str, Any]] = Field(default=None, description="Raw JSON telemetry response")
+    mqtt_raw_data: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Original decrypted S05 MQTT parameters, kept for diagnostics",
+    )

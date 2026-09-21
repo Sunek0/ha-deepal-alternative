@@ -43,6 +43,7 @@ from deepal.endpoints import (
     INTL_DEPARTURE_ENABLED,
     INTL_DEPARTURE_MODIFY_PLAN,
     INTL_DEPARTURE_VALIDITY,
+    INTL_GET_FUNCTION_CONFIG,
     INTL_GET_MY_CARS,
     INTL_GET_SERIAL_NO,
     INTL_GET_SECURITY_CODE_STATUS,
@@ -80,6 +81,7 @@ from deepal.models import (
     TiresCondition,
     TireStatus,
     Vehicle,
+    VehicleCapabilities,
     VehicleCondition,
     WindowsCondition,
 )
@@ -105,6 +107,7 @@ from deepal.mqtt import (
     read_packet_with_keepalive,
     resolve_mqtt_topics,
     secret_from_login_payload,
+    unmapped_s05_keys,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -866,13 +869,80 @@ class DeepalIntlClient:
                     car_id=str(item.get("carId") or item.get("car_id") or ""),
                     vin=item.get("vin") or "",
                     series_name=item.get("seriesName") or item.get("series_name") or "Deepal",
+                    series_code=item.get("seriesCode") or item.get("series_code"),
+                    model_name=item.get("modelName") or item.get("model_name"),
+                    model_code=item.get("modelCode") or item.get("model_code"),
                     car_name=item.get("nickName") or item.get("carName"),
                     license_plate=item.get("licensePlate") or item.get("plateNumber"),
-                    thumbnail_url=item.get("imgUrl"),
+                    thumbnail_url=(
+                        item.get("imgUrl")
+                        or item.get("vehicleImageUrl")
+                        or item.get("imageUrl")
+                        or item.get("carImageUrl")
+                        or item.get("modelImageUrl")
+                    ),
                     protocol_type=item.get("protocolType") or item.get("protocol_type"),
                 )
             )
         return vehicles
+
+    async def get_vehicle_capabilities(
+        self, vehicle_id: str, vin: Optional[str] = None
+    ) -> Optional[VehicleCapabilities]:
+        """Fetch the per-vehicle function configuration, or None when unavailable.
+
+        The app uses this server-side list to decide which controls a vehicle
+        supports (seat ventilation, roof, ...). The request body key was not
+        recovered from the DEX (the builder is VMP-extracted), so the known
+        candidates are tried in order. Any failure is non-fatal: callers fall
+        back to their generic behavior.
+        """
+        candidates: list[dict[str, Any]] = [
+            {"carId": vehicle_id},
+            {"vehicleId": vehicle_id},
+        ]
+        if vin:
+            candidates.append({"vin": vin})
+
+        for body in candidates:
+            try:
+                data = await self._request(
+                    INTL_GET_FUNCTION_CONFIG, json_data=body, auth_required=True
+                )
+            except DeepalRateLimitError as exc:
+                logger.warning(
+                    "Vehicle capabilities request was rate limited; skipping: %s", exc
+                )
+                return None
+            except DeepalAuthError as exc:
+                logger.debug("Vehicle capabilities authentication failed: %s", exc)
+                return None
+            except DeepalAPIError as exc:
+                logger.debug(
+                    "Vehicle capabilities body %s was rejected: %s",
+                    next(iter(body)),
+                    exc,
+                )
+                continue
+            except DeepalError as exc:
+                logger.debug("Vehicle capabilities unavailable: %s", exc)
+                return None
+
+            codes = data.get("confList") if isinstance(data, dict) else None
+            if not isinstance(codes, list):
+                logger.debug(
+                    "Vehicle capabilities response carried no confList: %r", data
+                )
+                return None
+            logger.debug(
+                "Vehicle capabilities accepted body key=%s", next(iter(body))
+            )
+            return VehicleCapabilities.from_codes([str(code) for code in codes])
+
+        logger.debug(
+            "Vehicle capabilities were rejected for every known body candidate"
+        )
+        return None
 
     async def get_vehicle_condition(
         self, vehicle_id: str, vin: Optional[str] = None
@@ -1199,8 +1269,32 @@ class DeepalIntlClient:
             raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
         if not params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
-        return self.parse_condition(
+        condition = self.parse_condition(
             normalize_s05_params(params), vehicle_id, vin=vin
+        )
+        condition.mqtt_raw_data = params
+        return condition
+
+    @staticmethod
+    def _log_s05_discovery(params: dict[str, Any]) -> None:
+        """Log the S05 parameters the normalization does not consume yet.
+
+        Debug-only discovery aid: it formats the candidate values only when
+        debug logging is enabled and never changes the returned condition.
+        """
+        if not params or not logger.isEnabledFor(logging.DEBUG):
+            return
+        unmapped = unmapped_s05_keys(params)
+        if not unmapped:
+            return
+        logger.debug(
+            "S05 MQTT unmapped parameters: %s",
+            json.dumps(
+                {key: params[key] for key in sorted(unmapped)},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            ),
         )
 
     def _mqtt_ssl_context(self) -> ssl.SSLContext:
@@ -1363,11 +1457,14 @@ class DeepalIntlClient:
                 if not params:
                     continue
                 if topic.endswith("/properties/get/res") and len(params) > 10:
+                    self._log_s05_discovery(params)
                     return params
                 partial.update(params)
                 if requested and len(partial) > 30:
+                    self._log_s05_discovery(partial)
                     return partial
 
+            self._log_s05_discovery(partial)
             return partial
         finally:
             try:
@@ -1401,10 +1498,20 @@ class DeepalIntlClient:
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                if item.get("service_code") in S05_SERVICE_CODES and isinstance(
-                    item.get("params"), dict
+                service_code = item.get("service_code")
+                item_params = item.get("params")
+                if service_code in S05_SERVICE_CODES and isinstance(
+                    item_params, dict
                 ):
-                    params.update(item["params"])
+                    params.update(item_params)
+                elif logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "S05 MQTT unmapped service_code=%s keys=%s",
+                        service_code,
+                        sorted(item_params)
+                        if isinstance(item_params, dict)
+                        else repr(item_params),
+                    )
         return params
 
     def _load_private_key(self):

@@ -867,3 +867,99 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             },
         },
     }
+
+
+# Every S05 parameter ``normalize_s05_params`` consumes, including the aliases
+# it accepts. Diagnostics and the debug discovery log use this inventory to
+# tell apart mapped fields from the ones the vehicle sends but nothing reads
+# yet. Keep it in sync when the mapping grows (there is a test that compares it
+# against the normalization source).
+MAPPED_S05_KEYS: frozenset[str] = frozenset(
+    {
+        # Report time
+        "lastUpdatedTime",
+        "lastUpdatedAt",
+        "latestDate",
+        # Battery and range
+        "soc",
+        "socDsp",
+        "remainPower",
+        "remainedPowerMile",
+        "totalResidualMileage",
+        # Drivetrain and mileage
+        "totalOdometer",
+        "totalMeterYesterday",
+        "igniteCumulativeMileage",
+        "engineStatus",
+        "powerStatusFeedBack",
+        "electronichandbrakeStatus",
+        # Climate
+        "vehicleTemperature",
+        "innerHumidity",
+        "airConditioningSetTemperature",
+        "airStatus",
+        "frontDefrostStatus",
+        "airPurifierStatus",
+        "airConditioningHairRatings",
+        # Charging
+        "ChrgSts",
+        "acChargeGunConnectionState",
+        "dcDhargeGunConnectionState",
+        "dcChargeGunConnectionState",
+        "BattACChrgInCurr",
+        "battACChrgInCurr",
+        "BattDCChrgInCurr",
+        "battDCChrgInCurr",
+        "chargDeltMins",
+        # Doors, trunk and locks
+        "driverDoor",
+        "passengerDoor",
+        "leftRearDoor",
+        "rightRearDoor",
+        "trunk",
+        "hood",
+        "hoodStatus",
+        "driverDoorLock",
+        "passengerDoorLock",
+        # Windows
+        "diverWindow",
+        "passengerWindow",
+        "leftRearWindow",
+        "rightRearWindow",
+        # Lamps
+        "highBeam",
+        "lowBeam",
+        "positionLamp",
+        "frontFoglamp",
+        "rearFoglamp",
+        "turnLndicatorLeft",
+        "turnLndicatorRight",
+        # Tires
+        "lfTyrePressure",
+        "leftFrontTireTemperature",
+        "lfPressureWarning",
+        "rfTyrePressure",
+        "rightFrontTireTemperature",
+        "rfPressureWarning",
+        "lrTyrePressure",
+        "leftRearTireTemperature",
+        "lrPressureWarning",
+        "rrTyrePressure",
+        "rightRearTireTemperature",
+        "rrPressureWarning",
+        # Seats
+        "driverSeatHeatStatus",
+        "driverSeatAirStatus",
+        "passengerSeatHeatStatus",
+        "passengerSeatAirStatus",
+        "leftBackSeatHeatStatus",
+        "leftBackSeatVentilateStatus",
+        "rightBackSeatHeatStatus",
+        "rightBackSeatVentilateStatus",
+    }
+)
+
+
+def unmapped_s05_keys(params: dict[str, Any]) -> set[str]:
+    """Return the S05 parameter keys that no model field consumes."""
+    return set(params) - MAPPED_S05_KEYS

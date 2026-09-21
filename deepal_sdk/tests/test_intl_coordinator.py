@@ -8,8 +8,10 @@ from custom_components.deepal.deepal import (
     ClimateCondition,
     CommandResult,
     CommandResultStatus,
+    DeepalAPIError,
     DeepalIntlClient,
     Vehicle,
+    VehicleCapabilities,
     VehicleCondition,
 )
 
@@ -27,6 +29,9 @@ class _FakeIntlClient(DeepalIntlClient):
         self.condition_timestamps: list[int] | None = None
         self.condition_power_on: bool | None = None
         self.http_condition: VehicleCondition | None = None
+        self.capabilities_calls = 0
+        self.capabilities: VehicleCapabilities | None = None
+        self.capabilities_error: Exception | None = None
 
     async def control_condition_inquiry(self, vehicle_id: str) -> str:
         self.events.append("condition_inquiry")
@@ -37,6 +42,14 @@ class _FakeIntlClient(DeepalIntlClient):
     ) -> CommandResult:
         self.events.append("poll")
         return self.results.pop(0)
+
+    async def get_vehicle_capabilities(
+        self, vehicle_id: str, vin: str | None = None
+    ) -> VehicleCapabilities | None:
+        self.capabilities_calls += 1
+        if self.capabilities_error is not None:
+            raise self.capabilities_error
+        return self.capabilities
 
     async def get_vehicle_condition(
         self, vehicle_id: str, vin: str | None = None
@@ -482,3 +495,37 @@ async def test_app_comfort_overlay_uses_server_condition():
     plain.seats.front_left.ventilation_level = 6
     merged = await coordinator._overlay_app_comfort(vehicle, plain)
     assert merged.seats.front_left.ventilation_level == 6
+
+
+@pytest.mark.asyncio
+async def test_capabilities_fetched_once_per_vehicle_and_cached():
+    client = _FakeIntlClient([])
+    client.capabilities = VehicleCapabilities.from_codes(
+        ["#driverSeatVent", "#passengerSeatVent"]
+    )
+    coordinator, _ = _coordinator(client)
+    coordinator._capabilities = {}
+    vehicle = Vehicle(car_id="car-1", vin="VIN")
+
+    await coordinator._async_maybe_fetch_capabilities(vehicle)
+    await coordinator._async_maybe_fetch_capabilities(vehicle)
+
+    assert client.capabilities_calls == 1
+    capabilities = coordinator.vehicle_capabilities("car-1")
+    assert capabilities is not None
+    assert capabilities.trim_hint == "max"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_failure_is_cached_without_raising():
+    client = _FakeIntlClient([])
+    client.capabilities_error = DeepalAPIError("capabilities endpoint down")
+    coordinator, _ = _coordinator(client)
+    coordinator._capabilities = {}
+    vehicle = Vehicle(car_id="car-1", vin="VIN")
+
+    await coordinator._async_maybe_fetch_capabilities(vehicle)
+    await coordinator._async_maybe_fetch_capabilities(vehicle)
+
+    assert client.capabilities_calls == 1
+    assert coordinator.vehicle_capabilities("car-1") is None
