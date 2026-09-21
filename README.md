@@ -51,8 +51,9 @@ secondary account only for Home Assistant:
 
 - Home Assistant 2026.3.0 or newer, matching the `homeassistant` baseline in `hacs.json`
   (Python 3.13+; Home Assistant 2026.9 uses Python 3.14).
-- An international My Changan account (email or SMS login). The HACS metadata advertises `ES` as
-  the supported country.
+- An international My Changan account (email or SMS login). The HACS metadata advertises the
+  countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
+  Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
 
 ## Installation
 

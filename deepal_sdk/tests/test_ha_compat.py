@@ -187,7 +187,26 @@ def test_hacs_metadata_declares_supported_baseline() -> None:
     metadata = json.loads(HACS_METADATA.read_text(encoding="utf-8"))
     assert metadata["name"] == "Deepal Alternative"
     assert metadata["homeassistant"] == "2026.3.0"
-    assert "ES" in metadata["country"]
+    assert set(metadata["country"]) == {
+        "ES",
+        "PT",
+        "GB",
+        "IE",
+        "FR",
+        "BE",
+        "LU",
+        "DE",
+        "AT",
+        "CH",
+        "IT",
+        "GR",
+    }
+
+
+def test_country_options_have_dial_codes() -> None:
+    assert set(config_flow.COUNTRY_OPTIONS) == set(config_flow.COUNTRY_DIAL_CODES)
+    assert config_flow.COUNTRY_OPTIONS["GR"] == "Greece (+30)"
+    assert config_flow.COUNTRY_DIAL_CODES["GR"] == "30"
 
 
 def test_percentage_entities_use_ratio_enumerator() -> None:

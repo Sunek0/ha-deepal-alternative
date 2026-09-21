@@ -1,5 +1,5 @@
 {
   "name": "Deepal Alternative",
   "homeassistant": "2026.3.0",
-  "country": ["ES"]
+  "country": ["ES", "PT", "GB", "IE", "FR", "BE", "LU", "DE", "AT", "CH", "IT", "GR"]
 }
