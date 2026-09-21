@@ -108,7 +108,7 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 ## Development
 
 ```bash
-.venv/bin/pip install -e "deepal_sdk[dev]"
+.venv/bin/pip install -e "deepal_sdk[dev,ha]"
 .venv/bin/python -m pytest deepal_sdk/tests -q
 diff -r -x "__pycache__" -x "*.pyc" deepal_sdk/deepal custom_components/deepal/deepal
 ```

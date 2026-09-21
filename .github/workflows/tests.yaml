@@ -21,8 +21,8 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install the SDK with its test dependencies
-        run: pip install -e "deepal_sdk[dev]"
+      - name: Install the SDK with its test and Home Assistant dependencies
+        run: pip install -e "deepal_sdk[dev,ha]"
 
       - name: Compile every Python file
         run: python -m compileall -q custom_components/deepal deepal_sdk
