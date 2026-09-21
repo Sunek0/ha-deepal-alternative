@@ -361,6 +361,67 @@ def test_seat_and_steering_entity_contract() -> None:
     assert steering._attr_translation_key == "steering_wheel_heating"
 
 
+def _model_vehicle(car_id: str, **fields) -> SimpleNamespace:
+    values = {
+        "car_id": car_id,
+        "vin": "test-vin",
+        "series_name": None,
+        "series_code": None,
+        "model_name": None,
+        "model_code": None,
+        "car_name": None,
+        "thumbnail_url": None,
+    }
+    values.update(fields)
+    return SimpleNamespace(**values)
+
+
+def test_charge_limit_is_not_offered_on_the_s05() -> None:
+    s05 = _model_vehicle(
+        "car-1",
+        series_name="S05",
+        series_code="C857-EU",
+        model_code="SC6464AAKBEV",
+    )
+    s05_by_code = _model_vehicle("car-2", series_code="c857-eu")
+    s05_by_name = _model_vehicle("car-3", model_name="Deepal S05")
+
+    assert number.supports_charge_limit(s05) is False
+    assert number.supports_charge_limit(s05_by_code) is False
+    assert number.supports_charge_limit(s05_by_name) is False
+
+
+def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
+    s07 = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+    unknown = _model_vehicle("car-2", series_name="Deepal X")
+    missing = _model_vehicle("car-3")
+
+    assert number.supports_charge_limit(s07) is True
+    assert number.supports_charge_limit(unknown) is True
+    assert number.supports_charge_limit(missing) is True
+
+
+def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
+    coordinator = FakeCoordinator()
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+
+    s05_ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, s05)
+    ]
+    s07_ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, s07)
+    ]
+
+    assert "deepal_car-1_charge_limit" not in s05_ids
+    assert len(s05_ids) == 4
+    assert any(uid.endswith("seat_front_left_heating_control") for uid in s05_ids)
+    assert "deepal_car-2_charge_limit" in s07_ids
+    assert len(s07_ids) == 5
+
+
 class _FakeCommandClient:
     """Capture the comfort commands sent by the entities."""
 

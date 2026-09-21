@@ -92,6 +92,11 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   device. Sign in again; using the secondary account avoids most of these.
 - **Values look stale**: the vehicle only reports telemetry while it is awake; the integration shows
   the last known snapshot until the car reports again.
+- **"Límite de carga" does not appear on an S05**: the signed `charge_max` command is accepted by
+  the API but does not change the limit on that model and its function configuration reports no
+  SOC-set capability, so the integration does not create the number. The charge limit sensor and
+  the charging schedule remain available; delete the orphaned `number.*_charge_limit` entity from
+  the entity registry after updating.
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
