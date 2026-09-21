@@ -147,14 +147,41 @@
       "trip_mileage": {
         "name": "Kilometer der Fahrt"
       },
-      "tire_pressure": {
-        "name": "Reifendruck {position}"
+      "tire_pressure_front_left": {
+        "name": "Reifendruck vorne links"
       },
-      "seat_heating_level": {
-        "name": "Sitzheizungsstufe {position}"
+      "tire_pressure_front_right": {
+        "name": "Reifendruck vorne rechts"
       },
-      "seat_ventilation_level": {
-        "name": "Sitzbelüftungsstufe {position}"
+      "tire_pressure_rear_left": {
+        "name": "Reifendruck hinten links"
+      },
+      "tire_pressure_rear_right": {
+        "name": "Reifendruck hinten rechts"
+      },
+      "seat_heating_level_front_left": {
+        "name": "Sitzheizungsstufe vorne links"
+      },
+      "seat_heating_level_front_right": {
+        "name": "Sitzheizungsstufe vorne rechts"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Sitzheizungsstufe hinten links"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Sitzheizungsstufe hinten rechts"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Sitzbelüftungsstufe vorne links"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Sitzbelüftungsstufe vorne rechts"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Sitzbelüftungsstufe hinten links"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Sitzbelüftungsstufe hinten rechts"
       },
       "steering_wheel_heater_level": {
         "name": "Lenkradheizungsstufe"
@@ -224,11 +251,29 @@
       "doors_lock_state": {
         "name": "Türverriegelungsstatus"
       },
-      "tire_alarm": {
-        "name": "Reifenalarm {position}"
+      "tire_alarm_front_left": {
+        "name": "Reifenalarm vorne links"
       },
-      "window_open": {
-        "name": "Fenster {position} offen"
+      "tire_alarm_front_right": {
+        "name": "Reifenalarm vorne rechts"
+      },
+      "tire_alarm_rear_left": {
+        "name": "Reifenalarm hinten links"
+      },
+      "tire_alarm_rear_right": {
+        "name": "Reifenalarm hinten rechts"
+      },
+      "window_open_front_left": {
+        "name": "Fenster vorne links offen"
+      },
+      "window_open_front_right": {
+        "name": "Fenster vorne rechts offen"
+      },
+      "window_open_rear_left": {
+        "name": "Fenster hinten links offen"
+      },
+      "window_open_rear_right": {
+        "name": "Fenster hinten rechts offen"
       },
       "steering_wheel_heater": {
         "name": "Lenkradheizung"
@@ -345,11 +390,29 @@
       "charge_limit": {
         "name": "Ladelimit"
       },
-      "seat_heating_level": {
-        "name": "Sitzheizungsstufe {position}"
+      "seat_heating_level_front_left": {
+        "name": "Sitzheizungsstufe vorne links"
       },
-      "seat_ventilation_level": {
-        "name": "Sitzbelüftungsstufe {position}"
+      "seat_heating_level_front_right": {
+        "name": "Sitzheizungsstufe vorne rechts"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Sitzheizungsstufe hinten links"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Sitzheizungsstufe hinten rechts"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Sitzbelüftungsstufe vorne links"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Sitzbelüftungsstufe vorne rechts"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Sitzbelüftungsstufe hinten links"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Sitzbelüftungsstufe hinten rechts"
       }
     },
     "switch": {

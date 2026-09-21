@@ -89,11 +89,9 @@ def _entities_by_platform() -> dict[str, list]:
             sensor.DeepalOdometerSensor(coordinator, vehicle),
             sensor.DeepalMileageYesterdaySensor(coordinator, vehicle),
             sensor.DeepalTripMileageSensor(coordinator, vehicle),
-            sensor.DeepalTirePressureSensor(
-                coordinator, vehicle, "front_left", "Front Left"
-            ),
+            sensor.DeepalTirePressureSensor(coordinator, vehicle, "front_left"),
             sensor.DeepalSeatLevelSensor(
-                coordinator, vehicle, "front_left", "heating_level", "Front Left", "Heating"
+                coordinator, vehicle, "front_left", "heating_level"
             ),
             sensor.DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle),
             *(
@@ -105,10 +103,10 @@ def _entities_by_platform() -> dict[str, list]:
             binary_sensor.DeepalChargerPluggedBinarySensor(coordinator, vehicle),
             binary_sensor.DeepalDoorsLockedBinarySensor(coordinator, vehicle),
             binary_sensor.DeepalTireAlarmBinarySensor(
-                coordinator, vehicle, "front_left", "Front Left"
+                coordinator, vehicle, "front_left"
             ),
             binary_sensor.DeepalWindowBinarySensor(
-                coordinator, vehicle, "front_left_open", "Front Left"
+                coordinator, vehicle, "front_left_open"
             ),
             binary_sensor.DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle),
             *(
@@ -282,15 +280,16 @@ def test_seat_and_steering_entity_contract() -> None:
     assert driver_heat._attr_unique_id == (
         "deepal_car-1_seat_front_left_heating_control"
     )
-    assert driver_heat._attr_translation_key == "seat_heating_level"
-    assert driver_heat._attr_translation_placeholders == {"position": "Front Left"}
+    assert driver_heat._attr_translation_key == "seat_heating_level_front_left"
     assert driver_heat._attr_native_min_value == 0
     assert driver_heat._attr_native_max_value == 3
     assert driver_heat._attr_native_step == 1
     assert passenger_wind._attr_unique_id == (
         "deepal_car-1_seat_front_right_ventilation_control"
     )
-    assert passenger_wind._attr_translation_key == "seat_ventilation_level"
+    assert passenger_wind._attr_translation_key == (
+        "seat_ventilation_level_front_right"
+    )
     assert steering._attr_unique_id == "deepal_car-1_steering_wheel_heating"
     assert steering._attr_translation_key == "steering_wheel_heating"
 
@@ -380,11 +379,9 @@ def test_entity_icons() -> None:
     coordinator = FakeCoordinator()
     vehicle = _fake_vehicle()
     charge_limit = number.DeepalChargeLimitNumber(coordinator, vehicle)
-    tire = sensor.DeepalTirePressureSensor(
-        coordinator, vehicle, "front_left", "Front Left"
-    )
+    tire = sensor.DeepalTirePressureSensor(coordinator, vehicle, "front_left")
     alarm = binary_sensor.DeepalTireAlarmBinarySensor(
-        coordinator, vehicle, "front_left", "Front Left"
+        coordinator, vehicle, "front_left"
     )
     descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
 
@@ -429,6 +426,7 @@ def test_every_entity_translation_key_ships_in_every_language() -> None:
 
     for platform, platform_entities in entities.items():
         for entity in platform_entities:
+            assert entity.has_entity_name is True, f"{platform}: entity naming disabled"
             key = entity.translation_key
             assert key, f"{platform}: entity without a translation key"
             for name, data in languages.items():

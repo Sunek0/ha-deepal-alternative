@@ -103,12 +103,7 @@ class DeepalSeatLevelNumber(DeepalEntity, NumberEntity):
         self._attr_unique_id = (
             f"deepal_{vehicle.car_id}_seat_{seat}_{function}_control"
         )
-        self._attr_translation_key = (
-            "seat_heating_level"
-            if function == "heating"
-            else "seat_ventilation_level"
-        )
-        self._attr_translation_placeholders = {"position": SEAT_LABELS[seat]}
+        self._attr_translation_key = f"seat_{function}_level_{seat}"
         self._attr_icon = SEAT_FUNCTIONS[function][2]
 
     @property

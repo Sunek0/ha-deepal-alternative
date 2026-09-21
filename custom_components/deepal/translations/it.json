@@ -147,14 +147,41 @@
       "trip_mileage": {
         "name": "Chilometri del viaggio"
       },
-      "tire_pressure": {
-        "name": "Pressione pneumatico {position}"
+      "tire_pressure_front_left": {
+        "name": "Pressione pneumatico anteriore sinistro"
       },
-      "seat_heating_level": {
-        "name": "Livello riscaldamento sedile {position}"
+      "tire_pressure_front_right": {
+        "name": "Pressione pneumatico anteriore destro"
       },
-      "seat_ventilation_level": {
-        "name": "Livello ventilazione sedile {position}"
+      "tire_pressure_rear_left": {
+        "name": "Pressione pneumatico posteriore sinistro"
+      },
+      "tire_pressure_rear_right": {
+        "name": "Pressione pneumatico posteriore destro"
+      },
+      "seat_heating_level_front_left": {
+        "name": "Livello riscaldamento sedile anteriore sinistro"
+      },
+      "seat_heating_level_front_right": {
+        "name": "Livello riscaldamento sedile anteriore destro"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Livello riscaldamento sedile posteriore sinistro"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Livello riscaldamento sedile posteriore destro"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Livello ventilazione sedile anteriore sinistro"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Livello ventilazione sedile anteriore destro"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Livello ventilazione sedile posteriore sinistro"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Livello ventilazione sedile posteriore destro"
       },
       "steering_wheel_heater_level": {
         "name": "Livello riscaldamento volante"
@@ -224,11 +251,29 @@
       "doors_lock_state": {
         "name": "Stato bloccaggio"
       },
-      "tire_alarm": {
-        "name": "Allarme pneumatico {position}"
+      "tire_alarm_front_left": {
+        "name": "Allarme pneumatico anteriore sinistro"
       },
-      "window_open": {
-        "name": "Finestrino {position} aperto"
+      "tire_alarm_front_right": {
+        "name": "Allarme pneumatico anteriore destro"
+      },
+      "tire_alarm_rear_left": {
+        "name": "Allarme pneumatico posteriore sinistro"
+      },
+      "tire_alarm_rear_right": {
+        "name": "Allarme pneumatico posteriore destro"
+      },
+      "window_open_front_left": {
+        "name": "Finestrino anteriore sinistro aperto"
+      },
+      "window_open_front_right": {
+        "name": "Finestrino anteriore destro aperto"
+      },
+      "window_open_rear_left": {
+        "name": "Finestrino posteriore sinistro aperto"
+      },
+      "window_open_rear_right": {
+        "name": "Finestrino posteriore destro aperto"
       },
       "steering_wheel_heater": {
         "name": "Riscaldamento volante"
@@ -345,11 +390,29 @@
       "charge_limit": {
         "name": "Limite di ricarica"
       },
-      "seat_heating_level": {
-        "name": "Livello riscaldamento sedile {position}"
+      "seat_heating_level_front_left": {
+        "name": "Livello riscaldamento sedile anteriore sinistro"
       },
-      "seat_ventilation_level": {
-        "name": "Livello ventilazione sedile {position}"
+      "seat_heating_level_front_right": {
+        "name": "Livello riscaldamento sedile anteriore destro"
+      },
+      "seat_heating_level_rear_left": {
+        "name": "Livello riscaldamento sedile posteriore sinistro"
+      },
+      "seat_heating_level_rear_right": {
+        "name": "Livello riscaldamento sedile posteriore destro"
+      },
+      "seat_ventilation_level_front_left": {
+        "name": "Livello ventilazione sedile anteriore sinistro"
+      },
+      "seat_ventilation_level_front_right": {
+        "name": "Livello ventilazione sedile anteriore destro"
+      },
+      "seat_ventilation_level_rear_left": {
+        "name": "Livello ventilazione sedile posteriore sinistro"
+      },
+      "seat_ventilation_level_rear_right": {
+        "name": "Livello ventilazione sedile posteriore destro"
       }
     },
     "switch": {

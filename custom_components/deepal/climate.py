@@ -45,6 +45,7 @@ class DeepalCabinClimateEntity(
 ):
     """Cabin climate control for international vehicles."""
 
+    _attr_has_entity_name = True
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
