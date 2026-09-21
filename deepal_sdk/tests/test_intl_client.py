@@ -1400,12 +1400,12 @@ async def test_control_air_conditioner_signs_and_returns_command_id():
     assert body["windMode"] == 1
     assert body["seriralNo"] == "SN123"
     assert body["vehicleId"] == "car-1"
-    assert body["rcToken"] == ""
+    assert "rcToken" not in body
 
     public_key.verify(
         base64.b64decode(body["sign"]),
         (
-            "enabled=true&rcToken=&runTime=30&seriralNo=SN123&targetTemp=220"
+            "enabled=true&runTime=30&seriralNo=SN123&targetTemp=220"
             "&vehicleId=car-1&windMode=1"
         ).encode(),
         padding.PKCS1v15(),
@@ -2284,10 +2284,10 @@ async def test_control_charge_limit_uses_serial_type_2():
     body = captured["body"]
     assert body["chargePercentageMax"] == 80
     assert body["command"] == "charge_max"
-    assert body["rcToken"] == ""
+    assert "rcToken" not in body
     _verify_signature(
         body,
-        "chargePercentageMax=80&rcToken=&seriralNo=SN123&vehicleId=car-1",
+        "chargePercentageMax=80&seriralNo=SN123&vehicleId=car-1",
         public_key,
     )
 
@@ -2317,8 +2317,8 @@ async def test_control_charge_schedule_payload_uses_serial_type_2():
     _verify_signature(
         body,
         (
-            "endSwitch=1&endTime=0700&planId=p1&planType=1&rcToken=&seriralNo=SN123"
-            "&startTime=2300&timeFormat=1&timeZone=GMT+08:00&vehicleId=car-1"
+            "endSwitch=1&endTime=0700&planId=p1&planType=1&seriralNo=SN123"
+                "&startTime=2300&timeFormat=1&timeZone=GMT+08:00&vehicleId=car-1"
         ),
         public_key,
     )
@@ -2340,10 +2340,10 @@ async def test_control_flashing_honking_does_not_require_rc_token():
     body = captured["body"]
     assert body["command"] == "flash_bee"
     assert body["type"] == 3
-    assert body["rcToken"] == ""
+    assert "rcToken" not in body
     _verify_signature(
         body,
-        "rcToken=&seriralNo=SN123&type=3&vehicleId=car-1",
+        "seriralNo=SN123&type=3&vehicleId=car-1",
         public_key,
     )
 
@@ -2539,7 +2539,6 @@ OPTIONAL_COMMAND_CASES = [
             "masterSwitch": 2,
             "masterLevel": 3,
             "copilotSwitch": 1,
-            "copilotLevel": 0,
         },
     ),
     (
@@ -2547,12 +2546,7 @@ OPTIONAL_COMMAND_CASES = [
         ("car-1", 1, 2, None, None),
         INTL_CONTROL_SEATS_WIND,
         "seats_wind",
-        {
-            "masterSwitch": 1,
-            "masterLevel": 2,
-            "copilotSwitch": None,
-            "copilotLevel": None,
-        },
+        {"masterSwitch": 1, "masterLevel": 2},
     ),
     (
         "control_steering_wheel_heat",
@@ -2685,7 +2679,7 @@ async def test_charge_plan_family_uses_serial_type_2():
 
 
 @pytest.mark.asyncio
-async def test_seats_heat_sends_null_for_omitted_positions():
+async def test_seats_heat_omits_unused_positions():
     private_pem, public_key = _login_keypair()
     captured: dict = {}
     client = _client(_command_handler(public_key, captured))
@@ -2699,8 +2693,26 @@ async def test_seats_heat_sends_null_for_omitted_positions():
     assert body["command"] == "seats_heat"
     assert body["masterSwitch"] == 1
     assert body["masterLevel"] == 2
-    assert body["copilotSwitch"] is None
-    assert body["copilotLevel"] is None
+    assert "copilotSwitch" not in body
+    assert "copilotLevel" not in body
+
+
+@pytest.mark.asyncio
+async def test_seat_off_omits_the_level():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+
+    await client.control_seats_wind("car-1", master_switch=0)
+    await client.close()
+
+    body = captured["body"]
+    assert body["command"] == "seats_wind"
+    assert body["masterSwitch"] == 0
+    assert "masterLevel" not in body
+    assert "copilotSwitch" not in body
 
 
 @pytest.mark.asyncio
@@ -3337,3 +3349,136 @@ async def test_injected_client_is_never_closed():
         assert not http_client.is_closed
     finally:
         await http_client.aclose()
+
+
+def test_access_token_expiry_is_computed_lazily():
+    client = DeepalIntlClient(country="GB", device_id="test-device-id")
+    client.access_token = _jwt_with_exp(int(time.time()) - 10)
+    assert client.access_token_expires_soon() is True
+
+    valid = DeepalIntlClient(country="GB", device_id="test-device-id")
+    valid.access_token = _jwt_with_exp(int(time.time()) + 3600)
+    assert valid.access_token_expires_soon() is False
+
+    opaque = DeepalIntlClient(country="GB", device_id="test-device-id")
+    opaque.access_token = "opaque-token"
+    assert opaque.access_token_expires_soon() is False
+    assert opaque.access_token_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_forced_refresh_bypasses_the_throttle_window():
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"token": "test_token_new", "refreshToken": "test_refresh_new"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_old"
+    client.refresh_token = "test_refresh_old"
+    client._last_refresh_attempt_at = time.monotonic()
+    try:
+        token = await client.refresh_tokens(force=True)
+    finally:
+        await client.close()
+
+    assert captured == [INTL_REFRESH_TOKEN]
+    assert token.access_token == "test_token_new"
+    assert client.access_token == "test_token_new"
+
+
+@pytest.mark.asyncio
+async def test_periodic_refresh_respects_the_throttle_window():
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"token": "test_token_new", "refreshToken": "test_refresh_new"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = _jwt_with_exp(int(time.time()) + 3600)
+    client.refresh_token = "test_refresh_old"
+    client._last_refresh_attempt_at = time.monotonic()
+    try:
+        token = await client.refresh_tokens()
+    finally:
+        await client.close()
+
+    assert captured == []
+    assert token.access_token == client.access_token
+
+
+@pytest.mark.asyncio
+async def test_check_control_code_refuses_when_no_attempts_remain():
+    captured = {"paths": []}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["paths"].append(request.url.path)
+        return httpx.Response(
+            200,
+            json={"success": True, "code": "0", "data": {"retryQuantity": 0}},
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    try:
+        with pytest.raises(DeepalRateLimitError):
+            await client.check_control_code("1234")
+    finally:
+        await client.close()
+
+    assert captured["paths"] == [INTL_GET_SECURITY_CODE_STATUS]
+
+
+@pytest.mark.asyncio
+async def test_control_code_lockout_code_maps_to_rate_limit():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "HW_1_1_01_047",
+                "msg": "Too many attempts. Please try again later.",
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    try:
+        with pytest.raises(DeepalRateLimitError) as err:
+            await client.check_control_code("1234")
+    finally:
+        await client.close()
+
+    assert "wait" in str(err.value).lower()
+    assert "HW_1_1_01_047" in str(err.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["HW_1_1_01_073", "HW_1_1_01_074"])
+async def test_control_code_state_codes_map_to_command_auth(code):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": False, "code": code, "msg": "state"})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    try:
+        with pytest.raises(DeepalCommandAuthError):
+            await client.check_control_code("1234")
+    finally:
+        await client.close()

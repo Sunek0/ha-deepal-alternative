@@ -363,7 +363,6 @@ def test_normalize_s05_params_maps_telemetry():
         "totalOdometer": 18300,
         "totalMeterYesterday": 42.5,
         "igniteCumulativeMileage": 12.25,
-        "steeringWheelHeating": 2,
         "engineStatus": 1,
         "powerStatusFeedBack": 2,
         "electronichandbrakeStatus": 0,
@@ -407,12 +406,12 @@ def test_normalize_s05_params_maps_telemetry():
         "rightFrontTireTemperature": 32.0,
         "leftRearTireTemperature": 30.5,
         "rightRearTireTemperature": 33.0,
-        "driverSeatHeatStatus": 2,
-        "driverSeatAirStatus": 1,
+        "driverSeatHeatStatus": 4,
+        "driverSeatAirStatus": 2,
         "passengerSeatHeatStatus": 0,
         "passengerSeatAirStatus": 0,
-        "leftBackSeatHeatStatus": 1,
-        "leftBackSeatVentilateStatus": 2,
+        "leftBackSeatHeatStatus": 2,
+        "leftBackSeatVentilateStatus": 4,
         "rightBackSeatHeatStatus": 0,
         "rightBackSeatVentilateStatus": 0,
     }
@@ -423,7 +422,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["vehicleStatus"]["totalMileage"] == 18300
     assert condition["vehicleStatus"]["totalMeterYesterday"] == 42.5
     assert condition["vehicleStatus"]["igniteCumulativeMileage"] == 12.25
-    assert condition["vehicleStatus"]["steeringWheelHeater"] == 2
+    assert "steeringWheelHeater" not in condition["vehicleStatus"]
     assert condition["hvac"]["acStatus"] == 1
     assert condition["hvac"]["remoteTemp"] == 225
     assert condition["charge"]["chargeStatus"] == 2
@@ -434,10 +433,10 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["tire"]["leftFront"]["pressure"] == 240
     assert condition["tire"]["leftFront"]["temperature"] == 31.5
     assert condition["tire"]["rightBack"]["alarm"] == 1
-    assert condition["seat"]["rightFront"]["heatStatus"] == 2
-    assert condition["seat"]["rightFront"]["ventStatus"] == 1
+    assert condition["seat"]["leftFront"]["heatStatus"] == 2
+    assert condition["seat"]["leftFront"]["ventStatus"] == 2
     assert condition["seat"]["leftBack"]["heatStatus"] == 1
-    assert condition["seat"]["leftBack"]["ventStatus"] == 2
+    assert condition["seat"]["leftBack"]["ventStatus"] == 4
     assert condition["seat"]["rightBack"]["heatStatus"] == 0
     assert condition["vehicleStatus"]["engineSts"] == 1
     assert condition["vehicleStatus"]["powerStatus"] == 2
@@ -459,6 +458,23 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["lamp"]["lowBeam"] == 0
 
 
+def test_normalize_s05_params_maps_seat_sides_and_scales():
+    condition = normalize_s05_params(
+        {
+            "driverSeatHeatStatus": 6,
+            "driverSeatAirStatus": 3,
+            "passengerSeatHeatStatus": 4,
+            "passengerSeatAirStatus": 1,
+            "leftBackSeatHeatStatus": 0,
+        }
+    )
+    assert condition["seat"]["leftFront"]["heatStatus"] == 3
+    assert condition["seat"]["leftFront"]["ventStatus"] == 3
+    assert condition["seat"]["rightFront"]["heatStatus"] == 2
+    assert condition["seat"]["rightFront"]["ventStatus"] == 1
+    assert condition["seat"]["leftBack"]["heatStatus"] == 0
+
+
 def test_normalize_s05_params_accepts_legacy_spellings():
     condition = normalize_s05_params(
         {
@@ -473,13 +489,12 @@ def test_normalize_s05_params_accepts_legacy_spellings():
     assert condition["door"]["hood"] == 1
 
 
-def test_normalize_s05_params_ignores_unrelated_fields():
-    condition = normalize_s05_params(
-        {
-            "latestDate": "2026-09-18T10:00:00Z",
-            "chargeCoverStatus": 3,
-        }
-    )
+def test_normalize_s05_params_uses_latest_date_as_report_time():
+    condition = normalize_s05_params({"latestDate": "2026-09-18T10:00:00Z"})
+    assert condition["lastUpdatedAt"] == 1789725600000
+
+
+def test_normalize_s05_params_ignores_unknown_fields():
+    condition = normalize_s05_params({"chargeCoverStatus": 3})
     assert "chargeCoverStatus" not in condition["charge"]
-    assert condition["lastUpdatedAt"] != 1789725600000
     assert condition["door"]["hood"] is None

@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -37,6 +38,7 @@ from custom_components.deepal.deepal import (
     DeepalAuthError,
     DeepalRateLimitError,
 )
+from deepal.models import VehicleCondition
 
 INTEGRATION_DIR = REPO_ROOT / "custom_components" / "deepal"
 HACS_METADATA = REPO_ROOT / "hacs.json"
@@ -44,6 +46,10 @@ TRANSLATION_FILES = [
     INTEGRATION_DIR / "strings.json",
     INTEGRATION_DIR / "translations" / "en.json",
     INTEGRATION_DIR / "translations" / "es.json",
+    INTEGRATION_DIR / "translations" / "de.json",
+    INTEGRATION_DIR / "translations" / "fr.json",
+    INTEGRATION_DIR / "translations" / "it.json",
+    INTEGRATION_DIR / "translations" / "pt.json",
 ]
 
 ALLOWED_DEVICE_INFO_FIELDS = {"identifiers", "name", "manufacturer", "model"}
@@ -110,8 +116,25 @@ def _entities_by_platform() -> dict[str, list]:
             cover.DeepalWindowsCover(coordinator, vehicle),
             cover.DeepalTrunkCover(coordinator, vehicle),
         ],
-        "switch": [switch.DeepalChargeScheduleSwitch(coordinator, vehicle)],
-        "number": [number.DeepalChargeLimitNumber(coordinator, vehicle)],
+        "switch": [
+            switch.DeepalChargeScheduleSwitch(coordinator, vehicle),
+            switch.DeepalSteeringWheelHeatSwitch(coordinator, vehicle),
+        ],
+        "number": [
+            number.DeepalChargeLimitNumber(coordinator, vehicle),
+            number.DeepalSeatLevelNumber(
+                coordinator, vehicle, "front_left", "heating"
+            ),
+            number.DeepalSeatLevelNumber(
+                coordinator, vehicle, "front_left", "ventilation"
+            ),
+            number.DeepalSeatLevelNumber(
+                coordinator, vehicle, "front_right", "heating"
+            ),
+            number.DeepalSeatLevelNumber(
+                coordinator, vehicle, "front_right", "ventilation"
+            ),
+        ],
         "time": [
             time_platform.DeepalChargeScheduleTime(
                 coordinator,
@@ -232,6 +255,114 @@ def test_entity_description_cached_properties_resolve() -> None:
     assert sensor_entity.force_update is False
     assert binary_entity.entity_registry_enabled_default is True
     assert binary_entity.entity_registry_visible_default is True
+
+
+def test_seat_and_steering_entity_contract() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    driver_heat = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_left", "heating"
+    )
+    passenger_wind = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_right", "ventilation"
+    )
+    steering = switch.DeepalSteeringWheelHeatSwitch(coordinator, vehicle)
+
+    assert driver_heat._attr_unique_id == (
+        "deepal_car-1_seat_front_left_heating_control"
+    )
+    assert driver_heat._attr_name == (
+        "Deepal S05 Max Front Left Seat Heating Level"
+    )
+    assert driver_heat._attr_native_min_value == 0
+    assert driver_heat._attr_native_max_value == 3
+    assert driver_heat._attr_native_step == 1
+    assert passenger_wind._attr_unique_id == (
+        "deepal_car-1_seat_front_right_ventilation_control"
+    )
+    assert steering._attr_unique_id == "deepal_car-1_steering_wheel_heating"
+    assert steering._attr_name == "Deepal S05 Max Steering Wheel Heating"
+
+
+class _FakeCommandClient:
+    """Capture the comfort commands sent by the entities."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.control_pin: str | None = None
+        self.rc_token: str | None = None
+
+    async def control_seats_heat(self, vehicle_id: str, **kwargs: Any) -> str:
+        self.calls.append(("heat", vehicle_id, kwargs))
+        return "cmd-1"
+
+    async def control_seats_wind(self, vehicle_id: str, **kwargs: Any) -> str:
+        self.calls.append(("wind", vehicle_id, kwargs))
+        return "cmd-1"
+
+    async def control_steering_wheel_heat(
+        self, vehicle_id: str, open_value: bool
+    ) -> str:
+        self.calls.append(("steer", vehicle_id, open_value))
+        return "cmd-1"
+
+
+class _FakeCommandCoordinator(FakeCoordinator):
+    """Run commands synchronously and apply the optimistic update."""
+
+    def __init__(self, condition) -> None:
+        super().__init__()
+        self.data = {condition.car_id: condition}
+        self.client = _FakeCommandClient()
+
+    async def async_execute_command(
+        self,
+        vehicle_id,
+        send_command,
+        *,
+        is_done=None,
+        optimistic_update=None,
+        timeout=None,
+        interval=None,
+    ) -> None:
+        await send_command()
+        if optimistic_update is not None:
+            current = self.data.get(vehicle_id)
+            if current is not None:
+                self.data[vehicle_id] = optimistic_update(current)
+
+
+@pytest.mark.asyncio
+async def test_seat_and_steering_controls_send_app_payloads() -> None:
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator = _FakeCommandCoordinator(condition)
+    vehicle = _fake_vehicle()
+    driver_heat = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_left", "heating"
+    )
+    passenger_wind = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_right", "ventilation"
+    )
+    steering = switch.DeepalSteeringWheelHeatSwitch(coordinator, vehicle)
+
+    await driver_heat.async_set_native_value(2)
+    await passenger_wind.async_set_native_value(0)
+    await steering.async_turn_on()
+
+    assert coordinator.client.calls[0] == (
+        "heat",
+        "car-1",
+        {"master_switch": 1, "master_level": 2},
+    )
+    assert coordinator.client.calls[1] == (
+        "wind",
+        "car-1",
+        {"copilot_switch": 0, "copilot_level": None},
+    )
+    assert coordinator.client.calls[2] == ("steer", "car-1", True)
+    assert condition.seats.front_left.heating_level == 2
+    assert condition.seats.front_right.ventilation_level == 0
+    assert condition.climate.steering_wheel_heater_on is True
 
 
 def test_entity_icons() -> None:

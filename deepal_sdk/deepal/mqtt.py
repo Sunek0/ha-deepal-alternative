@@ -707,6 +707,17 @@ def _first(params: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _seat_heat_level(value: Any) -> Optional[int]:
+    """Convert the raw 0-6 seat heat gear to the app's 0-3 level scale."""
+    parsed = _as_int(value)
+    return parsed // 2 if parsed is not None else None
+
+
+def _seat_vent_level(value: Any) -> Optional[int]:
+    """Return the seat ventilation level (reported 1:1, unlike heat)."""
+    return _as_int(value)
+
+
 def _to_millis(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
@@ -723,7 +734,7 @@ def _to_millis(value: Any) -> int:
 
 def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
     """Map S05 MQTT parameter names into the shared international condition shape."""
-    latest = _first(params, "lastUpdatedTime", "lastUpdatedAt")
+    latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     return {
         "lastUpdatedAt": _to_millis(latest),
         "vehicleStatus": {
@@ -740,8 +751,6 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "connectStatus": 1,
             "powerStatus": _as_int(params.get("powerStatusFeedBack")),
             "epbSts": _as_int(params.get("electronichandbrakeStatus")),
-            "steeringWheelHeater": _as_int(params.get("steeringWheelHeating")),
-            "steeringWheelHeaterLevel": _as_int(params.get("steeringWheelHeating")),
         },
         "hvac": {
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
@@ -836,21 +845,25 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             },
         },
         "seat": {
-            "rightFront": {
-                "heatStatus": _as_int(params.get("driverSeatHeatStatus")),
-                "ventStatus": _as_int(params.get("driverSeatAirStatus")),
-            },
             "leftFront": {
-                "heatStatus": _as_int(params.get("passengerSeatHeatStatus")),
-                "ventStatus": _as_int(params.get("passengerSeatAirStatus")),
+                "heatStatus": _seat_heat_level(params.get("driverSeatHeatStatus")),
+                "ventStatus": _seat_vent_level(params.get("driverSeatAirStatus")),
+            },
+            "rightFront": {
+                "heatStatus": _seat_heat_level(params.get("passengerSeatHeatStatus")),
+                "ventStatus": _seat_vent_level(params.get("passengerSeatAirStatus")),
             },
             "leftBack": {
-                "heatStatus": _as_int(params.get("leftBackSeatHeatStatus")),
-                "ventStatus": _as_int(params.get("leftBackSeatVentilateStatus")),
+                "heatStatus": _seat_heat_level(params.get("leftBackSeatHeatStatus")),
+                "ventStatus": _seat_vent_level(
+                    params.get("leftBackSeatVentilateStatus")
+                ),
             },
             "rightBack": {
-                "heatStatus": _as_int(params.get("rightBackSeatHeatStatus")),
-                "ventStatus": _as_int(params.get("rightBackSeatVentilateStatus")),
+                "heatStatus": _seat_heat_level(params.get("rightBackSeatHeatStatus")),
+                "ventStatus": _seat_vent_level(
+                    params.get("rightBackSeatVentilateStatus")
+                ),
             },
         },
     }

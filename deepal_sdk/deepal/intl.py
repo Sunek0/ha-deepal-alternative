@@ -503,6 +503,23 @@ class DeepalIntlClient:
                     status_code=response.status_code,
                     code=code,
                 )
+            if str(code) == "HW_1_1_01_047":
+                raise DeepalRateLimitError(
+                    f"Too many control-code attempts ({code}); wait for the lockout "
+                    "to expire or reset the PIN in the My Changan app.",
+                    status_code=response.status_code,
+                    code=code,
+                )
+            if str(code) in ("HW_1_1_01_073", "HW_1_1_01_074"):
+                state = (
+                    "the control code expired"
+                    if str(code) == "HW_1_1_01_073"
+                    else "no control code is set"
+                )
+                raise DeepalCommandAuthError(
+                    f"Remote control unavailable: {state}; set or reset the PIN in "
+                    "the My Changan app."
+                )
             if str(code) == "COMMON_1_1_01_001" and path.endswith("/serial-no/get"):
                 raise DeepalCommandAuthError(
                     "Remote command signing was rejected; log in again to register "
@@ -756,17 +773,20 @@ class DeepalIntlClient:
 
     def access_token_expires_soon(self, margin_seconds: int = 300) -> bool:
         """Return whether the access token expires within the margin."""
+        if self.access_token_expires_at is None and self.access_token:
+            self.access_token_expires_at = self._jwt_expiry(self.access_token)
         if self.access_token_expires_at is None:
             return False
         return time.time() >= self.access_token_expires_at - margin_seconds
 
-    async def refresh_tokens(self) -> AuthToken:
+    async def refresh_tokens(self, force: bool = False) -> AuthToken:
         """Refresh the international session tokens.
 
-        Automatic reactive attempts are throttled with the app's monotonic
-        30-minute window and serialized with a per-client lock, so concurrent
-        callers cause at most one request in flight and share its outcome. A
-        refresh justified by the access token JWT ``exp`` bypasses the throttle.
+        Periodic attempts are throttled with the app's monotonic 30-minute
+        window and serialized with a per-client lock, so concurrent callers
+        cause at most one request in flight and share its outcome. A refresh
+        justified by the access token JWT ``exp``, or an explicit ``force`` for
+        an authentication rejection, bypasses the throttle.
         """
         if not self.refresh_token:
             raise DeepalAuthError("No refresh token is available.")
@@ -777,11 +797,15 @@ class DeepalIntlClient:
                 if self._refresh_attempt_error is not None:
                     raise self._refresh_attempt_error
                 return self._current_auth_token()
-            return await self._refresh_tokens_locked()
+            return await self._refresh_tokens_locked(force=force)
 
-    async def _refresh_tokens_locked(self) -> AuthToken:
+    async def _refresh_tokens_locked(self, force: bool = False) -> AuthToken:
         """Run one refresh attempt while holding the per-client lock."""
-        if not self.access_token_expires_soon() and self._refresh_is_throttled():
+        if (
+            not force
+            and not self.access_token_expires_soon()
+            and self._refresh_is_throttled()
+        ):
             logger.info(
                 "Deepal refresh throttled by the app window (%.0f s); keeping the "
                 "current session",
@@ -1460,7 +1484,17 @@ class DeepalIntlClient:
 
     async def check_control_code(self, control_pin: str) -> str:
         """Exchange the remote-control PIN for an rcToken."""
-        await self.get_security_code_status()
+        status = await self.get_security_code_status()
+        retry_quantity = status.get("retryQuantity")
+        try:
+            remaining = int(retry_quantity) if retry_quantity is not None else None
+        except (TypeError, ValueError):
+            remaining = None
+        if remaining is not None and remaining <= 0:
+            raise DeepalRateLimitError(
+                "No control-code attempts left; wait for the lockout to expire or "
+                "reset the PIN in the My Changan app."
+            )
         data = await self._request(
             INTL_CHECK_CONTROL_CODE,
             json_data={"safeCode": self.encrypt_request_value(control_pin)},
@@ -1497,10 +1531,11 @@ class DeepalIntlClient:
         serial_no = self.decrypt_serial_no(serial_data)
         signed_payload = {
             **payload,
-            "rcToken": self.rc_token or "",
             "seriralNo": serial_no,
             "vehicleId": vehicle_id,
         }
+        if self.rc_token:
+            signed_payload["rcToken"] = self.rc_token
         signed_payload["sign"] = self.sign_payload(
             signed_payload, omit_keys=sign_omit_keys
         )
@@ -1667,6 +1702,31 @@ class DeepalIntlClient:
             sign_omit_keys={"command", "rcToken"},
         )
 
+    @staticmethod
+    def _seat_payload(
+        command: str,
+        master_switch: Optional[int],
+        master_level: Optional[int],
+        copilot_switch: Optional[int],
+        copilot_level: Optional[int],
+    ) -> dict[str, Any]:
+        """Build a seat command body with only the provided positions.
+
+        The app omits null fields (no ``serializeNulls``), and the live probe
+        showed that turning a seat off must send ``switch: 0`` without a level:
+        a zero level is rejected with ``COMMON_1_1_01_005``.
+        """
+        payload: dict[str, Any] = {"command": command}
+        if master_switch is not None:
+            payload["masterSwitch"] = master_switch
+        if master_level:
+            payload["masterLevel"] = master_level
+        if copilot_switch is not None:
+            payload["copilotSwitch"] = copilot_switch
+        if copilot_level:
+            payload["copilotLevel"] = copilot_level
+        return payload
+
     async def control_seats_heat(
         self,
         vehicle_id: str,
@@ -1679,18 +1739,19 @@ class DeepalIntlClient:
     ) -> str:
         """Set the driver/copilot seat heating levels (optional command).
 
-        Omitted positions are sent as JSON null, matching the app request.
+        Only the requested position is serialized: the app's Gson body omits null
+        fields, and the endpoint rejects explicit nulls.
         """
         return await self._signed_command(
             path=INTL_CONTROL_SEATS_HEAT,
             vehicle_id=vehicle_id,
-            payload={
-                "command": "seats_heat",
-                "masterSwitch": master_switch,
-                "masterLevel": master_level,
-                "copilotSwitch": copilot_switch,
-                "copilotLevel": copilot_level,
-            },
+            payload=self._seat_payload(
+                "seats_heat",
+                master_switch,
+                master_level,
+                copilot_switch,
+                copilot_level,
+            ),
             serial_type=serial_type,
             require_rc_token=require_rc_token,
             sign_omit_keys={"command", "rcToken"},
@@ -1710,13 +1771,13 @@ class DeepalIntlClient:
         return await self._signed_command(
             path=INTL_CONTROL_SEATS_WIND,
             vehicle_id=vehicle_id,
-            payload={
-                "command": "seats_wind",
-                "masterSwitch": master_switch,
-                "masterLevel": master_level,
-                "copilotSwitch": copilot_switch,
-                "copilotLevel": copilot_level,
-            },
+            payload=self._seat_payload(
+                "seats_wind",
+                master_switch,
+                master_level,
+                copilot_switch,
+                copilot_level,
+            ),
             serial_type=serial_type,
             require_rc_token=require_rc_token,
             sign_omit_keys={"command", "rcToken"},
