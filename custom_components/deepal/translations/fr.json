@@ -430,11 +430,6 @@
       "charge_schedule_end": {
         "name": "Fin de la plage de charge"
       }
-    },
-    "image": {
-      "vehicle_image": {
-        "name": "Image du véhicule"
-      }
     }
   }
 }

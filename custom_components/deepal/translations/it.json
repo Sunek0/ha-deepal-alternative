@@ -430,11 +430,6 @@
       "charge_schedule_end": {
         "name": "Fine programma di ricarica"
       }
-    },
-    "image": {
-      "vehicle_image": {
-        "name": "Immagine del veicolo"
-      }
     }
   }
 }

@@ -430,11 +430,6 @@
       "charge_schedule_end": {
         "name": "Ende Ladezeitplan"
       }
-    },
-    "image": {
-      "vehicle_image": {
-        "name": "Fahrzeugbild"
-      }
     }
   }
 }
