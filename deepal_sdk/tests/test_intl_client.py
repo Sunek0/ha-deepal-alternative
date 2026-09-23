@@ -932,6 +932,7 @@ async def test_get_vehicle_condition_maps_international_payload():
     assert captured["path"] == INTL_GET_VEHICLE_CONDITION
     assert captured["body"]["vehicleId"] == "test-car-1"
     assert captured["body"]["vechileCriteria"]["door"] == "1"
+    assert captured["body"]["vechileCriteria"]["fuel"] == "1"
     assert condition.car_id == "test-car-1"
     assert condition.vin == "LS5AXXXXX123456"
     assert condition.total_odometer_km == 12450
@@ -949,6 +950,87 @@ async def test_get_vehicle_condition_maps_international_payload():
     assert condition.climate.target_temperature_c == 22.5
     assert condition.last_updated_timestamp == 1700000000
     assert condition.raw_data == payload
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_maps_the_fuel_block():
+    captured = {}
+    payload = {
+        "vehicleStatus": {"soc": 55},
+        "fuel": {
+            "leftPercent": 62,
+            "leftVolume": 28,
+            "tankVolume": 45,
+            "temperature": 18.5,
+            "fuelNedcRemainingMileage": 310,
+            "fuelWltcRemainingMileage": 290,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert captured["body"]["vechileCriteria"]["fuel"] == "1"
+    assert condition.fuel.level_percent == 62
+    assert condition.fuel.volume_l == 28.0
+    assert condition.fuel.tank_capacity_l == 45.0
+    assert condition.fuel.remaining_range_km == 290
+    assert condition.fuel.temperature_c == 18.5
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_without_fuel_block_keeps_it_unknown():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"vehicleStatus": {}}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.fuel.level_percent is None
+    assert condition.fuel.volume_l is None
+    assert condition.fuel.tank_capacity_l is None
+    assert condition.fuel.remaining_range_km is None
+    assert condition.fuel.temperature_c is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_maps_rest_charge_time_sentinel():
+    payload = {"charge": {"remainChargeTime": 8191, "chargeStatus": 0}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.remaining_charge_time_min is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_keeps_normal_charge_time():
+    payload = {"charge": {"remainChargeTime": 95}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.remaining_charge_time_min == 95
 
 
 @pytest.mark.asyncio
@@ -1692,6 +1774,28 @@ async def test_get_vehicle_capabilities_maps_max_codes():
     assert capabilities.seats["rear_left"].ventilation is False
     assert capabilities.seats["front_left"].heating is True
     assert capabilities.raw_codes[-1] == "#ota"
+    assert capabilities.has_fuel is False
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_capabilities_detects_the_fuel_code():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"confList": ["#oilMileage", "#Mileage", "#evMileage"]},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    capabilities = await client.get_vehicle_capabilities("car-1")
+    await client.close()
+
+    assert capabilities is not None
+    assert capabilities.has_fuel is True
+    assert capabilities.raw_codes == ["#oilMileage", "#Mileage", "#evMileage"]
 
 
 @pytest.mark.asyncio
@@ -2316,7 +2420,7 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.climate.defrost_on is True
     assert condition.climate.fan_level is None
     assert condition.doors.hood_open is False
-    assert condition.battery.dc_gun_connected is True
+    assert condition.battery.dc_gun_connected is False
     assert condition.battery.ac_charge_current_a == 16.2
     assert condition.battery.charge_current_a == 16.2
     assert condition.battery.remaining_charge_time_min == 95
@@ -2332,6 +2436,88 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.low_beam is False
     assert condition.lamps.front_fog is False
     assert condition.lamps.rear_fog is False
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_parked_without_gun():
+    payload = {
+        "charge": {
+            "chargeStatus": 0,
+            "chargeConStatus": 0,
+            "dcChargeGunConnectStatus": 0,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is False
+    assert condition.battery.dc_gun_connected is False
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_maps_connected_guns():
+    payload = {
+        "charge": {
+            "chargeStatus": 0,
+            "chargeConStatus": 2,
+            "dcChargeGunConnectStatus": 3,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is True
+    assert condition.battery.dc_gun_connected is True
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_charging_wins_over_connection_state():
+    payload = {
+        "charge": {
+            "chargeStatus": 2,
+            "chargeConStatus": 0,
+            "dcChargeGunConnectStatus": 0,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is True
+    assert condition.battery.dc_gun_connected is False
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_without_dc_gun_field():
+    payload = {"charge": {"chargeStatus": 0}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is False
+    assert condition.battery.dc_gun_connected is False
 
 
 def _command_handler(public_key, captured: dict):
@@ -3272,7 +3458,7 @@ def test_environment_labels_have_no_production_suffix():
 
 
 @pytest.mark.asyncio
-async def test_timestamp_headers_are_opt_in():
+async def test_timestamp_headers_are_never_sent():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -3285,20 +3471,6 @@ async def test_timestamp_headers_are_opt_in():
     await client.get_vehicles()
     await client.close()
     assert captured["tsp"] is None
-    assert captured["vcs"] is None
-
-    transport = httpx.MockTransport(handler)
-    client = DeepalIntlClient(
-        country="GB",
-        device_id="test-device-id",
-        send_timestamps=True,
-        httpx_client=httpx.AsyncClient(transport=transport),
-    )
-    client.access_token = "test_token_123"
-    await client.get_vehicles()
-    await client.close()
-
-    assert captured["tsp"] is not None and captured["tsp"].isdigit()
     assert captured["vcs"] is None
 
 

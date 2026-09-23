@@ -114,8 +114,7 @@
           "enable_api_logging": "Registrar tráfico API redactado",
           "enable_mqtt_controls": "Habilitar controles remotos experimentales para vehículos MQTT (S05)",
           "os_version": "Versión de Android declarada (diagnóstico)",
-          "environment": "Entorno regional (diagnóstico)",
-          "send_timestamps": "Enviar la cabecera X-Tsp-Timestamp (diagnóstico)"
+          "environment": "Entorno regional (diagnóstico)"
         },
         "description": "Ajusta el sondeo y los diagnósticos. El PIN de control habilita los comandos remotos firmados; las opciones de diagnóstico cambian cómo ve la API al cliente, tócalas solo al solucionar problemas.",
         "data_description": {
@@ -124,8 +123,7 @@
           "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie redactados. Actívalo solo al solucionar problemas.",
           "enable_mqtt_controls": "Permite comandos remotos en vehículos MQTT (S05). Experimental: el envío de comandos por MQTT aún no está verificado.",
           "os_version": "Versión de Android declarada en la cabecera x-os-version. El valor por defecto (9) coincide con la captura verificada de la app; cámbialo solo para diagnosticar peticiones rechazadas por el gateway.",
-          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto.",
-          "send_timestamps": "Envía la cabecera diagnóstica X-Tsp-Timestamp (epoch en milisegundos) en cada petición. Desactivada por defecto."
+          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto."
         }
       }
     }
@@ -232,6 +230,15 @@
       },
       "charge_schedule_end": {
         "name": "Fin del horario de carga"
+      },
+      "fuel_level": {
+        "name": "Nivel de combustible"
+      },
+      "fuel_range": {
+        "name": "Autonomía de combustible"
+      },
+      "fuel_tank_capacity": {
+        "name": "Capacidad del depósito de combustible"
       },
       "vehicle_status": {
         "name": "Estado del vehículo"

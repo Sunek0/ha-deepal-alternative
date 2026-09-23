@@ -7,6 +7,7 @@ DEFAULT_BASE_URL = "https://pre-acenter.sda.changan.com.cn"
 GATEWAY_BASE_URL = "https://pre-acenter.sda.changan.com.cn/app-apigw/store-sda-api/api/v2"
 INTL_BASE_URL = "https://m.iov.changanauto.com.de"
 INTL_CA_BASE_URL = "https://ca-m.iov.changanauto.com.de"
+INTL_SDA_BASE_URL = "https://sda-m.iov.changanauto.com.de"
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class IntlEnvironment:
     app_id: str
     intl_base_url: str
     ca_base_url: str
+    sda_base_url: str
     intl_path_prefix: str = "/intl-app-gw"
 
 
@@ -30,6 +32,7 @@ INTL_ENVIRONMENTS: dict[str, IntlEnvironment] = {
             "ca",
             "https://m.iov.changanauto.com.de",
             "https://ca-m.iov.changanauto.com.de",
+            "https://sda-m.iov.changanauto.com.de",
         ),
         IntlEnvironment(
             "release_znm",
@@ -37,6 +40,7 @@ INTL_ENVIRONMENTS: dict[str, IntlEnvironment] = {
             "ca",
             "https://m.mx.changanauto.link",
             "https://m.mx.changanauto.link",
+            "https://sda-m.mx.changanauto.link",
         ),
     )
 }
@@ -131,6 +135,15 @@ INTL_CA_GET_CAR_CONF_FUNC = (
 )
 INTL_CA_APP_APIGW_GET_AUTH_TOKEN = (
     "/app-apigw/vot-auth/api/token/getAuthTokenByUserId"
+)
+
+# Digital key endpoints (ApiKt.java in the 1.12.0 DEX). The /app-apigw prefix is
+# served by the regional SDA gateway, not by the CA host (verified live).
+INTL_CA_GET_CAR_AUTH_LIST = (
+    "/app-apigw/car-permission-api/api/v1/sda-app/car-auth/get-car-auth-list"
+)
+INTL_CA_GET_DIGITAL_KEY_SUPPORT = (
+    "/app-apigw/sda-app-control/api/v2/sda-app/dk/query-supported-featured"
 )
 
 # Vehicle Information & Telemetry Endpoints

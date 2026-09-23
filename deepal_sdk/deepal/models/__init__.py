@@ -2,6 +2,15 @@
 
 from deepal.models.auth import AuthToken, UserProfile
 from deepal.models.command import CommandResult, CommandResultStatus
+from deepal.models.digital_key import (
+    DIGITAL_KEY_FUNCTION_CODE,
+    PHONE_SUPPORT_CA_KEY,
+    PHONE_SUPPORT_HONOR_KEY,
+    PHONE_SUPPORT_ICCE_KEY,
+    DigitalKeyKeyType,
+    DigitalKeySupport,
+    VehicleAuthorizations,
+)
 from deepal.models.vehicle import (
     S05_TRIM_MAX,
     S05_TRIM_PRO,
@@ -13,6 +22,7 @@ from deepal.models.vehicle import (
     VehicleCondition,
     SeatCapabilities,
     BatteryCondition,
+    FuelCondition,
     DoorsCondition,
     WindowsCondition,
     SeatsCondition,
@@ -28,6 +38,13 @@ __all__ = [
     "UserProfile",
     "CommandResult",
     "CommandResultStatus",
+    "DIGITAL_KEY_FUNCTION_CODE",
+    "PHONE_SUPPORT_CA_KEY",
+    "PHONE_SUPPORT_HONOR_KEY",
+    "PHONE_SUPPORT_ICCE_KEY",
+    "DigitalKeyKeyType",
+    "DigitalKeySupport",
+    "VehicleAuthorizations",
     "S05_TRIM_MAX",
     "S05_TRIM_PRO",
     "S05_TRIM_UNKNOWN",
@@ -38,6 +55,7 @@ __all__ = [
     "Vehicle",
     "VehicleCondition",
     "BatteryCondition",
+    "FuelCondition",
     "DoorsCondition",
     "WindowsCondition",
     "SeatsCondition",

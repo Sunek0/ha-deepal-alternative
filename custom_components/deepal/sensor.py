@@ -18,6 +18,7 @@ from homeassistant.const import (
     UnitOfSpeed,
     UnitOfTemperature,
     UnitOfTime,
+    UnitOfVolume,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -33,7 +34,7 @@ from .const import (
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05
+from .vehicle_model import is_s05, supports_fuel
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
 # payload has no speed, gear, outside temperature, PM2.5, air quality, charge
@@ -54,6 +55,9 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
 
 # The S05 has no rear seat heating hardware (the app disables those controls).
 S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
+
+# Fuel sensors exist only for fuel vehicles (see supports_fuel).
+FUEL_SENSOR_KEYS = frozenset({"fuel_level", "fuel_range", "fuel_tank_capacity"})
 
 
 def build_sensors(
@@ -91,10 +95,15 @@ def build_sensors(
 
         entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
 
+        fuel = supports_fuel(
+            vehicle, coordinator.vehicle_capabilities(vehicle.car_id)
+        )
+
         entities.extend(
             DeepalSensor(coordinator, vehicle, description)
             for description in SENSORS
             if not (s05 and description.key in S05_UNSUPPORTED_SENSOR_KEYS)
+            and not (description.key in FUEL_SENSOR_KEYS and not fuel)
         )
 
     return entities
@@ -443,6 +452,34 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         state_class=None,
         native_unit_of_measurement=None,
         icon="mdi:clock-end",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalSensorDescription(
+        key="fuel_level",
+        name="Fuel Level",
+        value_fn=lambda cond, vehicle: cond.fuel.level_percent,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        icon="mdi:gas-station",
+    ),
+    DeepalSensorDescription(
+        key="fuel_range",
+        name="Fuel Range",
+        value_fn=lambda cond, vehicle: cond.fuel.remaining_range_km,
+        device_class=SensorDeviceClass.DISTANCE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfLength.KILOMETERS,
+        icon="mdi:gas-station-outline",
+    ),
+    DeepalSensorDescription(
+        key="fuel_tank_capacity",
+        name="Fuel Tank Capacity",
+        value_fn=lambda cond, vehicle: cond.fuel.tank_capacity_l,
+        device_class=SensorDeviceClass.VOLUME,
+        state_class=None,
+        native_unit_of_measurement=UnitOfVolume.LITERS,
+        icon="mdi:fuel",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(

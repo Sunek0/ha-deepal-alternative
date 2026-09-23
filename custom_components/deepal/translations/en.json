@@ -114,8 +114,7 @@
           "enable_api_logging": "Log redacted API traffic",
           "enable_mqtt_controls": "Enable experimental remote controls for MQTT vehicles (S05)",
           "os_version": "Declared Android version (diagnostic)",
-          "environment": "Regional environment (diagnostic)",
-          "send_timestamps": "Send the X-Tsp-Timestamp header (diagnostic)"
+          "environment": "Regional environment (diagnostic)"
         },
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
         "data_description": {
@@ -124,8 +123,7 @@
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number redacted. Enable only while troubleshooting.",
           "enable_mqtt_controls": "Allow remote commands for MQTT-backed vehicles (S05). Experimental: MQTT command sending is not verified yet.",
           "os_version": "Android version declared in the x-os-version header. The default (9) matches the verified app capture; change it only to diagnose requests rejected by the gateway.",
-          "environment": "Regional gateway set used for the international API. Europe by default.",
-          "send_timestamps": "Send the diagnostic X-Tsp-Timestamp header (epoch milliseconds) with every request. Disabled by default."
+          "environment": "Regional gateway set used for the international API. Europe by default."
         }
       }
     }
@@ -232,6 +230,15 @@
       },
       "charge_schedule_end": {
         "name": "Charge schedule end"
+      },
+      "fuel_level": {
+        "name": "Fuel level"
+      },
+      "fuel_range": {
+        "name": "Fuel range"
+      },
+      "fuel_tank_capacity": {
+        "name": "Fuel tank capacity"
       },
       "vehicle_status": {
         "name": "Vehicle status"

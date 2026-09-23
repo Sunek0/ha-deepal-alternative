@@ -75,6 +75,7 @@ from .models import (
     ClimateCondition,
     CommandResult,
     DoorsCondition,
+    FuelCondition,
     LampsCondition,
     SeatsCondition,
     SeatStatus,
@@ -86,6 +87,7 @@ from .models import (
     WindowsCondition,
 )
 from .mqtt import (
+    CHARGE_TIME_SENTINEL,
     MQTT_CONNACK_REASONS,
     MQTT_DEFAULT_KEEPALIVE,
     S05_SERVICE_CODES,
@@ -212,6 +214,36 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _fuel_range_km(fuel: dict[str, Any]) -> Optional[int]:
+    """Return the fuel remaining range, preferring the EU WLTC standard.
+
+    ``remainingRange`` is the unit-agnostic key the MQTT normalization emits for
+    ``remainedOilMile``; the REST payload carries the standard suffixes instead.
+    """
+    for key in (
+        "remainingRange",
+        "fuelWltcRemainingMileage",
+        "fuelNedcRemainingMileage",
+        "fuelCltcRemainingMileage",
+        "fuelSumRemainingMileage",
+    ):
+        value = _as_int(fuel.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _is_charge_connection(value: Any) -> bool:
+    """Return whether a charge connection state means a connected gun.
+
+    The app reports ``0`` and ``1`` for "not connected" and higher values for
+    the connected states (a charging AC gun reports ``3``); an absent value is
+    not connected. Verified on a parked car reporting ``0`` with nothing
+    plugged in.
+    """
+    return _as_int(value) not in (None, 0, 1)
+
+
 def _to_millis(value: Any) -> Optional[int]:
     """Normalize an ISO-8601 string or epoch seconds/milliseconds to epoch ms."""
     if isinstance(value, bool):
@@ -250,7 +282,6 @@ class DeepalIntlClient:
         os_version: str = INTL_OS_VERSION,
         tsp_token_source: str = "access",
         environment: str = DEFAULT_INTL_ENVIRONMENT,
-        send_timestamps: bool = False,
         mqtt_config_fallback: bool = True,
         mqtt_token_fallback: bool = True,
         mqtt_client_id: Optional[str] = None,
@@ -284,7 +315,6 @@ class DeepalIntlClient:
         self.environment = environment_config.id
         self.app_id = environment_config.app_id
         self._intl_path_prefix = environment_config.intl_path_prefix
-        self.send_timestamps = send_timestamps
         self.mqtt_config_fallback = mqtt_config_fallback
         self.mqtt_token_fallback = mqtt_token_fallback
         self.mqtt_client_id = mqtt_client_id
@@ -412,8 +442,6 @@ class DeepalIntlClient:
             "content-type": "application/json; charset=UTF-8",
             "user-agent": INTL_USER_AGENT,
         }
-        if self.send_timestamps:
-            headers["X-Tsp-Timestamp"] = str(int(time.time() * 1000))
         if self.access_token:
             headers["authorization"] = self._authorization_value()
             tsp_value = {
@@ -960,6 +988,7 @@ class DeepalIntlClient:
                     "window": "1",
                     "tire": "1",
                     "vehicleStatus": "1",
+                    "fuel": "1",
                 },
                 "vehicleId": vehicle_id,
             },
@@ -978,6 +1007,7 @@ class DeepalIntlClient:
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
         charge = raw.get("charge") or {}
+        fuel = raw.get("fuel") or {}
         tire = raw.get("tire") or {}
         seat = raw.get("seat") or {}
         window = raw.get("window") or {}
@@ -993,13 +1023,10 @@ class DeepalIntlClient:
             return level if level is not None and level > 0 else 0
 
         charge_status = charge.get("chargeStatus")
-        charge_connection = charge.get("chargeConStatus")
         if charge_status not in (None, 0):
             charger_connected = True
-        elif charge_connection is None:
-            charger_connected = False
         else:
-            charger_connected = charge_connection not in (0, 1)
+            charger_connected = _is_charge_connection(charge.get("chargeConStatus"))
 
         doors = door.get("doors") or []
 
@@ -1018,16 +1045,22 @@ class DeepalIntlClient:
 
         target_temp = _as_float(hvac.get("remoteTemp"))
 
+        remaining_charge_time = _as_int(charge.get("remainChargeTime"))
+        if remaining_charge_time == CHARGE_TIME_SENTINEL:
+            remaining_charge_time = None
+
         battery = BatteryCondition(
             soc_percentage=_as_int(status.get("soc")),
             remaining_range_km=_as_int(status.get("drvMileage")),
             charging_status=str(charge_status) if charge_status is not None else None,
             charger_connected=charger_connected,
-            dc_gun_connected=charge.get("dcChargeGunConnectStatus") == 0,
+            dc_gun_connected=_is_charge_connection(
+                charge.get("dcChargeGunConnectStatus")
+            ),
             charge_current_a=_as_float(charge.get("chargeCurrent")),
             ac_charge_current_a=_as_float(charge.get("acChargeCurrent")),
             dc_charge_current_a=_as_float(charge.get("dcChargeCurrent")),
-            remaining_charge_time_min=_as_int(charge.get("remainChargeTime")),
+            remaining_charge_time_min=remaining_charge_time,
             charge_limit_percent=_as_int(charge.get("maxSocPercent")),
             charge_schedule_enabled=(
                 charge_plan.get("startSwitch") == 1
@@ -1055,6 +1088,14 @@ class DeepalIntlClient:
                 if charge_plan.get("timeZone") is not None
                 else None
             ),
+        )
+
+        fuel_condition = FuelCondition(
+            level_percent=_as_int(fuel.get("leftPercent")),
+            volume_l=_as_float(fuel.get("leftVolume")),
+            tank_capacity_l=_as_float(fuel.get("tankVolume")),
+            remaining_range_km=_fuel_range_km(fuel),
+            temperature_c=_as_float(fuel.get("temperature")),
         )
 
         doors_condition = DoorsCondition(
@@ -1176,6 +1217,7 @@ class DeepalIntlClient:
                 else None
             ),
             battery=battery,
+            fuel=fuel_condition,
             doors=doors_condition,
             windows=windows_condition,
             seats=seats_condition,

@@ -18,8 +18,10 @@ from deepal.endpoints import (
     DEFAULT_INTL_ENVIRONMENT,
     INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
     INTL_CA_GET_AUTH_TOKEN,
+    INTL_CA_GET_CAR_AUTH_LIST,
     INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CA_GET_CONN_CONF,
+    INTL_CA_GET_DIGITAL_KEY_SUPPORT,
     INTL_CHARGE_ADD_PLAN,
     INTL_CHARGE_DELETE_PLAN,
     INTL_CHARGE_MODIFY_PLAN,
@@ -74,18 +76,22 @@ from deepal.models import (
     BatteryCondition,
     ClimateCondition,
     CommandResult,
+    DigitalKeySupport,
     DoorsCondition,
+    FuelCondition,
     LampsCondition,
     SeatsCondition,
     SeatStatus,
     TiresCondition,
     TireStatus,
     Vehicle,
+    VehicleAuthorizations,
     VehicleCapabilities,
     VehicleCondition,
     WindowsCondition,
 )
 from deepal.mqtt import (
+    CHARGE_TIME_SENTINEL,
     MQTT_CONNACK_REASONS,
     MQTT_DEFAULT_KEEPALIVE,
     S05_SERVICE_CODES,
@@ -212,6 +218,36 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _fuel_range_km(fuel: dict[str, Any]) -> Optional[int]:
+    """Return the fuel remaining range, preferring the EU WLTC standard.
+
+    ``remainingRange`` is the unit-agnostic key the MQTT normalization emits for
+    ``remainedOilMile``; the REST payload carries the standard suffixes instead.
+    """
+    for key in (
+        "remainingRange",
+        "fuelWltcRemainingMileage",
+        "fuelNedcRemainingMileage",
+        "fuelCltcRemainingMileage",
+        "fuelSumRemainingMileage",
+    ):
+        value = _as_int(fuel.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _is_charge_connection(value: Any) -> bool:
+    """Return whether a charge connection state means a connected gun.
+
+    The app reports ``0`` and ``1`` for "not connected" and higher values for
+    the connected states (a charging AC gun reports ``3``); an absent value is
+    not connected. Verified on a parked car reporting ``0`` with nothing
+    plugged in.
+    """
+    return _as_int(value) not in (None, 0, 1)
+
+
 def _to_millis(value: Any) -> Optional[int]:
     """Normalize an ISO-8601 string or epoch seconds/milliseconds to epoch ms."""
     if isinstance(value, bool):
@@ -250,7 +286,6 @@ class DeepalIntlClient:
         os_version: str = INTL_OS_VERSION,
         tsp_token_source: str = "access",
         environment: str = DEFAULT_INTL_ENVIRONMENT,
-        send_timestamps: bool = False,
         mqtt_config_fallback: bool = True,
         mqtt_token_fallback: bool = True,
         mqtt_client_id: Optional[str] = None,
@@ -263,6 +298,7 @@ class DeepalIntlClient:
         public_key: Optional[str] = None,
         base_url: Optional[str] = None,
         ca_base_url: Optional[str] = None,
+        sda_base_url: Optional[str] = None,
         timeout: float = 15.0,
         enable_api_logging: bool = False,
         signing_policy: str = SIGNING_POLICY_APP,
@@ -284,7 +320,6 @@ class DeepalIntlClient:
         self.environment = environment_config.id
         self.app_id = environment_config.app_id
         self._intl_path_prefix = environment_config.intl_path_prefix
-        self.send_timestamps = send_timestamps
         self.mqtt_config_fallback = mqtt_config_fallback
         self.mqtt_token_fallback = mqtt_token_fallback
         self.mqtt_client_id = mqtt_client_id
@@ -295,6 +330,9 @@ class DeepalIntlClient:
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
         self.ca_base_url = (ca_base_url or environment_config.ca_base_url).rstrip("/")
+        self.sda_base_url = (
+            sda_base_url or environment_config.sda_base_url
+        ).rstrip("/")
         self.timeout = timeout
         self.enable_api_logging = enable_api_logging
         self.signing_policy = signing_policy
@@ -412,8 +450,6 @@ class DeepalIntlClient:
             "content-type": "application/json; charset=UTF-8",
             "user-agent": INTL_USER_AGENT,
         }
-        if self.send_timestamps:
-            headers["X-Tsp-Timestamp"] = str(int(time.time() * 1000))
         if self.access_token:
             headers["authorization"] = self._authorization_value()
             tsp_value = {
@@ -944,6 +980,120 @@ class DeepalIntlClient:
         )
         return None
 
+    async def get_digital_key_support(
+        self, vehicle_id: Optional[str] = None
+    ) -> Optional[DigitalKeySupport]:
+        """Check whether the phone is supported for the digital key.
+
+        Read-only: queries the SDA gateway ``query-supported-featured`` endpoint
+        with the account user id and the phone identity. The European gateway
+        answers with a ``flag`` that selects the key scheme: 0 the Changan (CA)
+        BLE key, 1 the ICCE (Huawei wallet) key, 2 the Honor key. Never raises
+        for an unavailable feature; a missing user id or any request failure
+        logs and returns ``None``.
+        """
+        if not self.user_id:
+            logger.debug("Digital key support requires the account user id.")
+            return None
+
+        payload: dict[str, Any] = {
+            "userId": self.user_id,
+            "deviceInfo": {
+                "terminal": self.device_type,
+                "romVersion": self.os_version,
+                "clientVersion": self.app_version,
+            },
+        }
+        if vehicle_id:
+            payload["carId"] = vehicle_id
+
+        try:
+            data = await self._request(
+                INTL_CA_GET_DIGITAL_KEY_SUPPORT,
+                json_data=payload,
+                auth_required=True,
+                base_url=self.sda_base_url,
+            )
+        except DeepalRateLimitError as exc:
+            logger.warning(
+                "Digital key support request was rate limited; skipping: %s", exc
+            )
+            return None
+        except DeepalAuthError as exc:
+            logger.debug("Digital key support authentication failed: %s", exc)
+            return None
+        except DeepalError as exc:
+            logger.debug("Digital key support unavailable: %s", exc)
+            return None
+
+        flag = data.get("flag") if isinstance(data, dict) else None
+        if not isinstance(flag, int) or isinstance(flag, bool):
+            logger.debug("Digital key support response carried no flag: %r", data)
+            return None
+        logger.debug("Digital key support flag=%s", flag)
+        return DigitalKeySupport.from_flag(flag, raw=data)
+
+    async def get_vehicle_authorizations(
+        self, car_id: str
+    ) -> Optional[VehicleAuthorizations]:
+        """Fetch the per-vehicle function authorization list, or None.
+
+        Read-only: the list tells which functions the signed-in account may use
+        on the vehicle (``DigitalKey`` among them). The endpoint is not deployed
+        in every region — the European SDA gateway answers 404 — in which case
+        the SDK returns no authorization. The request body key was not recovered
+        from the DEX (the builder is VMP-extracted), so the known candidates are
+        tried in order. Any failure is non-fatal: callers fall back to their
+        generic behavior.
+        """
+        candidates: list[dict[str, Any]] = [
+            {"carId": car_id},
+            {"vehicleId": car_id},
+            {"userId": self.user_id, "carId": car_id},
+            {"carId": car_id, "userId": self.user_id},
+        ]
+
+        empty_result: Optional[VehicleAuthorizations] = None
+        for body in candidates:
+            try:
+                data = await self._request(
+                    INTL_CA_GET_CAR_AUTH_LIST,
+                    json_data=body,
+                    auth_required=True,
+                    base_url=self.sda_base_url,
+                )
+            except DeepalRateLimitError as exc:
+                logger.warning(
+                    "Vehicle authorization request was rate limited; skipping: %s",
+                    exc,
+                )
+                return None
+            except DeepalAuthError as exc:
+                logger.debug("Vehicle authorization authentication failed: %s", exc)
+                return None
+            except DeepalAPIError as exc:
+                logger.debug(
+                    "Vehicle authorization body %s was rejected: %s",
+                    next(iter(body)),
+                    exc,
+                )
+                continue
+            except DeepalError as exc:
+                logger.debug("Vehicle authorizations unavailable: %s", exc)
+                return None
+
+            result = VehicleAuthorizations.from_payload(data)
+            if result.raw_codes:
+                logger.debug(
+                    "Vehicle authorization accepted body key=%s", next(iter(body))
+                )
+                return result
+            empty_result = result
+
+        if empty_result is not None:
+            logger.debug("Vehicle authorization response carried no function codes")
+        return empty_result
+
     async def get_vehicle_condition(
         self, vehicle_id: str, vin: Optional[str] = None
     ) -> VehicleCondition:
@@ -960,6 +1110,7 @@ class DeepalIntlClient:
                     "window": "1",
                     "tire": "1",
                     "vehicleStatus": "1",
+                    "fuel": "1",
                 },
                 "vehicleId": vehicle_id,
             },
@@ -978,6 +1129,7 @@ class DeepalIntlClient:
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
         charge = raw.get("charge") or {}
+        fuel = raw.get("fuel") or {}
         tire = raw.get("tire") or {}
         seat = raw.get("seat") or {}
         window = raw.get("window") or {}
@@ -993,13 +1145,10 @@ class DeepalIntlClient:
             return level if level is not None and level > 0 else 0
 
         charge_status = charge.get("chargeStatus")
-        charge_connection = charge.get("chargeConStatus")
         if charge_status not in (None, 0):
             charger_connected = True
-        elif charge_connection is None:
-            charger_connected = False
         else:
-            charger_connected = charge_connection not in (0, 1)
+            charger_connected = _is_charge_connection(charge.get("chargeConStatus"))
 
         doors = door.get("doors") or []
 
@@ -1018,16 +1167,22 @@ class DeepalIntlClient:
 
         target_temp = _as_float(hvac.get("remoteTemp"))
 
+        remaining_charge_time = _as_int(charge.get("remainChargeTime"))
+        if remaining_charge_time == CHARGE_TIME_SENTINEL:
+            remaining_charge_time = None
+
         battery = BatteryCondition(
             soc_percentage=_as_int(status.get("soc")),
             remaining_range_km=_as_int(status.get("drvMileage")),
             charging_status=str(charge_status) if charge_status is not None else None,
             charger_connected=charger_connected,
-            dc_gun_connected=charge.get("dcChargeGunConnectStatus") == 0,
+            dc_gun_connected=_is_charge_connection(
+                charge.get("dcChargeGunConnectStatus")
+            ),
             charge_current_a=_as_float(charge.get("chargeCurrent")),
             ac_charge_current_a=_as_float(charge.get("acChargeCurrent")),
             dc_charge_current_a=_as_float(charge.get("dcChargeCurrent")),
-            remaining_charge_time_min=_as_int(charge.get("remainChargeTime")),
+            remaining_charge_time_min=remaining_charge_time,
             charge_limit_percent=_as_int(charge.get("maxSocPercent")),
             charge_schedule_enabled=(
                 charge_plan.get("startSwitch") == 1
@@ -1055,6 +1210,14 @@ class DeepalIntlClient:
                 if charge_plan.get("timeZone") is not None
                 else None
             ),
+        )
+
+        fuel_condition = FuelCondition(
+            level_percent=_as_int(fuel.get("leftPercent")),
+            volume_l=_as_float(fuel.get("leftVolume")),
+            tank_capacity_l=_as_float(fuel.get("tankVolume")),
+            remaining_range_km=_fuel_range_km(fuel),
+            temperature_c=_as_float(fuel.get("temperature")),
         )
 
         doors_condition = DoorsCondition(
@@ -1176,6 +1339,7 @@ class DeepalIntlClient:
                 else None
             ),
             battery=battery,
+            fuel=fuel_condition,
             doors=doors_condition,
             windows=windows_condition,
             seats=seats_condition,

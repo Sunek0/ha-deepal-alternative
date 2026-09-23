@@ -38,7 +38,6 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_OS_VERSION,
     CONF_ENVIRONMENT,
-    CONF_SEND_TIMESTAMPS,
     CONF_USER_ID,
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
@@ -48,7 +47,6 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_OS_VERSION,
     DEFAULT_ENVIRONMENT,
-    DEFAULT_SEND_TIMESTAMPS,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
 
@@ -578,12 +576,6 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(
-                    CONF_SEND_TIMESTAMPS,
-                    default=options.get(
-                        CONF_SEND_TIMESTAMPS, DEFAULT_SEND_TIMESTAMPS
-                    ),
-                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

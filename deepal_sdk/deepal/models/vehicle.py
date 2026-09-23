@@ -53,6 +53,10 @@ class VehicleCapabilities(BaseModel):
     seats: dict[str, SeatCapabilities] = Field(
         default_factory=dict, description="Seat capabilities by position"
     )
+    has_fuel: bool = Field(
+        default=False,
+        description="Vehicle reports a fuel tank capability (PHEV / range extender)",
+    )
     trim_hint: Literal["max", "pro", "unknown"] = Field(
         default=S05_TRIM_UNKNOWN,
         description="S05 trim hint derived from the capabilities, never from telemetry",
@@ -75,6 +79,7 @@ class VehicleCapabilities(BaseModel):
         return cls(
             raw_codes=[str(code) for code in codes],
             seats=seats,
+            has_fuel="#oilMileage" in known,
             trim_hint=S05_TRIM_MAX if front_ventilation else S05_TRIM_PRO,
         )
 
@@ -113,6 +118,15 @@ class BatteryCondition(BaseModel):
     charge_plan_type: Optional[int] = Field(default=None, description="Charging plan type")
     charge_plan_time_format: Optional[int] = Field(default=None, description="Charging plan time format")
     charge_plan_time_zone: Optional[str] = Field(default=None, description="Charging plan time zone")
+
+
+class FuelCondition(BaseModel):
+    """Fuel tank telemetry of a PHEV / range-extender vehicle."""
+    level_percent: Optional[int] = Field(default=None, description="Fuel level (%)")
+    volume_l: Optional[float] = Field(default=None, description="Fuel volume in litres")
+    tank_capacity_l: Optional[float] = Field(default=None, description="Tank capacity in litres")
+    remaining_range_km: Optional[int] = Field(default=None, description="Fuel remaining range in km")
+    temperature_c: Optional[float] = Field(default=None, description="Fuel temperature in Celsius")
 
 
 class DoorsCondition(BaseModel):
@@ -199,6 +213,7 @@ class VehicleCondition(BaseModel):
     engine_on: bool = Field(default=False, description="Is the engine/drivetrain running")
     connected: Optional[bool] = Field(default=None, description="Is the vehicle connected to the cloud")
     battery: BatteryCondition = Field(default_factory=BatteryCondition)
+    fuel: FuelCondition = Field(default_factory=FuelCondition)
     doors: DoorsCondition = Field(default_factory=DoorsCondition)
     windows: WindowsCondition = Field(default_factory=WindowsCondition)
     seats: SeatsCondition = Field(default_factory=SeatsCondition)

@@ -167,6 +167,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             condition.climate.steering_wheel_heater_level = (
                 app_condition.climate.steering_wheel_heater_level
             )
+        if raw.get("fuel") and all(
+            value is None for value in condition.fuel.model_dump().values()
+        ):
+            condition.fuel = app_condition.fuel
         return condition
 
     def _register_optimistic_hold(

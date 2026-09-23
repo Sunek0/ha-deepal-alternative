@@ -46,7 +46,7 @@ from custom_components.deepal.deepal import (
     DeepalRateLimitError,
     VehicleCapabilities,
 )
-from custom_components.deepal.vehicle_model import is_s05
+from custom_components.deepal.vehicle_model import is_bev, is_s05, supports_fuel
 from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
@@ -89,11 +89,16 @@ class FakeCoordinator:
         self.client = None
         self.hass = _fake_hass()
         self.mqtt_vehicles: set[str] = set()
+        self.capabilities: dict = {}
         self.entry = SimpleNamespace(options={})
 
     def vehicle_uses_mqtt(self, car_id: str) -> bool:
         """Return whether the vehicle is marked as MQTT-backed."""
         return car_id in self.mqtt_vehicles
+
+    def vehicle_capabilities(self, car_id: str):
+        """Return the cached capabilities for a vehicle, if any."""
+        return self.capabilities.get(car_id)
 
 
 def _fake_vehicle() -> SimpleNamespace:
@@ -483,6 +488,62 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     rear_seats = {"seat_heating_level_rear_left", "seat_heating_level_rear_right"}
     assert rear_seats.isdisjoint(s05_keys)
     assert rear_seats <= s07_keys
+
+
+def test_is_bev_matches_the_model_token() -> None:
+    assert (
+        is_bev(_model_vehicle("car-1", model_code="SC6464AAKBEV", series_name="S05"))
+        is True
+    )
+    assert (
+        is_bev(_model_vehicle("car-2", model_code="SC6464AAKPHEV", series_name="S05"))
+        is False
+    )
+    assert is_bev(_model_vehicle("car-3", series_name="Deepal S07")) is False
+
+
+def test_supports_fuel_requires_capability_and_non_bev_model() -> None:
+    phev = _model_vehicle("car-1", series_name="S05", model_code="SC6464AAKPHEV")
+    bev = _model_vehicle("car-2", series_name="S05", model_code="SC6464AAKBEV")
+    unknown = _model_vehicle("car-3", series_name="Deepal X")
+    fuel_capabilities = VehicleCapabilities.from_codes(["#oilMileage"])
+    no_fuel_capabilities = VehicleCapabilities.from_codes(["#ota"])
+
+    assert fuel_capabilities.has_fuel is True
+    assert no_fuel_capabilities.has_fuel is False
+    assert supports_fuel(phev, fuel_capabilities) is True
+    assert supports_fuel(unknown, fuel_capabilities) is True
+    assert supports_fuel(bev, fuel_capabilities) is False
+    assert supports_fuel(phev, no_fuel_capabilities) is False
+    assert supports_fuel(phev, None) is False
+
+
+def test_build_sensors_adds_fuel_only_for_fuel_vehicles() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    coordinator.capabilities = {
+        "car-1": VehicleCapabilities.from_codes(["#oilMileage"]),
+        "car-2": VehicleCapabilities.from_codes(["#oilMileage"]),
+        "car-3": VehicleCapabilities.from_codes(["#ota"]),
+    }
+    phev = _model_vehicle("car-1", series_name="S05", model_code="SC6464AAKPHEV")
+    bev = _model_vehicle("car-2", series_name="S05", model_code="SC6464AAKBEV")
+    electric_without_codes = _model_vehicle("car-3", series_name="Deepal S07")
+
+    phev_keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, phev)
+    }
+    bev_keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, bev)
+    }
+    electric_keys = {
+        entity.translation_key
+        for entity in sensor.build_sensors(coordinator, electric_without_codes)
+    }
+
+    assert sensor.FUEL_SENSOR_KEYS <= phev_keys
+    assert sensor.FUEL_SENSOR_KEYS.isdisjoint(bev_keys)
+    assert sensor.FUEL_SENSOR_KEYS.isdisjoint(electric_keys)
 
 
 def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:

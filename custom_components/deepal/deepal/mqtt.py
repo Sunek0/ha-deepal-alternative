@@ -805,6 +805,10 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                 )
             ),
         },
+        "fuel": {
+            "leftPercent": _as_int(params.get("remainingFuel")),
+            "remainingRange": _as_int(params.get("remainedOilMile")),
+        },
         "door": {
             "doors": [
                 _as_int(params.get("driverDoor")),
@@ -923,6 +927,9 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "BattDCChrgInCurr",
         "battDCChrgInCurr",
         "chargDeltMins",
+        # Fuel (PHEV / range extender)
+        "remainingFuel",
+        "remainedOilMile",
         # Doors, trunk and locks
         "driverDoor",
         "passengerDoor",

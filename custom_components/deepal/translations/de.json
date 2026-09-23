@@ -114,8 +114,7 @@
           "enable_api_logging": "Redigierten API-Verkehr protokollieren",
           "enable_mqtt_controls": "Experimentelle Fernsteuerung für MQTT-Fahrzeuge (S05) aktivieren",
           "os_version": "Gemeldete Android-Version (Diagnose)",
-          "environment": "Regionale Umgebung (Diagnose)",
-          "send_timestamps": "X-Tsp-Timestamp-Header senden (Diagnose)"
+          "environment": "Regionale Umgebung (Diagnose)"
         },
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
         "data_description": {
@@ -124,8 +123,7 @@
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit redigierten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
           "enable_mqtt_controls": "Fernbefehle für MQTT-Fahrzeuge (S05) erlauben. Experimentell: Das Senden von MQTT-Befehlen ist noch nicht verifiziert.",
           "os_version": "Im x-os-version-Header gemeldete Android-Version. Der Standard (9) entspricht dem verifizierten App-Mitschnitt; ändere ihn nur, um vom Gateway abgelehnte Anfragen zu diagnostizieren.",
-          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa.",
-          "send_timestamps": "Sendet den diagnostischen X-Tsp-Timestamp-Header (Epoch in Millisekunden) mit jeder Anfrage. Standardmäßig deaktiviert."
+          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
         }
       }
     }
@@ -232,6 +230,15 @@
       },
       "charge_schedule_end": {
         "name": "Ende Ladezeitplan"
+      },
+      "fuel_level": {
+        "name": "Kraftstoffstand"
+      },
+      "fuel_range": {
+        "name": "Kraftstoffreichweite"
+      },
+      "fuel_tank_capacity": {
+        "name": "Kraftstofftank-Kapazität"
       },
       "vehicle_status": {
         "name": "Fahrzeugstatus"

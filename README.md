@@ -82,8 +82,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); a PIN created with another
   account is rejected.
-- **Scan interval**, **API logging** and the diagnostic options: polling cadence and troubleshooting
-  helpers. Leave the defaults unless you are debugging.
+- **Scan interval**, **API logging**, **regional environment** and **declared Android version**:
+  polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging.
 
 ## Supported features
 
@@ -91,7 +91,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 
 - Email-code and SMS-code login on the international platform, with automatic token refresh and a
   reauthentication flow.
-- Integration options for the scan interval, API logging and the diagnostic headers.
+- Integration options for the scan interval, API logging, the regional environment and the declared
+  Android version.
 
 ### Telemetry
 
@@ -99,6 +100,9 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
   fields.
+- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
+  entities are only created when the vehicle reports the fuel capability and its model is not a
+  BEV, so electric vehicles keep their current entity set.
 - One Home Assistant device per vehicle, with translated entity names.
 
 ### Remote controls
@@ -145,6 +149,10 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   charge limit are not created because the car does not report them. The remaining charge time
   shows `unknown` while the car has no estimate. Delete the orphaned sensor entries from the entity
   registry after updating.
+- **Fuel entities are missing on a PHEV**: the integration creates them only when the vehicle's
+  function configuration reports `#oilMileage` and the model is not a BEV. Check `capabilities` in
+  the diagnostics; if the code is absent, the gate does not fire and the change is documented in
+  `docs/phev-fuel-telemetry.md` (pending verification on a real PHEV).
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.

@@ -512,6 +512,18 @@ def test_normalize_s05_params_ignores_unknown_fields():
     assert condition["door"]["hood"] is None
 
 
+def test_normalize_s05_params_maps_fuel_fields():
+    condition = normalize_s05_params({"remainingFuel": 48, "remainedOilMile": 312.4})
+    assert condition["fuel"]["leftPercent"] == 48
+    assert condition["fuel"]["remainingRange"] == 312
+
+
+def test_normalize_s05_params_without_fuel_fields():
+    condition = normalize_s05_params({"soc": 71})
+    assert condition["fuel"]["leftPercent"] is None
+    assert condition["fuel"]["remainingRange"] is None
+
+
 def test_mapped_s05_keys_cover_every_key_the_normalization_reads():
     source = inspect.getsource(normalize_s05_params)
     keys_read = set(re.findall(r'params\.get\("([A-Za-z0-9_]+)"', source))

@@ -128,6 +128,11 @@ La condición internacional incluye además presión y alarma de neumáticos (`c
 ventilación por asiento (`cond.seats`), posición de las ventanillas (`cond.windows`) y estado y nivel de
 la calefacción del volante (`cond.climate.steering_wheel_heater_on` / `steering_wheel_heater_level`).
 
+En los PHEV/range-extender, `cond.fuel` expone el nivel, el volumen, la capacidad del depósito, la
+autonomía de combustible y la temperatura (`fuel.level_percent`, `volume_l`, `tank_capacity_l`,
+`remaining_range_km`, `temperature_c`). El SDK pide el bloque `fuel` siempre; un BEV lo devuelve
+vacío y los valores quedan en `None`.
+
 ### Integración de Home Assistant
 
 Añade la integración y elige la plataforma **International (Europe)**: el flujo hace el login real

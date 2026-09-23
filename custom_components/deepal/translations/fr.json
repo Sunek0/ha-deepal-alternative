@@ -114,8 +114,7 @@
           "enable_api_logging": "Journaliser le trafic API expurgé",
           "enable_mqtt_controls": "Activer les commandes à distance expérimentales pour les véhicules MQTT (S05)",
           "os_version": "Version d'Android déclarée (diagnostic)",
-          "environment": "Environnement régional (diagnostic)",
-          "send_timestamps": "Envoyer l'en-tête X-Tsp-Timestamp (diagnostic)"
+          "environment": "Environnement régional (diagnostic)"
         },
         "description": "Réglez l'interrogation et les diagnostics. Le code PIN de contrôle active les commandes à distance signées ; les options de diagnostic changent la façon dont l'API voit le client et ne doivent être modifiées qu'en cas de dépannage.",
         "data_description": {
@@ -124,8 +123,7 @@
           "enable_api_logging": "Écrit chaque requête et réponse API dans le journal de Home Assistant, avec jetons, clés, VIN, e-mail, téléphone, PIN et numéro de série expurgés. À activer uniquement en cas de dépannage.",
           "enable_mqtt_controls": "Autoriser les commandes à distance pour les véhicules MQTT (S05). Expérimental : l'envoi de commandes MQTT n'est pas encore vérifié.",
           "os_version": "Version d'Android déclarée dans l'en-tête x-os-version. La valeur par défaut (9) correspond à la capture vérifiée de l'application ; modifiez-la uniquement pour diagnostiquer des requêtes rejetées par la passerelle.",
-          "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut.",
-          "send_timestamps": "Envoie l'en-tête de diagnostic X-Tsp-Timestamp (epoch en millisecondes) avec chaque requête. Désactivé par défaut."
+          "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut."
         }
       }
     }
@@ -232,6 +230,15 @@
       },
       "charge_schedule_end": {
         "name": "Fin de la plage de charge"
+      },
+      "fuel_level": {
+        "name": "Niveau de carburant"
+      },
+      "fuel_range": {
+        "name": "Autonomie en carburant"
+      },
+      "fuel_tank_capacity": {
+        "name": "Capacité du réservoir de carburant"
       },
       "vehicle_status": {
         "name": "État du véhicule"
