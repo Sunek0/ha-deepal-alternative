@@ -20,15 +20,56 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 / S05 Max (`C857` in Europe) | Telemetry over MQTT. Remote controls are experimental and opt-in. |
-| S07 | Telemetry and signed remote controls through the REST API. |
-| SL03 | Telemetry and signed remote controls through the REST API. |
-| L07 | Telemetry and signed remote controls through the REST API. |
+| S05 EV / S05 PHEV | Telemetry over MQTT. Remote controls are experimental and opt-in. |
+| S07 | Not tested. Telemetry and signed remote controls through the REST API. |
+| SL03 | Not tested. Telemetry and signed remote controls through the REST API. |
+| L07 | Not tested. Telemetry and signed remote controls through the REST API. |
 
 Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
 CA/MQTT gateway and stay read-only unless you enable the experimental remote controls option;
 the rest use the signed REST command flow. Controls also depend on what each car and account
 allow. For a model not listed here, telemetry and the generic vehicle image still work.
+
+## Supported features
+
+### Authentication and session
+
+- Email-code and SMS-code login on the international platform, with automatic token refresh and a
+  reauthentication flow.
+- Integration options for the scan interval, API logging and the diagnostic headers.
+
+### Telemetry
+
+- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
+  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
+- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
+  fields.
+- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
+  entities are only created when the vehicle reports the fuel capability and its model is not a
+  BEV, so electric vehicles keep their current entity set.
+- One Home Assistant device per vehicle, with translated entity names.
+
+### Remote controls
+
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
+  and horn.
+- Comfort commands: seat heating and ventilation levels and steering-wheel heating.
+- On the S05 the controls are experimental and opt-in over MQTT, and the charge limit number is
+  not created because the car does not support it.
+- The door lock, window and trunk commands require the remote control PIN created with the account
+  Home Assistant signs in with; their entities are only created once the PIN is saved in the
+  integration options.
+
+### Vehicle image
+
+- One image entity per vehicle: the API picture when it loads, and a bundled per-model render
+  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  page always shows a picture even when the API image is slow or missing.
+
+### Diagnostics
+
+- Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
+  keys and the per-vehicle capability codes reported by the app backend.
 
 ## Recommended setup: use a secondary account
 
@@ -82,50 +123,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); a PIN created with another
   account is rejected.
-- **Scan interval**, **API logging**, **regional environment** and **declared Android version**:
-  polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging.
-
-## Supported features
-
-### Authentication and session
-
-- Email-code and SMS-code login on the international platform, with automatic token refresh and a
-  reauthentication flow.
-- Integration options for the scan interval, API logging, the regional environment and the declared
-  Android version.
-
-### Telemetry
-
-- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
-  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
-- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
-  fields.
-- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
-  entities are only created when the vehicle reports the fuel capability and its model is not a
-  BEV, so electric vehicles keep their current entity set.
-- One Home Assistant device per vehicle, with translated entity names.
-
-### Remote controls
-
-- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
-  and horn.
-- Comfort commands: seat heating and ventilation levels and steering-wheel heating.
-- On the S05 the controls are experimental and opt-in over MQTT, and the charge limit number is
-  not created because the car does not support it.
-- The door lock, window and trunk commands require the remote control PIN created with the account
-  Home Assistant signs in with; their entities are only created once the PIN is saved in the
-  integration options.
-
-### Vehicle image
-
-- One image entity per vehicle: the API picture when it loads, and a bundled per-model render
-  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
-  page always shows a picture even when the API image is slow or missing.
-
-### Diagnostics
-
-- Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
-  keys and the per-vehicle capability codes reported by the app backend.
+- **Scan interval**, **API logging** and the diagnostic options: polling cadence and troubleshooting
+  helpers. Leave the defaults unless you are debugging.
 
 ## Troubleshooting
 
