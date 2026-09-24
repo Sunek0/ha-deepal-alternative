@@ -1425,8 +1425,8 @@ async def test_unrelated_gateway_code_stays_api_error():
     assert err.value.code == "APP_1_1_02_007"
 
 
-def _login_keypair() -> tuple[str, object]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+def _login_keypair(key_size: int = 1024) -> tuple[str, object]:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     private_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -1922,6 +1922,31 @@ async def test_s05_mqtt_condition_uses_normalized_params():
 
 
 @pytest.mark.asyncio
+async def test_s05_mqtt_condition_normalizes_connection_eof():
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_params(config: dict, token: str) -> dict:
+        raise asyncio.IncompleteReadError(b"", 1)
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._read_s05_params = fake_params
+
+    with pytest.raises(DeepalAPIError) as err:
+        await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert "S05 MQTT telemetry failed" in str(err.value)
+
+
+@pytest.mark.asyncio
 async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
     params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3, "keyLowPower": 0}
     broker = _FakeMqttBroker(params)
@@ -2317,7 +2342,7 @@ async def test_rate_limit_error_mapped():
 @pytest.mark.asyncio
 async def test_serial_decrypt_mismatch_raises_command_auth_error():
     client = _client(lambda request: httpx.Response(200, json={}))
-    _, other_public_key = _login_keypair()
+    _, other_public_key = _login_keypair(key_size=2048)
     client.private_key_pem, _ = _login_keypair()
     serial = _encrypted_serial(other_public_key, "SN123")
 
@@ -2800,19 +2825,62 @@ async def test_app_signing_policy_canonical_strings_for_control_family():
     )
 
     await client.control_charge_limit("car-1", 80)
+    assert "rcToken" not in captured["body"]
     _verify_signature(
         captured["body"],
-        "chargePercentageMax=80&rcToken=rc-1&seriralNo=SN123&vehicleId=car-1",
+        "chargePercentageMax=80&seriralNo=SN123&vehicleId=car-1",
         public_key,
     )
 
     await client.control_charge_schedule("car-1", "p1", "2300", "0700", True)
+    assert "rcToken" not in captured["body"]
     _verify_signature(
         captured["body"],
         (
-            "endSwitch=1&endTime=0700&planId=p1&planType=1&rcToken=rc-1&seriralNo=SN123"
+            "endSwitch=1&endTime=0700&planId=p1&planType=1&seriralNo=SN123"
             "&startTime=2300&timeFormat=1&timeZone=GMT+08:00&vehicleId=car-1"
         ),
+        public_key,
+    )
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_pin_free_command_omits_cached_rc_token():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.control_pin = "1234"
+
+    await client.control_doors("car-1", True)
+    assert captured["body"]["rcToken"] == "rc-1"
+
+    await client.control_air_conditioner("car-1", True, 22.0)
+    assert "rcToken" not in captured["body"]
+    _verify_signature(
+        captured["body"],
+        (
+            "enabled=true&runTime=30&seriralNo=SN123&targetTemp=220"
+            "&vehicleId=car-1&windMode=1"
+        ),
+        public_key,
+    )
+
+    await client.control_flashing_honking("car-1", FLASH_HONK_BEE)
+    assert "rcToken" not in captured["body"]
+    _verify_signature(
+        captured["body"],
+        "seriralNo=SN123&type=2&vehicleId=car-1",
+        public_key,
+    )
+
+    await client.control_condition_inquiry("car-1")
+    assert "rcToken" not in captured["body"]
+    _verify_signature(
+        captured["body"],
+        "seriralNo=SN123&vehicleId=car-1",
         public_key,
     )
     await client.close()

@@ -17,7 +17,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
-from .entity import mqtt_controls_enabled
 from .runtime_data import DeepalConfigEntry
 
 
@@ -47,6 +46,7 @@ class DeepalCabinClimateEntity(
 
     _attr_has_entity_name = True
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
+    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_min_temp = 16
@@ -74,23 +74,6 @@ class DeepalCabinClimateEntity(
     @property
     def _condition(self):
         return self.coordinator.data.get(self._car_id)
-
-    @property
-    def _is_mqtt(self) -> bool:
-        """Return whether the vehicle uses the MQTT telemetry backend."""
-        return (self.vehicle.protocol_type or "").upper() == "MQTT"
-
-    @property
-    def _read_only(self) -> bool:
-        """Return whether the entity rejects commands."""
-        return self._is_mqtt and not mqtt_controls_enabled(self.coordinator)
-
-    @property
-    def supported_features(self) -> ClimateEntityFeature:
-        """Return no features for read-only MQTT vehicles."""
-        if self._read_only:
-            return ClimateEntityFeature(0)
-        return ClimateEntityFeature.TARGET_TEMPERATURE
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -132,12 +115,6 @@ class DeepalCabinClimateEntity(
         await self._async_send(False, self.target_temperature or 21.0)
 
     async def _async_send(self, enabled: bool, temperature: float) -> None:
-        if self._read_only:
-            raise HomeAssistantError(
-                "S05 MQTT vehicles are read-only; enable the experimental MQTT "
-                "controls option first"
-            )
-
         def _optimistic(condition: Any) -> Any:
             condition.climate.power_on = enabled
             if enabled:

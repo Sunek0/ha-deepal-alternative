@@ -1307,7 +1307,7 @@ class DeepalIntlClient:
         token = await self.get_mqtt_token()
         try:
             params = await self._read_s05_params(config, token)
-        except (asyncio.TimeoutError, OSError, ssl.SSLError) as exc:
+        except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
             raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
         if not params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
@@ -1683,7 +1683,7 @@ class DeepalIntlClient:
             "seriralNo": serial_no,
             "vehicleId": vehicle_id,
         }
-        if self.rc_token:
+        if require_rc_token and self.rc_token:
             signed_payload["rcToken"] = self.rc_token
         signed_payload["sign"] = self.sign_payload(
             signed_payload, omit_keys=sign_omit_keys

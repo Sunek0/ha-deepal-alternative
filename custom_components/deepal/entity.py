@@ -13,18 +13,10 @@ from .const import (
     DEFAULT_MODEL,
     DOMAIN,
     MANUFACTURER,
-    CONF_ENABLE_MQTT_CONTROLS,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
-
-
-def mqtt_controls_enabled(coordinator: DeepalDataUpdateCoordinator) -> bool:
-    """Return whether the experimental MQTT remote controls are enabled."""
-    return bool(
-        coordinator.entry.options.get(CONF_ENABLE_MQTT_CONTROLS, False)
-    )
 
 
 class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
@@ -89,10 +81,8 @@ def async_setup_control_entities(
 ) -> None:
     """Set up control entities for international, command-capable vehicles.
 
-    MQTT-backed vehicles stay read-only unless the experimental MQTT controls
-    option is enabled. Platforms whose commands require an ``rcToken`` pass
-    ``requires_control_pin`` so their entities are only created once the entry
-    stores the control PIN.
+    Platforms whose commands require an ``rcToken`` pass ``requires_control_pin``
+    so their entities are only created once the entry stores the control PIN.
     """
     coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
     client = coordinator.client
@@ -102,10 +92,7 @@ def async_setup_control_entities(
         return
 
     entities = []
-    allow_mqtt = mqtt_controls_enabled(coordinator)
     for vehicle in coordinator.vehicles:
-        if not allow_mqtt and coordinator.vehicle_uses_mqtt(vehicle.car_id):
-            continue
         entities.extend(build_entities(coordinator, vehicle))
 
     if entities:

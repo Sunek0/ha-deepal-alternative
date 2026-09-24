@@ -34,7 +34,6 @@ CONF_OS_VERSION = "os_version"
 CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
-CONF_ENABLE_MQTT_CONTROLS = "enable_mqtt_controls"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"

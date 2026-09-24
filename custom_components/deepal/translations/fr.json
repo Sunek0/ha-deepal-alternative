@@ -112,7 +112,6 @@
           "scan_interval": "Intervalle d'interrogation (secondes)",
           "control_pin": "Code PIN de contrôle à distance",
           "enable_api_logging": "Journaliser le trafic API expurgé",
-          "enable_mqtt_controls": "Activer les commandes à distance expérimentales pour les véhicules MQTT (S05)",
           "os_version": "Version d'Android déclarée (diagnostic)",
           "environment": "Environnement régional (diagnostic)"
         },
@@ -121,7 +120,6 @@
           "scan_interval": "Fréquence à laquelle Home Assistant interroge le véhicule lorsqu'aucune télémétrie MQTT n'est disponible, en secondes (30-3600).",
           "control_pin": "Code PIN de contrôle à distance de My Changan. Nécessaire pour verrouiller/déverrouiller, déplacer les vitres ou ouvrir le coffre ; il est échangé contre un jeton qui expire périodiquement et il est redemandé lorsque cela se produit.",
           "enable_api_logging": "Écrit chaque requête et réponse API dans le journal de Home Assistant, avec jetons, clés, VIN, e-mail, téléphone, PIN et numéro de série expurgés. À activer uniquement en cas de dépannage.",
-          "enable_mqtt_controls": "Autoriser les commandes à distance pour les véhicules MQTT (S05). Expérimental : l'envoi de commandes MQTT n'est pas encore vérifié.",
           "os_version": "Version d'Android déclarée dans l'en-tête x-os-version. La valeur par défaut (9) correspond à la capture vérifiée de l'application ; modifiez-la uniquement pour diagnostiquer des requêtes rejetées par la passerelle.",
           "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut."
         }

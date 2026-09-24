@@ -13,6 +13,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .deepal import (
+    CommandResult,
     CommandResultStatus,
     DeepalAPIError,
     DeepalAuthError,
@@ -33,11 +34,28 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_COMMAND_RESULT_INTERVAL = 0.5
+_COMMAND_RESULT_INTERVAL = 1.0
 _COMMAND_TIMEOUT = 60.0
-_CONDITION_FETCH_INTERVAL = 2.0
+_COMMAND_LOCK_TIMEOUT = 30.0
+_STATELESS_COMMAND_TIMEOUT = 15.0
+_OPTIMISTIC_CONFIRM_TIMEOUT = 15.0
+_CONDITION_FETCH_INTERVAL = 5.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
+
+
+def _command_failure_message(result: CommandResult) -> str:
+    """Build the error message for a failed command result."""
+    message = (
+        f"Deepal command failed with result code {result.code}: "
+        f"{result.error_message}"
+    )
+    if "TBOX_" in (result.error_message or ""):
+        message += (
+            " (the vehicle did not accept the command; it may be "
+            "offline or busy, try again when it is awake)"
+        )
+    return message
 
 
 def _diff_paths(before: Any, after: Any, prefix: str = "") -> dict[str, Any]:
@@ -86,8 +104,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.entry = entry
         self.client = client
         self.vehicles: list[Vehicle] = []
-        self._command_in_progress = False
+        self._command_locks: dict[str, asyncio.Lock] = {}
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
@@ -368,6 +387,55 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         return True
 
+    async def _async_with_session_retry(
+        self, action: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        """Run an action, refreshing the session once when it fails on auth.
+
+        Interactive commands (climate, seats, locks...) are not retried by the
+        periodic update, so an expired session used to surface the gateway
+        kick-out error until the next poll. Mirrors the update path: refresh
+        with the stored refresh token, persist the new tokens and retry the
+        failed call once. Re-raises the original error when the session cannot
+        be refreshed.
+        """
+        try:
+            return await action()
+        except DeepalAuthError:
+            if not await self._async_refresh_tokens(force=True):
+                raise
+            return await action()
+
+    async def async_condition_inquiry(self, vehicle_id: str) -> None:
+        """Ask the vehicle for fresh data, recovering an expired session."""
+        if not isinstance(self.client, DeepalIntlClient):
+            raise HomeAssistantError("Remote commands require the international platform")
+        await self._async_with_session_retry(
+            lambda: self.client.control_condition_inquiry(vehicle_id)
+        )
+
+    def _schedule_condition_inquiry(self, vehicle_id: str) -> None:
+        """Nudge the vehicle for fresh data without delaying the command.
+
+        The request forces the car to report, but awaiting it (up to the 15 s
+        HTTP timeout) would delay the result polling on a busy vehicle. It is
+        best-effort, so it runs as a tracked background task.
+        """
+        task = asyncio.create_task(self._async_nudge_condition(vehicle_id))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _async_nudge_condition(self, vehicle_id: str) -> None:
+        """Run the best-effort condition inquiry and never raise."""
+        try:
+            await self._async_with_session_retry(
+                lambda: self.client.control_condition_inquiry(vehicle_id)
+            )
+        except DeepalError as err:
+            _LOGGER.warning("Deepal condition inquiry failed: %s", err)
+        except Exception:  # noqa: BLE001 - background task must not raise
+            _LOGGER.exception("Deepal condition inquiry failed unexpectedly")
+
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
         await self._async_maybe_refresh_tokens()
@@ -385,6 +453,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _LOGGER.error("Error communicating with Deepal API: %s", err)
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
 
+    def _vehicle_command_lock(self, vehicle_id: str) -> asyncio.Lock:
+        """Return the per-vehicle command lock, creating it on first use."""
+        lock = self._command_locks.get(vehicle_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._command_locks[vehicle_id] = lock
+        return lock
+
     async def async_execute_command(
         self,
         vehicle_id: str,
@@ -392,60 +468,154 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         *,
         is_done: Callable[[], bool] | None = None,
         optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None = None,
+        serialize: bool | None = None,
         timeout: float = _COMMAND_TIMEOUT,
         interval: float = _COMMAND_RESULT_INTERVAL,
     ) -> None:
-        """Send a remote command and poll until the vehicle reports new data."""
+        """Send a remote command and poll until the vehicle reports new data.
+
+        Commands that share the vehicle state (an optimistic update is given, or
+        serialize=True) run one at a time per vehicle: a second one waits up to
+        _COMMAND_LOCK_TIMEOUT seconds for its turn and then runs, instead of
+        failing. Stateless commands (lights, horn) never wait, and commands for
+        different vehicles are independent.
+        """
         if not isinstance(self.client, DeepalIntlClient):
             raise HomeAssistantError("Remote commands require the international platform")
-        if self._command_in_progress:
+
+        if serialize is None:
+            serialize = optimistic_update is not None
+
+        if not serialize:
+            await self._async_execute_command(
+                vehicle_id,
+                send_command,
+                is_done=is_done,
+                optimistic_update=optimistic_update,
+                timeout=timeout,
+                interval=interval,
+            )
+            return
+
+        lock = self._vehicle_command_lock(vehicle_id)
+        try:
+            async with asyncio.timeout(_COMMAND_LOCK_TIMEOUT):
+                await lock.acquire()
+        except TimeoutError as error:
             raise HomeAssistantError(
-                "A Deepal command is already in progress; wait for the vehicle data to refresh"
+                "Another Deepal command for this vehicle is taking too long; "
+                "try again in a few seconds"
+            ) from error
+
+        try:
+            await self._async_execute_command(
+                vehicle_id,
+                send_command,
+                is_done=is_done,
+                optimistic_update=optimistic_update,
+                timeout=timeout,
+                interval=interval,
+            )
+        finally:
+            lock.release()
+
+    async def _async_execute_command(
+        self,
+        vehicle_id: str,
+        send_command: Callable[[], Awaitable[str]],
+        *,
+        is_done: Callable[[], bool] | None,
+        optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None,
+        timeout: float,
+        interval: float,
+    ) -> None:
+        """Run one command and poll until the vehicle reports new data."""
+        current = (self.data or {}).get(vehicle_id)
+        previous_last_updated = current.last_updated_timestamp if current else None
+
+        command_id = await self._async_with_session_retry(send_command)
+
+        if optimistic_update is None and is_done is None:
+            await self._async_confirm_stateless_command(
+                vehicle_id, command_id, timeout, interval
+            )
+            return
+
+        applied_optimistic = False
+
+        if optimistic_update is not None and current is not None:
+            try:
+                before = current.model_dump()
+                updated = optimistic_update(current.model_copy(deep=True))
+                data = dict(self.data or {})
+                data[vehicle_id] = updated
+                self.async_set_updated_data(data)
+                applied_optimistic = True
+                self._register_optimistic_hold(
+                    vehicle_id, before, updated.model_dump()
+                )
+            except Exception:  # noqa: BLE001 - never break the command
+                _LOGGER.exception("Deepal optimistic state update failed")
+
+        self._schedule_condition_inquiry(vehicle_id)
+
+        try:
+            await self._async_poll_command(
+                vehicle_id,
+                command_id,
+                previous_last_updated,
+                timeout,
+                interval,
+                is_done,
+                applied_optimistic=applied_optimistic,
+            )
+        except HomeAssistantError:
+            if applied_optimistic and current is not None:
+                self._restore_condition(vehicle_id, current)
+            raise
+
+    async def _async_confirm_stateless_command(
+        self,
+        vehicle_id: str,
+        command_id: str,
+        timeout: float,
+        interval: float,
+    ) -> None:
+        """Confirm a stateless command without waiting for telemetry.
+
+        Lights and horn do not change any telemetry field, so waiting for a
+        fresh condition would hold the caller for the whole command timeout and
+        surface the vehicle's late result for a command the gateway already
+        accepted. Poll the result for a short window instead: a reported failure
+        raises, acceptance or an inconclusive result returns.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + min(timeout, _STATELESS_COMMAND_TIMEOUT)
+
+        while True:
+            result = await self._async_with_session_retry(
+                lambda: self.client.control_result_status(vehicle_id, command_id)
             )
 
-        self._command_in_progress = True
-        applied_optimistic = False
-        try:
-            current = (self.data or {}).get(vehicle_id)
-            previous_last_updated = current.last_updated_timestamp if current else None
+            if result.status is CommandResultStatus.FAILED:
+                raise HomeAssistantError(_command_failure_message(result))
 
-            command_id = await send_command()
+            if result.status in (
+                CommandResultStatus.SUCCESS,
+                CommandResultStatus.ALREADY_DONE,
+            ):
+                return
 
-            if optimistic_update is not None and current is not None:
-                try:
-                    before = current.model_dump()
-                    updated = optimistic_update(current.model_copy(deep=True))
-                    data = dict(self.data or {})
-                    data[vehicle_id] = updated
-                    self.async_set_updated_data(data)
-                    applied_optimistic = True
-                    self._register_optimistic_hold(
-                        vehicle_id, before, updated.model_dump()
-                    )
-                except Exception:  # noqa: BLE001 - never break the command
-                    _LOGGER.exception("Deepal optimistic state update failed")
-
-            try:
-                await self.client.control_condition_inquiry(vehicle_id)
-            except DeepalError as err:
-                _LOGGER.warning("Deepal condition inquiry failed: %s", err)
-
-            try:
-                await self._async_poll_command(
-                    vehicle_id,
+            if loop.time() >= deadline:
+                _LOGGER.debug(
+                    "Deepal stateless command %s still pending after %.0fs; "
+                    "returning",
                     command_id,
-                    previous_last_updated,
-                    timeout,
-                    interval,
-                    is_done,
-                    applied_optimistic=applied_optimistic,
+                    min(timeout, _STATELESS_COMMAND_TIMEOUT),
                 )
-            except HomeAssistantError:
-                if applied_optimistic and current is not None:
-                    self._restore_condition(vehicle_id, current)
-                raise
-        finally:
-            self._command_in_progress = False
+                return
+
+            await asyncio.sleep(interval)
 
     def _restore_condition(
         self, vehicle_id: str, condition: VehicleCondition
@@ -487,25 +657,29 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition_interval: float = _CONDITION_FETCH_INTERVAL,
         applied_optimistic: bool = False,
     ) -> None:
-        """Poll the command result while bounding the condition request rate."""
+        """Poll the command result while bounding the condition request rate.
+
+        Optimistic commands already show their requested state and hold it for
+        two minutes, so they stop after a short confirmation window instead of
+        keeping the vehicle lock for the full command timeout; a slow gateway
+        then no longer blocks every queued command.
+        """
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
+        effective_timeout = (
+            min(timeout, _OPTIMISTIC_CONFIRM_TIMEOUT)
+            if applied_optimistic
+            else timeout
+        )
+        deadline = loop.time() + effective_timeout
         next_condition_at = 0.0
         condition_changed = False
 
         while True:
-            result = await self.client.control_result_status(vehicle_id, command_id)
+            result = await self._async_with_session_retry(
+                lambda: self.client.control_result_status(vehicle_id, command_id)
+            )
             if result.status is CommandResultStatus.FAILED:
-                message = (
-                    f"Deepal command failed with result code {result.code}: "
-                    f"{result.error_message}"
-                )
-                if "TBOX_" in (result.error_message or ""):
-                    message += (
-                        " (the vehicle did not accept the command; it may be "
-                        "offline or busy, try again when it is awake)"
-                    )
-                raise HomeAssistantError(message)
+                raise HomeAssistantError(_command_failure_message(result))
 
             now = loop.time()
             if now >= next_condition_at:
@@ -535,10 +709,19 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     return
 
             if loop.time() >= deadline:
-                _LOGGER.warning(
-                    "Deepal command %s timed out before the vehicle reported new data",
-                    command_id,
-                )
+                if applied_optimistic:
+                    _LOGGER.debug(
+                        "Deepal command %s is still pending after %.0fs; keeping "
+                        "the optimistic state until the next poll",
+                        command_id,
+                        effective_timeout,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Deepal command %s timed out before the vehicle reported "
+                        "new data",
+                        command_id,
+                    )
                 return
 
             await asyncio.sleep(interval)

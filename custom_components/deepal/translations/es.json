@@ -112,7 +112,6 @@
           "scan_interval": "Intervalo de sondeo (segundos)",
           "control_pin": "PIN de control remoto",
           "enable_api_logging": "Registrar tráfico API redactado",
-          "enable_mqtt_controls": "Habilitar controles remotos experimentales para vehículos MQTT (S05)",
           "os_version": "Versión de Android declarada (diagnóstico)",
           "environment": "Entorno regional (diagnóstico)"
         },
@@ -121,7 +120,6 @@
           "scan_interval": "Cada cuánto consulta Home Assistant el vehículo cuando no hay telemetría MQTT, en segundos (30-3600).",
           "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero.",
           "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie redactados. Actívalo solo al solucionar problemas.",
-          "enable_mqtt_controls": "Permite comandos remotos en vehículos MQTT (S05). Experimental: el envío de comandos por MQTT aún no está verificado.",
           "os_version": "Versión de Android declarada en la cabecera x-os-version. El valor por defecto (9) coincide con la captura verificada de la app; cámbialo solo para diagnosticar peticiones rechazadas por el gateway.",
           "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto."
         }

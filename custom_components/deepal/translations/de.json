@@ -112,7 +112,6 @@
           "scan_interval": "Abfrageintervall (Sekunden)",
           "control_pin": "Fernsteuerungs-PIN",
           "enable_api_logging": "Redigierten API-Verkehr protokollieren",
-          "enable_mqtt_controls": "Experimentelle Fernsteuerung für MQTT-Fahrzeuge (S05) aktivieren",
           "os_version": "Gemeldete Android-Version (Diagnose)",
           "environment": "Regionale Umgebung (Diagnose)"
         },
@@ -121,7 +120,6 @@
           "scan_interval": "Wie oft Home Assistant das Fahrzeug abfragt, wenn keine MQTT-Telemetrie verfügbar ist, in Sekunden (30-3600).",
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit redigierten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
-          "enable_mqtt_controls": "Fernbefehle für MQTT-Fahrzeuge (S05) erlauben. Experimentell: Das Senden von MQTT-Befehlen ist noch nicht verifiziert.",
           "os_version": "Im x-os-version-Header gemeldete Android-Version. Der Standard (9) entspricht dem verifizierten App-Mitschnitt; ändere ihn nur, um vom Gateway abgelehnte Anfragen zu diagnostizieren.",
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
         }

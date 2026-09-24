@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Sunek0/ha-deepal-alternative/issues",
   "requirements": ["httpx>=0.25.0", "pydantic>=2.0.0", "cryptography>=41.0.0"],
-  "version": "1.1.0"
+  "version": "1.2.0"
 }
