@@ -864,6 +864,11 @@ def _diagnostics_entry(coordinator) -> SimpleNamespace:
 def _mqtt_condition() -> VehicleCondition:
     condition = VehicleCondition(car_id="car-1", vin="VIN-REAL-1")
     condition.battery.soc_percentage = 71
+    condition.condition_source = "sda-mqtt"
+    condition.mqtt_variants = {
+        "sda-mqtt": {"soc": 71},
+        "sda-mqtt-signal-list": {},
+    }
     condition.raw_data = {"vehicleStatus": {"soc": 71, "latitude": 40.4}}
     condition.mqtt_raw_data = {
         "soc": 71,
@@ -898,6 +903,12 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     assert "mqtt_raw_data" not in report["mapped_telemetry"]["car-1"]
     assert report["raw_rest"]["car-1"]["vehicleStatus"]["soc"] == 71
     assert report["raw_mqtt"]["car-1"]["chargeCoverStatus"] == 3
+    assert report["condition_sources"]["car-1"] == "sda-mqtt"
+    assert report["raw_mqtt_variants"]["car-1"] == {
+        "sda-mqtt": {"soc": 71},
+        "sda-mqtt-signal-list": {},
+    }
+    assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [
         "chargeCoverStatus",
         "latitude",
@@ -940,7 +951,16 @@ async def test_diagnostics_report_survives_an_empty_entry() -> None:
     assert report["vehicles"] == []
     assert report["mapped_telemetry"] == {}
     assert report["raw_mqtt"] == {}
+    assert report["condition_sources"] == {}
+    assert report["raw_mqtt_variants"] == {}
     assert report["unmapped_mqtt_keys"] == {}
+
+
+def test_options_flow_lists_the_supported_environments() -> None:
+    from custom_components.deepal.deepal.endpoints import INTL_ENVIRONMENTS
+
+    labels = [environment.label for environment in INTL_ENVIRONMENTS.values()]
+    assert labels == ["Europe", "Latin America", "ASEAN", "ASEAN CONNECT"]
 
 
 def test_config_flow_defaults_to_the_international_platform() -> None:

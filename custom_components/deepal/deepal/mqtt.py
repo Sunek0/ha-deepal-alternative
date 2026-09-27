@@ -15,7 +15,7 @@ import hashlib
 import json
 import struct
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -31,8 +31,36 @@ S05_SERVICE_CODES = (
     "THU_Service",
 )
 
+# SDA/VOT condition service recovered from the 1.12.0 DEX: CarConditionCmdConstant
+# (M = Get_CarCondition, P_ConditionQueryType, P_SignalList, SK = CarCondition) and
+# RemoteControlConstant.MQTT_CMD_METHOD_CAR_CONDITION.
+SDA_CONDITION_SERVICE = "CarCondition"
+SDA_CONDITION_COMMAND = "Get_CarCondition"
+SDA_SERVICE_CODES = (SDA_CONDITION_SERVICE, SDA_CONDITION_COMMAND)
+
+# The app's condition sections (CarConditionStrategy.buildStrategy), used as the
+# SignalList probe for SDA vehicles.
+SDA_CONDITION_SECTIONS = (
+    "vehicleStatus",
+    "location",
+    "door",
+    "window",
+    "tire",
+    "seat",
+    "lamp",
+    "charge",
+    "hvac",
+    "fuel",
+    "welcome",
+    "departurePlan",
+    "airConditionPlan",
+    "warmCoolingBox",
+)
+
 MQTT_PROTOCOL_LEVEL = 5
 MQTT_DEFAULT_KEEPALIVE = 60
+# Seconds to wait for one SDA probe response before publishing the next variant.
+MQTT_SDA_PROBE_GRACE = 3.0
 
 # Topic templates from the app's MqttConstantKt (1.12.0 DEX recovery).
 LOGIN_PUB_TOPIC_TEMPLATE = "$vdp/%s/client/loginout"
@@ -406,6 +434,21 @@ class MqttTopics:
         return self.device_did or self.login_did
 
 
+@dataclass(frozen=True)
+class MqttExchangeResult:
+    """Raw parameters of one MQTT condition exchange plus its provenance.
+
+    ``source`` names the condition service that produced the parameters
+    (``sda-mqtt``, ``sda-mqtt-signal-list``, ``legacy-mqtt`` or ``None``), and
+    ``variants`` keeps the raw parameters of every request variant that was
+    attempted, empty entries included, for diagnostics.
+    """
+
+    params: dict[str, Any]
+    source: Optional[str] = None
+    variants: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
 def _config_topic_entries(config: Any) -> list[tuple[str, Optional[str], Optional[str]]]:
     """Return ``(topic, msg_type, direction)`` triples from a connection config."""
     entries: list[tuple[str, Optional[str], Optional[str]]] = []
@@ -663,6 +706,55 @@ def condition_request_payload(
 ) -> dict[str, Any]:
     """Build the MQTT ``properties/get/req`` message that returns the condition."""
     services = [{"service_code": "car_condition", "params": {"fetchPropertyType": 0}}]
+    identifiers = dict(basic_info or {})
+    identifiers.setdefault("ruid", login_did)
+    payload: dict[str, Any] = {
+        "did": device_did,
+        "r": req_id,
+        "v": "v1.0.0",
+        "mt": "properties",
+        "e": 1,
+        "z": "gzip",
+        "tf": 0,
+        "dt": iso_now(),
+        "b": _filter_basic_info(identifiers),
+        "sers": aes_cbc_encrypt(services, secret_key, req_id),
+    }
+    _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
+    return payload
+
+
+def sda_condition_request_payload(
+    device_did: str,
+    login_did: str,
+    secret_key: str,
+    req_id: str,
+    basic_info: Optional[Mapping[str, Any]] = None,
+    *,
+    condition_query_type: int = 0,
+    signal_list: Optional[list[str]] = None,
+    rt: Optional[str] = "",
+    ms: Optional[int] = None,
+    st: Optional[int] = None,
+    time_type: Optional[int] = None,
+) -> dict[str, Any]:
+    """Build the MQTT ``properties/get/req`` message with the SDA condition service.
+
+    The 1.12.0 app builds the SDA request from the VOT service DTO
+    (``CarConditionCmdConstant``): ``service_code`` ``CarCondition``,
+    ``command_code`` ``Get_CarCondition`` and a ``params`` object with
+    ``ConditionQueryType`` plus an optional ``SignalList``.
+    """
+    params: dict[str, Any] = {"ConditionQueryType": condition_query_type}
+    if signal_list:
+        params["SignalList"] = list(signal_list)
+    services = [
+        {
+            "service_code": SDA_CONDITION_SERVICE,
+            "command_code": SDA_CONDITION_COMMAND,
+            "params": params,
+        }
+    ]
     identifiers = dict(basic_info or {})
     identifiers.setdefault("ruid", login_did)
     payload: dict[str, Any] = {

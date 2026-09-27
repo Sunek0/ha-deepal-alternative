@@ -47,6 +47,17 @@ class _FakeIntlClient(DeepalIntlClient):
         self.capabilities: VehicleCapabilities | None = None
         self.capabilities_error: Exception | None = None
         self.refresh_calls = 0
+        self.mqtt_condition: VehicleCondition | None = None
+        self.mqtt_sda_flags: list[bool] = []
+
+    async def s05_mqtt_condition(
+        self, vehicle_id: str, vin: str | None = None, *, sda: bool = False
+    ) -> VehicleCondition:
+        self.mqtt_sda_flags.append(sda)
+        self.events.append("mqtt")
+        if self.mqtt_condition is not None:
+            return self.mqtt_condition
+        return VehicleCondition(car_id=vehicle_id, vin=vin or "")
 
     async def refresh_tokens(self, force: bool = False) -> AuthToken:
         self.refresh_calls += 1
@@ -926,6 +937,48 @@ async def test_app_comfort_overlay_uses_server_condition():
     plain.seats.front_left.ventilation_level = None
     merged = await coordinator._overlay_app_comfort(vehicle, plain)
     assert merged.seats.front_left.ventilation_level is None
+
+
+@pytest.mark.asyncio
+async def test_condition_uses_sda_service_for_sda_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="sda-mqtt"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == [True]
+    assert condition.condition_source == "sda-mqtt"
+
+
+@pytest.mark.asyncio
+async def test_condition_uses_legacy_service_for_mqtt_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")]
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="legacy-mqtt"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == [False]
+    assert condition.condition_source == "legacy-mqtt"
+
+
+@pytest.mark.asyncio
+async def test_condition_marks_the_rest_source():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="REST")]
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == []
+    assert condition.condition_source == "rest"
 
 
 @pytest.mark.asyncio

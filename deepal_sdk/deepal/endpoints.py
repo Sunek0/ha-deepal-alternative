@@ -42,6 +42,24 @@ INTL_ENVIRONMENTS: dict[str, IntlEnvironment] = {
             "https://m.mx.changanauto.link",
             "https://sda-m.mx.changanauto.link",
         ),
+        IntlEnvironment(
+            "release_ase",
+            "ASEAN",
+            "ca",
+            "https://m.iov.changanauto.sg",
+            "https://ca-m.iov.changanauto.sg",
+            "https://prod-m.sda.changanauto.sg",
+            "/appgw",
+        ),
+        IntlEnvironment(
+            "release_ase_connect",
+            "ASEAN CONNECT",
+            "changan",
+            "https://m.iov.changanauto.sg",
+            "https://ca-m.iov.changanauto.sg",
+            "https://prod-m.sda.changanauto.sg",
+            "/ca-appgw",
+        ),
     )
 }
 DEFAULT_INTL_ENVIRONMENT = "release_eu"
@@ -49,8 +67,6 @@ DEFAULT_INTL_ENVIRONMENT = "release_eu"
 LEGACY_INTL_ENVIRONMENTS: dict[str, str] = {
     "release_eu_mix": "release_eu",
     "preprod_eu": "release_eu",
-    "release_ase": "release_eu",
-    "release_ase_connect": "release_eu",
     "release_dlt": "release_eu",
     "release_st": "release_eu",
     "release_alq": "release_eu",

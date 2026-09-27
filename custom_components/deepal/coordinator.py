@@ -272,9 +272,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             (item for item in self.vehicles if item.car_id == vehicle_id), None
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
+            sda = self.client.is_sda_mqtt_vehicle(vehicle)
             try:
                 condition = await self.client.s05_mqtt_condition(
-                    vehicle_id, vin=vehicle.vin
+                    vehicle_id, vin=vehicle.vin, sda=sda
                 )
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
@@ -283,7 +284,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 ):
                     try:
                         condition = await self.client.s05_mqtt_condition(
-                            vehicle_id, vin=vehicle.vin
+                            vehicle_id, vin=vehicle.vin, sda=sda
                         )
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
@@ -297,6 +298,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )
+        condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)
 
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:

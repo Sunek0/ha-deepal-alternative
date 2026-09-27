@@ -74,7 +74,7 @@ def _vehicle_data(vehicle: Any) -> dict[str, Any]:
 def _condition_dump(condition: VehicleCondition) -> dict[str, Any]:
     """Serialize a condition without duplicating the raw payload sections."""
     return condition.model_dump(
-        mode="json", exclude={"raw_data", "mqtt_raw_data"}
+        mode="json", exclude={"raw_data", "mqtt_raw_data", "mqtt_variants"}
     )
 
 
@@ -109,6 +109,15 @@ async def async_get_config_entry_diagnostics(
         "raw_mqtt": {
             car_id: condition.mqtt_raw_data
             for car_id, condition in conditions.items()
+        },
+        "condition_sources": {
+            car_id: condition.condition_source
+            for car_id, condition in conditions.items()
+        },
+        "raw_mqtt_variants": {
+            car_id: condition.mqtt_variants
+            for car_id, condition in conditions.items()
+            if condition.mqtt_variants is not None
         },
         "unmapped_mqtt_keys": {
             car_id: sorted(unmapped_s05_keys(condition.mqtt_raw_data or {}))

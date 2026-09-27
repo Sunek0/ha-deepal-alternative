@@ -25,6 +25,7 @@ from deepal.mqtt import (
     parse_publish,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    sda_condition_request_payload,
     secret_from_login_payload,
     topic_device_id,
     unmapped_s05_keys,
@@ -308,6 +309,44 @@ def test_condition_request_payload_is_encrypted():
     assert payload["b"] == {"ruid": "login-did"}
     services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
     assert services[0]["service_code"] == "car_condition"
+
+
+def test_sda_condition_request_payload_shape():
+    payload = sda_condition_request_payload(
+        "car-did",
+        "login-did",
+        "secret-key-12345",
+        "req-1",
+        basic_info={"vin": "VIN123"},
+    )
+
+    assert payload["did"] == "car-did"
+    assert payload["mt"] == "properties"
+    assert payload["b"] == {"ruid": "login-did", "vin": "VIN123"}
+    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
+    assert services == [
+        {
+            "service_code": "CarCondition",
+            "command_code": "Get_CarCondition",
+            "params": {"ConditionQueryType": 0},
+        }
+    ]
+
+
+def test_sda_condition_request_payload_with_signal_list():
+    payload = sda_condition_request_payload(
+        "car-did",
+        "login-did",
+        "secret-key-12345",
+        "req-1",
+        signal_list=["door", "hvac"],
+    )
+
+    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
+    assert services[0]["params"] == {
+        "ConditionQueryType": 0,
+        "SignalList": ["door", "hvac"],
+    }
 
 
 def test_login_request_payload_shape():
