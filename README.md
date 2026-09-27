@@ -1,6 +1,7 @@
 # ha-deepal-alternative
 
-Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05 BEV/PHEV, S07) over the official international and chinese API.
+Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, SL03,
+L07) over the official international and chinese API.
 
 ## Important warnings
 
@@ -26,7 +27,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | Model | Notes |
 | --- | --- |
 | S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
+| E07 (SDA platform) | **Beta:** MQTT telemetry through the SDA condition service; pending verification on a real car (issue #2). |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
+| SL03 | Not tested. Telemetry and signed remote controls through the REST API. |
+| L07 | Not tested. Telemetry and signed remote controls through the REST API. |
 
 Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
 CA/MQTT gateway; every command-capable model, MQTT-backed included, uses the same signed command
@@ -77,7 +81,7 @@ vehicle image still work.
 ### Vehicle image
 
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
-  (S05, S07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
 
 ### Diagnostics
@@ -101,6 +105,18 @@ secondary account only for Home Assistant:
    not need it.
 5. Sign out of the app and add the integration in Home Assistant with the **new** account. Your main
    account can stay signed in on the phone.
+
+## Installation guide
+
+A complete step-by-step guide (secondary account, HACS install, configuration, remote control PIN and
+troubleshooting) is available in every language the integration supports:
+
+- [Español](guides/installation-guide.es.md)
+- [English](guides/installation-guide.en.md)
+- [Deutsch](guides/installation-guide.de.md)
+- [Français](guides/installation-guide.fr.md)
+- [Italiano](guides/installation-guide.it.md)
+- [Português](guides/installation-guide.pt.md)
 
 ## Installation
 

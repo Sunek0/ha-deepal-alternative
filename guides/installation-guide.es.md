@@ -121,7 +121,8 @@ maletero) y para que Home Assistant cree sus entidades:
   carga y demás telemetría.
 - Prueba un comando seguro (por ejemplo, encender las luces o el clima) y confirma que el coche
   responde.
-- Los comandos que dependen del PIN (puertas, ventanillas, maletero) que creamos con la cuenta secundaria-
+- Los comandos que dependen del PIN (puertas, ventanillas, maletero) se firman con el PIN que
+  creaste con la cuenta secundaria; si fallan, revisa el paso 9.
 
 ## Notas y solución de problemas
 
