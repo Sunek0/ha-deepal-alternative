@@ -37,15 +37,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          prerelease=""
-          case "${GITHUB_REF_NAME}" in
-            *-*) prerelease="--prerelease" ;;
-          esac
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" $prerelease
+            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}"
           else
             gh release create "${GITHUB_REF_NAME}" \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes \
-              --verify-tag $prerelease
+              --verify-tag
           fi

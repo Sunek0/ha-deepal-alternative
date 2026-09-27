@@ -124,6 +124,10 @@
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
         }
       }
+    },
+    "error": {
+      "invalid_pin": "Die Steuerungs-PIN ist für dieses Konto ungültig.",
+      "pin_rate_limited": "Keine PIN-Versuche mehr übrig; warte, bevor du es erneut versuchst."
     }
   },
   "entity": {
@@ -252,6 +256,9 @@
       },
       "last_updated": {
         "name": "Letzte Aktualisierung"
+      },
+      "remaining_charge_time_formatted": {
+        "name": "Restladezeit (H:MM)"
       }
     },
     "binary_sensor": {

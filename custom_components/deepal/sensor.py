@@ -60,6 +60,19 @@ S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
 FUEL_SENSOR_KEYS = frozenset({"fuel_level", "fuel_range", "fuel_tank_capacity"})
 
 
+def format_hours_minutes(minutes: int | None) -> str | None:
+    """Format reported minutes as ``H:MM``, or None when there is no estimate.
+
+    The API reports the remaining charge time in whole minutes; the duration
+    sensor exposes them for statistics while this text form is what dashboards
+    show without the seconds the frontend adds to duration values.
+    """
+    if minutes is None:
+        return None
+    total = max(0, int(minutes))
+    return f"{total // 60}:{total % 60:02d}"
+
+
 def build_sensors(
     coordinator: DeepalDataUpdateCoordinator, vehicle: Any
 ) -> list[SensorEntity]:
@@ -423,6 +436,17 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.MINUTES,
+        icon="mdi:timer-sand",
+    ),
+    DeepalSensorDescription(
+        key="remaining_charge_time_formatted",
+        name="Remaining Charge Time (H:MM)",
+        value_fn=lambda cond, vehicle: format_hours_minutes(
+            cond.battery.remaining_charge_time_min
+        ),
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
         icon="mdi:timer-sand",
     ),
     DeepalSensorDescription(

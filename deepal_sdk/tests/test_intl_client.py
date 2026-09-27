@@ -23,21 +23,13 @@ from deepal import (
     DeepalIntlClient,
     DeepalRateLimitError,
     SeatCapabilities,
-    Vehicle,
     VehicleCapabilities,
     FLASH_HONK_BEE,
     FLASH_HONK_FLASH,
     FLASH_HONK_FLASH_BEE,
     FLASH_HONK_OFF,
 )
-from deepal.mqtt import (
-    SDA_CONDITION_SECTIONS,
-    MqttExchangeResult,
-    aes_cbc_decrypt,
-    aes_cbc_encrypt,
-    build_publish_packet,
-    parse_publish,
-)
+from deepal.mqtt import aes_cbc_encrypt, build_publish_packet, parse_publish
 from deepal.intl import (
     CAR_CONTROL_REFRESH_THROTTLE_SECONDS,
     INTL_REFRESH_THROTTLE_SECONDS,
@@ -121,7 +113,6 @@ class _FakeMqttBroker:
         reply_condition_after_pings: int = 0,
         connack_reason_code: int = 0,
         service_code: str = "car_condition",
-        condition_sequence: Optional[list[Optional[dict[str, Any]]]] = None,
     ) -> None:
         self.reader = asyncio.StreamReader()
         self.writes: list[bytes] = []
@@ -133,10 +124,6 @@ class _FakeMqttBroker:
         self.login_payload: Optional[dict[str, Any]] = None
         self.condition_topic: Optional[str] = None
         self.condition_payload: Optional[dict[str, Any]] = None
-        self.condition_publishes: list[dict[str, Any]] = []
-        self.condition_sequence = (
-            list(condition_sequence) if condition_sequence is not None else None
-        )
         self.pings = 0
         self.params = params
         self.secret_key = secret_key
@@ -184,26 +171,20 @@ class _FakeMqttBroker:
             return
         self.condition_topic = topic
         self.condition_payload = payload
-        self.condition_publishes.append(payload)
-        if self.condition_sequence is not None:
-            entry = self.condition_sequence.pop(0) if self.condition_sequence else None
-            if entry is not None:
-                self._feed_condition_response(entry)
-            return
         if self.reply_condition_after_pings == 0:
             self._feed_condition_response()
 
-    def _feed_condition_response(
-        self, entry: Optional[dict[str, Any]] = None
-    ) -> None:
+    def _feed_condition_response(self) -> None:
         payload = self.condition_payload
         if payload is None:
             return
         self._condition_sent = True
         req_id = payload["r"]
-        if entry is None:
-            entry = {"service_code": self.service_code, "params": self.params}
-        encrypted = aes_cbc_encrypt([entry], self.secret_key, req_id)
+        encrypted = aes_cbc_encrypt(
+            [{"service_code": self.service_code, "params": self.params}],
+            self.secret_key,
+            req_id,
+        )
         self.reader.feed_data(
             build_publish_packet(
                 "$vdp/device-did/properties/get/res",
@@ -1889,23 +1870,6 @@ def test_vehicle_capabilities_without_front_ventilation_hints_pro():
     assert capabilities.seats["front_left"].ventilation is False
 
 
-@pytest.mark.parametrize(
-    ("protocol_type", "is_mqtt", "is_sda"),
-    [
-        ("MQTT", True, False),
-        ("SDA-MQTT", True, True),
-        ("sda-mqtt", True, True),
-        ("REST", False, False),
-        (None, False, False),
-    ],
-)
-def test_mqtt_protocol_detection(protocol_type, is_mqtt, is_sda):
-    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type=protocol_type)
-
-    assert DeepalIntlClient.is_mqtt_vehicle(vehicle) is is_mqtt
-    assert DeepalIntlClient.is_sda_mqtt_vehicle(vehicle) is is_sda
-
-
 @pytest.mark.asyncio
 async def test_s05_mqtt_condition_uses_normalized_params():
     raw_params = {
@@ -1936,12 +1900,8 @@ async def test_s05_mqtt_condition_uses_normalized_params():
     async def fake_token() -> str:
         return "tsp-token"
 
-    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
-        return MqttExchangeResult(
-            params=dict(raw_params),
-            source="legacy-mqtt",
-            variants={"legacy-mqtt": dict(raw_params)},
-        )
+    async def fake_params(config: dict, token: str) -> dict:
+        return dict(raw_params)
 
     client = _client(lambda request: httpx.Response(200, json={}))
     client.access_token = "test_token_123"
@@ -1969,7 +1929,7 @@ async def test_s05_mqtt_condition_normalizes_connection_eof():
     async def fake_token() -> str:
         return "tsp-token"
 
-    async def fake_params(config: dict, token: str, **kwargs) -> dict:
+    async def fake_params(config: dict, token: str) -> dict:
         raise asyncio.IncompleteReadError(b"", 1)
 
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -1998,7 +1958,7 @@ async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
         result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert result["soc"] == 71
     assert "S05 MQTT unmapped parameters" in caplog.text
     assert "chargeCoverStatus" in caplog.text
     assert "keyLowPower" in caplog.text
@@ -2019,7 +1979,7 @@ async def test_read_s05_params_skips_discovery_log_when_debug_disabled(
         result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert result["soc"] == 71
     assert "chargeCoverStatus" not in caplog.text
 
 
@@ -2073,10 +2033,10 @@ async def test_read_s05_params_runs_mqtt5_exchange(monkeypatch):
     client = _client(lambda request: httpx.Response(200, json={}))
     client.user_id = "test-user-1"
 
-    result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    params = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert params["soc"] == 71
     assert captured["host"] == "broker.example"
     assert captured["port"] == 8883
     assert captured["server_hostname"] == "broker.example"
@@ -2142,10 +2102,10 @@ async def test_read_s05_params_sends_pingreq_when_keepalive_elapses(monkeypatch)
     client.user_id = "test-user-1"
     client.mqtt_keepalive = 0.01
 
-    result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    params = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert params["soc"] == 71
     assert broker.pings >= 2
     assert broker.writes[-1] == b"\xe0\x02\x00\x00"
     assert broker.writes_before_close == len(broker.writes)
@@ -2173,324 +2133,15 @@ async def test_read_s05_params_resolves_template_topics(monkeypatch):
     client = _client(lambda request: httpx.Response(200, json={}))
     client.user_id = "test-user-1"
 
-    result = await client._read_s05_params(config, "test-mqtt-token")
+    params = await client._read_s05_params(config, "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert params["soc"] == 71
     assert broker.login_topic == "$vdp/did-9/client/loginout"
     assert broker.condition_topic == "$vdp/did-9/properties/get/req"
     assert broker.subscribe_packet is not None
     assert b"$vdp/did-9/server/loginout" in broker.subscribe_packet
     assert b"$vdp/did-9/did-9/server/event" in broker.subscribe_packet
-
-
-def _sda_client():
-    client = _client(lambda request: httpx.Response(200, json={}))
-    client.user_id = "test-user-1"
-    client.mqtt_sda_probe_grace = 0.01
-    client.mqtt_exchange_timeout = 0.2
-    return client
-
-
-def _published_services(broker, payload):
-    return aes_cbc_decrypt(payload["sers"], broker.secret_key, payload["r"])
-
-
-def test_sda_payload_merges_data_and_params():
-    req_id = "req-1"
-    encrypted = aes_cbc_encrypt(
-        [
-            {
-                "service_code": "CarCondition",
-                "data": {"soc": 55, "totalOdometer": 1000},
-            },
-            {
-                "service_code": "CarCondition",
-                "params": {"remainedPowerMile": 210},
-            },
-        ],
-        "secret-key-12345",
-        req_id,
-    )
-
-    params = DeepalIntlClient._s05_params_from_payload(
-        {"r": req_id, "rs": encrypted}, "secret-key-12345"
-    )
-
-    assert params == {
-        "soc": 55,
-        "totalOdometer": 1000,
-        "remainedPowerMile": 210,
-    }
-
-
-def test_sda_payload_with_empty_data_and_params():
-    req_id = "req-1"
-    encrypted = aes_cbc_encrypt(
-        [{"service_code": "CarCondition", "data": {}, "params": {}}],
-        "secret-key-12345",
-        req_id,
-    )
-
-    params = DeepalIntlClient._s05_params_from_payload(
-        {"r": req_id, "rs": encrypted}, "secret-key-12345"
-    )
-
-    assert params == {}
-
-
-@pytest.mark.asyncio
-async def test_read_s05_params_sda_uses_the_first_variant(monkeypatch):
-    broker = _FakeMqttBroker(
-        {},
-        condition_sequence=[
-            {"service_code": "CarCondition", "data": dict(S05_BROKER_PARAMS)}
-        ],
-    )
-    _install_fake_broker(monkeypatch, broker)
-    client = _sda_client()
-
-    result = await client._read_s05_params(
-        _mqtt_config(), "test-mqtt-token", sda=True
-    )
-    await client.close()
-
-    assert result.params == S05_BROKER_PARAMS
-    assert result.source == "sda-mqtt"
-    assert result.variants == {"sda-mqtt": S05_BROKER_PARAMS}
-    assert len(broker.condition_publishes) == 1
-    services = _published_services(broker, broker.condition_publishes[0])
-    assert services == [
-        {
-            "service_code": "CarCondition",
-            "command_code": "Get_CarCondition",
-            "params": {"ConditionQueryType": 0},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_read_s05_params_sda_falls_back_to_signal_list(monkeypatch):
-    broker = _FakeMqttBroker(
-        {},
-        condition_sequence=[
-            None,
-            {"service_code": "CarCondition", "data": dict(S05_BROKER_PARAMS)},
-        ],
-    )
-    _install_fake_broker(monkeypatch, broker)
-    client = _sda_client()
-
-    result = await client._read_s05_params(
-        _mqtt_config(), "test-mqtt-token", sda=True
-    )
-    await client.close()
-
-    assert result.params == S05_BROKER_PARAMS
-    assert result.source == "sda-mqtt-sections"
-    assert result.variants["sda-mqtt"] == {}
-    assert result.variants["sda-mqtt-sections"] == S05_BROKER_PARAMS
-    assert len(broker.condition_publishes) == 2
-    services = _published_services(broker, broker.condition_publishes[1])
-    assert services[0]["params"]["SignalList"] == list(SDA_CONDITION_SECTIONS)
-
-
-@pytest.mark.asyncio
-async def test_read_s05_params_sda_falls_back_to_legacy(monkeypatch):
-    broker = _FakeMqttBroker(
-        {},
-        condition_sequence=[
-            None,
-            None,
-            {"service_code": "car_condition", "params": dict(S05_BROKER_PARAMS)},
-        ],
-    )
-    _install_fake_broker(monkeypatch, broker)
-    client = _sda_client()
-
-    result = await client._read_s05_params(
-        _mqtt_config(), "test-mqtt-token", sda=True
-    )
-    await client.close()
-
-    assert result.params == S05_BROKER_PARAMS
-    assert result.source == "legacy-mqtt"
-    assert result.variants["sda-mqtt"] == {}
-    assert result.variants["sda-mqtt-sections"] == {}
-    assert result.variants["legacy-mqtt"] == S05_BROKER_PARAMS
-    assert len(broker.condition_publishes) == 3
-    services = _published_services(broker, broker.condition_publishes[2])
-    assert services[0]["service_code"] == "car_condition"
-
-
-@pytest.mark.asyncio
-async def test_read_s05_params_sda_all_variants_empty(monkeypatch):
-    broker = _FakeMqttBroker({}, condition_sequence=[None, None, None])
-    _install_fake_broker(monkeypatch, broker)
-    client = _sda_client()
-
-    result = await client._read_s05_params(
-        _mqtt_config(), "test-mqtt-token", sda=True
-    )
-    await client.close()
-
-    assert result.params == {}
-    assert result.source is None
-    assert result.variants == {
-        "sda-mqtt": {},
-        "sda-mqtt-sections": {},
-        "legacy-mqtt": {},
-    }
-    assert len(broker.condition_publishes) == 3
-
-
-@pytest.mark.asyncio
-async def test_s05_mqtt_condition_records_the_sda_source():
-    exchange = MqttExchangeResult(
-        params=dict(S05_BROKER_PARAMS),
-        source="sda-mqtt",
-        variants={"sda-mqtt": dict(S05_BROKER_PARAMS)},
-    )
-
-    async def fake_config(vehicle_id: str) -> dict:
-        return {}
-
-    async def fake_token() -> str:
-        return "tsp-token"
-
-    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
-        return exchange
-
-    client = _client(lambda request: httpx.Response(200, json={}))
-    client.access_token = "test_token_123"
-    client.user_id = "test-user-1"
-    client.get_mqtt_config = fake_config
-    client.get_mqtt_token = fake_token
-    client._read_s05_params = fake_params
-
-    condition = await client.s05_mqtt_condition("car-1", sda=True)
-    await client.close()
-
-    assert condition.condition_source == "sda-mqtt"
-    assert condition.mqtt_variants == {"sda-mqtt": dict(S05_BROKER_PARAMS)}
-
-
-@pytest.mark.asyncio
-async def test_read_s05_params_sda_uses_the_plan_property_list(monkeypatch):
-    tree = {
-        "functionList": [
-            {
-                "id": "2",
-                "deviceId": "plan-did",
-                "commandCode": "Get_CarCondition",
-                "serviceCode": "CarCondition",
-                "strategyCode": "strategy-1",
-                "propertyCode": "carCondition",
-            },
-            {"id": "3", "parentId": "2", "propertyCode": "socLeft"},
-        ]
-    }
-    config = _mqtt_config(carConfigJson=json.dumps(tree))
-    broker = _FakeMqttBroker(
-        {},
-        condition_sequence=[
-            None,
-            {"service_code": "CarCondition", "data": dict(S05_BROKER_PARAMS)},
-        ],
-    )
-    _install_fake_broker(monkeypatch, broker)
-    client = _sda_client()
-
-    result = await client._read_s05_params(config, "test-mqtt-token", sda=True)
-    await client.close()
-
-    assert result.params == S05_BROKER_PARAMS
-    assert result.source == "sda-mqtt-properties"
-    assert result.plan is not None and result.plan.device_did == "plan-did"
-    assert len(broker.condition_publishes) == 2
-    services = _published_services(broker, broker.condition_publishes[1])
-    assert services[0]["params"]["SignalList"] == ["carCondition", "socLeft"]
-    assert services[0]["strategy_code"] == "strategy-1"
-    assert broker.condition_topic == "$vdp/plan-did/properties/get/req"
-    assert broker.subscribe_packet is not None
-    assert b"$vdp/plan-did/properties/get/res" in broker.subscribe_packet
-
-
-@pytest.mark.asyncio
-async def test_get_sda_vehicle_condition_uses_the_sda_gateway():
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["body"] = json.loads(request.content)
-        captured["token"] = request.headers.get("X-Tsp-User-Token")
-        return httpx.Response(
-            200,
-            json={
-                "success": True,
-                "code": "0",
-                "data": {
-                    "soc": 66,
-                    "totalOdometer": 4321,
-                    "vehicleTemperature": 21.5,
-                },
-            },
-        )
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
-    try:
-        client.access_token = "test_token_123"
-        condition = await client.get_sda_vehicle_condition("car-1", vin="VIN")
-    finally:
-        await client.close()
-        await http_client.aclose()
-
-    assert captured["url"] == (
-        "https://prod-m.sda.changanauto.sg"
-        "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/getCarConditionByCarId"
-    )
-    assert captured["body"] == {"carId": "car-1"}
-    assert captured["token"] == "test_token_123"
-    assert condition.condition_source == "sda-rest"
-    assert condition.battery.soc_percentage == 66
-    assert condition.total_odometer_km == 4321
-    assert condition.climate.inside_temperature_c == 21.5
-
-
-@pytest.mark.asyncio
-async def test_get_sda_vehicle_condition_retries_with_vehicle_id():
-    bodies = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        bodies.append(body)
-        if "carId" in body:
-            return httpx.Response(
-                200,
-                json={
-                    "success": False,
-                    "code": "COMMON_1_1_01_005",
-                    "msg": "bad request",
-                },
-            )
-        return httpx.Response(
-            200,
-            json={"success": True, "code": "0", "data": {"soc": 55}},
-        )
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
-    try:
-        client.access_token = "test_token_123"
-        condition = await client.get_sda_vehicle_condition("car-1")
-    finally:
-        await client.close()
-        await http_client.aclose()
-
-    assert bodies == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
-    assert condition.battery.soc_percentage == 55
-    assert condition.condition_source == "sda-rest"
 
 
 @pytest.mark.asyncio
@@ -2537,10 +2188,10 @@ async def test_read_s05_params_insecure_tls_override(monkeypatch, caplog):
     client.mqtt_tls_insecure = True
 
     with caplog.at_level(logging.WARNING, logger="deepal_sdk"):
-        result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+        params = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
     await client.close()
 
-    assert result.params["soc"] == 71
+    assert params["soc"] == 71
     assert captured["ssl"].verify_mode == ssl.CERT_NONE
     assert captured["ssl"].check_hostname is False
     assert "mqtt_tls_insecure" in caplog.text
@@ -3823,9 +3474,7 @@ async def test_environment_selects_regional_gateways():
 def test_supported_environments_use_the_ca_app_id():
     from deepal.endpoints import INTL_ENVIRONMENTS
 
-    for environment in INTL_ENVIRONMENTS.values():
-        expected = "changan" if environment.id == "release_ase_connect" else "ca"
-        assert environment.app_id == expected
+    assert all(environment.app_id == "ca" for environment in INTL_ENVIRONMENTS.values())
 
 
 def test_unknown_environment_raises():
@@ -3839,6 +3488,8 @@ def test_unknown_environment_raises():
     [
         "release_eu_mix",
         "preprod_eu",
+        "release_ase",
+        "release_ase_connect",
         "release_dlt",
         "release_st",
         "release_alq",
@@ -3868,54 +3519,10 @@ def test_environment_labels_have_no_production_suffix():
     from deepal.endpoints import INTL_ENVIRONMENTS
 
     assert sorted(INTL_ENVIRONMENTS) == [
-        "release_ase",
-        "release_ase_connect",
         "release_eu",
         "release_znm",
     ]
     assert all("(" not in env.label for env in INTL_ENVIRONMENTS.values())
-
-
-@pytest.mark.parametrize(
-    ("environment", "app_id", "prefix", "sda_url"),
-    [
-        ("release_ase", "ca", "/appgw", "https://prod-m.sda.changanauto.sg"),
-        (
-            "release_ase_connect",
-            "changan",
-            "/ca-appgw",
-            "https://prod-m.sda.changanauto.sg",
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_asean_environments_resolve_the_app_gateways(
-    environment, app_id, prefix, sda_url
-):
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["url"] = str(request.url)
-        captured["appid"] = request.headers.get("appid")
-        return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = DeepalIntlClient(environment=environment, httpx_client=http_client)
-    try:
-        assert client.base_url == "https://m.iov.changanauto.sg"
-        assert client.ca_base_url == "https://ca-m.iov.changanauto.sg"
-        assert client.sda_base_url == sda_url
-        assert client.app_id == app_id
-        client.access_token = "test_token_123"
-        await client.get_vehicles()
-    finally:
-        await client.close()
-        await http_client.aclose()
-
-    assert captured["url"] == (
-        f"https://m.iov.changanauto.sg{prefix}/intl-app-user/api/car/vehicles"
-    )
-    assert captured["appid"] == app_id
 
 
 @pytest.mark.asyncio

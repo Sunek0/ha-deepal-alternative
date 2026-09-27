@@ -13,6 +13,7 @@ from homeassistant.helpers import selector
 
 from .deepal import (
     AuthToken,
+    DeepalAPIError,
     DeepalAuthError,
     DeepalClient,
     DeepalError,
@@ -112,6 +113,30 @@ def _login_error(err: DeepalError) -> str:
     if isinstance(err, DeepalAuthError):
         return "invalid_auth"
     return "cannot_connect"
+
+
+async def _control_pin_validation_error(
+    stored_pin: str, user_input: dict[str, Any], client: Any
+) -> dict[str, str]:
+    """Validate a changed control PIN against the account.
+
+    Only a non-empty PIN different from the stored one is checked: clearing the
+    field or keeping the current PIN never re-checks, because the PIN exchange
+    consumes one of the account's attempts. Returns an options-form error dict
+    (empty when the PIN is fine or cannot be checked with this client).
+    """
+    pin = str(user_input.get(CONF_CONTROL_PIN) or "")
+    if not pin or pin == stored_pin:
+        return {}
+    if not isinstance(client, DeepalIntlClient) or not client.private_key_pem:
+        return {}
+    try:
+        await client.check_control_code(pin)
+    except DeepalRateLimitError:
+        return {"base": "pin_rate_limited"}
+    except (DeepalAuthError, DeepalAPIError):
+        return {"base": "invalid_pin"}
+    return {}
 
 
 def _vehicle_device_entry(
@@ -519,11 +544,32 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage integration options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            errors = await self._async_validate_control_pin(user_input)
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
-        options = self.config_entry.options
-        schema = vol.Schema(
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self._options_schema(self.config_entry.options),
+            errors=errors,
+        )
+
+    async def _async_validate_control_pin(
+        self, user_input: dict[str, Any]
+    ) -> dict[str, str]:
+        """Verify a changed control PIN against the account before storing it."""
+        return await _control_pin_validation_error(
+            self.config_entry.options.get(CONF_CONTROL_PIN, ""),
+            user_input,
+            self.config_entry.runtime_data.coordinator.client,
+        )
+
+    @staticmethod
+    def _options_schema(options: Any) -> vol.Schema:
+        """Build the options schema with the stored values as defaults."""
+        return vol.Schema(
             {
                 vol.Optional(
                     CONF_SCAN_INTERVAL,
@@ -573,4 +619,3 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 ),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)

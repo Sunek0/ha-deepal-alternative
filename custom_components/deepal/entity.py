@@ -58,6 +58,7 @@ class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
         *,
         is_done: Callable[[], bool] | None = None,
         optimistic_update: Callable[[Any], Any] | None = None,
+        cooldown_key: str | None = None,
     ) -> None:
         """Send a signed command and wait for the vehicle to report the state."""
         try:
@@ -66,6 +67,7 @@ class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
                 send_command,
                 is_done=is_done,
                 optimistic_update=optimistic_update,
+                cooldown_key=cooldown_key,
             )
         except DeepalError as err:
             raise HomeAssistantError(f"Deepal command failed: {err}") from err

@@ -124,6 +124,10 @@
           "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut."
         }
       }
+    },
+    "error": {
+      "invalid_pin": "Le code PIN de contrôle n'est pas valide pour ce compte.",
+      "pin_rate_limited": "Plus aucune tentative de code PIN ; attendez avant de réessayer."
     }
   },
   "entity": {
@@ -252,6 +256,9 @@
       },
       "last_updated": {
         "name": "Dernière mise à jour"
+      },
+      "remaining_charge_time_formatted": {
+        "name": "Temps de charge restant (H:MM)"
       }
     },
     "binary_sensor": {

@@ -71,7 +71,8 @@ class DeepalFlashLightsButton(DeepalEntity, ButtonEntity):
         await self.async_send_command(
             lambda: self.client.control_flashing_honking(
                 self._car_id, FLASH_HONK_FLASH
-            )
+            ),
+            cooldown_key="flash_lights",
         )
 
 
@@ -93,5 +94,6 @@ class DeepalHonkHornButton(DeepalEntity, ButtonEntity):
         await self.async_send_command(
             lambda: self.client.control_flashing_honking(
                 self._car_id, FLASH_HONK_BEE
-            )
+            ),
+            cooldown_key="honk_horn",
         )

@@ -124,6 +124,10 @@
           "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe."
         }
       }
+    },
+    "error": {
+      "invalid_pin": "The control PIN is not valid for this account.",
+      "pin_rate_limited": "No PIN attempts are left; wait before trying again."
     }
   },
   "entity": {
@@ -252,6 +256,9 @@
       },
       "last_updated": {
         "name": "Last updated"
+      },
+      "remaining_charge_time_formatted": {
+        "name": "Remaining charge time (H:MM)"
       }
     },
     "binary_sensor": {

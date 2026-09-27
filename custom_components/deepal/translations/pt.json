@@ -124,6 +124,10 @@
           "environment": "Conjunto de gateways regionais usado para a API internacional. Europa por omissão."
         }
       }
+    },
+    "error": {
+      "invalid_pin": "O PIN de controlo não é válido para esta conta.",
+      "pin_rate_limited": "Não restam tentativas de PIN; aguarde antes de tentar novamente."
     }
   },
   "entity": {
@@ -252,6 +256,9 @@
       },
       "last_updated": {
         "name": "Última atualização"
+      },
+      "remaining_charge_time_formatted": {
+        "name": "Tempo de carga restante (H:MM)"
       }
     },
     "binary_sensor": {

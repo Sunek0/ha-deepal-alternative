@@ -118,4 +118,6 @@ class DeepalSteeringWheelHeatSwitch(DeepalEntity, SwitchEntity):
                 self._car_id, enabled
             ),
             optimistic_update=lambda cond: _set_steering_wheel_heat(cond, enabled),
+            cooldown_key="steering_wheel_heating",
         )
+

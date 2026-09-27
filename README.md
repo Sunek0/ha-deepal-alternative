@@ -50,8 +50,9 @@ vehicle image still work.
 
 ### Telemetry
 
-- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
-  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
+- REST telemetry: battery and range, charging state and currents, remaining charge time (numeric
+  minutes and a `H:MM` sensor for dashboards), charge limit, charge schedule and plan, doors,
+  windows, climate, seats, tires and lamps.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
   fields.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
@@ -71,7 +72,11 @@ vehicle image still work.
 - On the S05 the charge limit number is not created because the car does not support it.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
-  integration options.
+  integration options. The PIN is verified against the account when it is saved, so an invalid one,
+  or one created with another account, is rejected instead of stored.
+- After a command that makes the car run a physical cycle (about 30 s for flash, 6 s for horn and
+  4 s for each seat and steering-wheel command), repeating it sooner shows how many seconds to wait
+  instead of sending it and being rejected by the vehicle.
 
 ### Vehicle image
 
@@ -123,8 +128,8 @@ Updating keeps the same `deepal` domain, so no reconfiguration is needed.
 Open **Settings > Devices & services > Deepal Alternative > Configure** to change these options:
 
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
-  with the account Home Assistant signs in with (the secondary one); a PIN created with another
-  account is rejected.
+  with the account Home Assistant signs in with (the secondary one); it is verified against the
+  account when saved, so a PIN created with another account is rejected before it is stored.
 - **Scan interval**, **API logging**, **regional environment** and **declared Android version**:
   polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging.
 

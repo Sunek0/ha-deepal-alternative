@@ -25,8 +25,6 @@ from deepal.mqtt import (
     parse_publish,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
-    sda_condition_plan,
-    sda_condition_request_payload,
     secret_from_login_payload,
     topic_device_id,
     unmapped_s05_keys,
@@ -310,129 +308,6 @@ def test_condition_request_payload_is_encrypted():
     assert payload["b"] == {"ruid": "login-did"}
     services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
     assert services[0]["service_code"] == "car_condition"
-
-
-def test_sda_condition_request_payload_shape():
-    payload = sda_condition_request_payload(
-        "car-did",
-        "login-did",
-        "secret-key-12345",
-        "req-1",
-        basic_info={"vin": "VIN123"},
-    )
-
-    assert payload["did"] == "car-did"
-    assert payload["mt"] == "properties"
-    assert payload["b"] == {"ruid": "login-did", "vin": "VIN123"}
-    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
-    assert services == [
-        {
-            "service_code": "CarCondition",
-            "command_code": "Get_CarCondition",
-            "params": {"ConditionQueryType": 0},
-        }
-    ]
-
-
-def test_sda_condition_request_payload_with_signal_list():
-    payload = sda_condition_request_payload(
-        "car-did",
-        "login-did",
-        "secret-key-12345",
-        "req-1",
-        signal_list=["door", "hvac"],
-    )
-
-    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
-    assert services[0]["params"] == {
-        "ConditionQueryType": 0,
-        "SignalList": ["door", "hvac"],
-    }
-
-
-def test_sda_condition_request_payload_with_plan_overrides():
-    payload = sda_condition_request_payload(
-        "car-did",
-        "login-did",
-        "secret-key-12345",
-        "req-1",
-        service_code="TreeService",
-        command_code="TreeCommand",
-        strategy_code="strategy-1",
-        strategy_id="strategy-id-1",
-    )
-
-    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
-    assert services == [
-        {
-            "service_code": "TreeService",
-            "command_code": "TreeCommand",
-            "params": {"ConditionQueryType": 0},
-            "strategy_code": "strategy-1",
-            "strategy_id": "strategy-id-1",
-        }
-    ]
-
-
-def test_sda_condition_plan_from_function_tree():
-    tree = {
-        "functionList": [
-            {
-                "id": "1",
-                "deviceId": "did-other",
-                "commandCode": "Cnr_AllAcON",
-                "propertyCode": "ac",
-            },
-            {
-                "id": "2",
-                "deviceId": "did-condition",
-                "commandCode": "Get_CarCondition",
-                "serviceCode": "CarCondition",
-                "strategyCode": "strategy-1",
-                "strategyId": "strategy-id-1",
-                "propertyCode": "carCondition",
-            },
-            {"id": "3", "parentId": "2", "propertyCode": "socLeft"},
-            {"id": "4", "parentId": "2", "propertyCode": "battery"},
-        ]
-    }
-    config = {
-        "mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]
-    }
-
-    plan = sda_condition_plan(config)
-
-    assert plan.device_did == "did-condition"
-    assert plan.service_code == "CarCondition"
-    assert plan.command_code == "Get_CarCondition"
-    assert plan.property_codes == ("carCondition", "socLeft", "battery")
-    assert plan.strategy_codes == ("strategy-1",)
-    assert plan.strategy_ids == ("strategy-id-1",)
-
-
-def test_sda_condition_plan_without_condition_entry():
-    tree = {
-        "functionList": [
-            {"id": "1", "deviceId": "did-only", "commandCode": "Cnr_AllAcON"}
-        ]
-    }
-    config = {"mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]}
-
-    plan = sda_condition_plan(config)
-
-    assert plan.device_did == "did-only"
-    assert plan.service_code == "CarCondition"
-    assert plan.command_code == "Get_CarCondition"
-    assert plan.property_codes == ()
-
-
-def test_sda_condition_plan_without_tree():
-    plan = sda_condition_plan({"mqttConnectionInfos": [{}]})
-
-    assert plan.device_did is None
-    assert plan.service_code == "CarCondition"
-    assert plan.command_code == "Get_CarCondition"
-    assert plan.property_codes == ()
 
 
 def test_login_request_payload_shape():

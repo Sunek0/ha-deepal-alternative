@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
@@ -42,6 +43,19 @@ _OPTIMISTIC_CONFIRM_TIMEOUT = 15.0
 _CONDITION_FETCH_INTERVAL = 5.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
+
+# How long the vehicle needs to complete a command's physical cycle before it
+# accepts the same command again (measured on the real car). Commands without
+# an entry here can be repeated immediately.
+_COMMAND_COOLDOWN_SECONDS: dict[str, float] = {
+    "flash_lights": 30.0,
+    "honk_horn": 6.0,
+    "seat_heating_front_left": 4.0,
+    "seat_ventilation_front_left": 4.0,
+    "seat_heating_front_right": 4.0,
+    "seat_ventilation_front_right": 4.0,
+    "steering_wheel_heating": 4.0,
+}
 
 
 def _command_failure_message(result: CommandResult) -> str:
@@ -138,6 +152,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.client = client
         self.vehicles: list[Vehicle] = []
         self._command_locks: dict[str, asyncio.Lock] = {}
+        self._command_cooldowns: dict[tuple[str, str], float] = {}
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
@@ -219,6 +234,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             condition.climate.steering_wheel_heater_level = (
                 app_condition.climate.steering_wheel_heater_level
             )
+        if (raw.get("hvac") or {}).get("defrostStatus") is not None:
+            condition.climate.defrost_on = app_condition.climate.defrost_on
         if raw.get("fuel") and all(
             value is None for value in condition.fuel.model_dump().values()
         ):
@@ -272,10 +289,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             (item for item in self.vehicles if item.car_id == vehicle_id), None
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
-            sda = self.client.is_sda_mqtt_vehicle(vehicle)
             try:
                 condition = await self.client.s05_mqtt_condition(
-                    vehicle_id, vin=vehicle.vin, sda=sda
+                    vehicle_id, vin=vehicle.vin
                 )
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
@@ -284,7 +300,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 ):
                     try:
                         condition = await self.client.s05_mqtt_condition(
-                            vehicle_id, vin=vehicle.vin, sda=sda
+                            vehicle_id, vin=vehicle.vin
                         )
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
@@ -295,22 +311,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     vehicle_id,
                     err,
                 )
-            if sda:
-                try:
-                    condition = await self.client.get_sda_vehicle_condition(
-                        vehicle_id, vin=vehicle.vin
-                    )
-                    return self._merge_condition(vehicle_id, condition)
-                except DeepalError as err:
-                    _LOGGER.debug(
-                        "Deepal SDA REST condition unavailable for %s: %s",
-                        vehicle_id,
-                        err,
-                    )
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )
-        condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)
 
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
@@ -512,6 +515,34 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             self._command_locks[vehicle_id] = lock
         return lock
 
+    def _check_command_cooldown(self, vehicle_id: str, cooldown_key: str) -> None:
+        """Reject a command whose vehicle cycle is still running.
+
+        The car refuses a repeat while it finishes the previous action; failing
+        here with the remaining seconds avoids the cryptic vehicle rejection.
+        """
+        deadline = self._command_cooldowns.get((vehicle_id, cooldown_key))
+        if deadline is None:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            raise HomeAssistantError(
+                "The vehicle is still completing the previous command; wait "
+                f"{math.ceil(remaining)} s before repeating it"
+            )
+
+    def _record_command_cooldown(
+        self, vehicle_id: str, cooldown_key: str | None
+    ) -> None:
+        """Start the cycle cooldown of a command that did not fail."""
+        if cooldown_key is None:
+            return
+        seconds = _COMMAND_COOLDOWN_SECONDS.get(cooldown_key)
+        if seconds:
+            self._command_cooldowns[(vehicle_id, cooldown_key)] = (
+                time.monotonic() + seconds
+            )
+
     async def async_execute_command(
         self,
         vehicle_id: str,
@@ -520,6 +551,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         is_done: Callable[[], bool] | None = None,
         optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None = None,
         serialize: bool | None = None,
+        cooldown_key: str | None = None,
         timeout: float = _COMMAND_TIMEOUT,
         interval: float = _COMMAND_RESULT_INTERVAL,
     ) -> None:
@@ -529,10 +561,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         serialize=True) run one at a time per vehicle: a second one waits up to
         _COMMAND_LOCK_TIMEOUT seconds for its turn and then runs, instead of
         failing. Stateless commands (lights, horn) never wait, and commands for
-        different vehicles are independent.
+        different vehicles are independent. ``cooldown_key`` gates commands the
+        car is still cycling; the cooldown starts once the command is confirmed.
         """
         if not isinstance(self.client, DeepalIntlClient):
             raise HomeAssistantError("Remote commands require the international platform")
+
+        if cooldown_key is not None:
+            self._check_command_cooldown(vehicle_id, cooldown_key)
 
         if serialize is None:
             serialize = optimistic_update is not None
@@ -546,6 +582,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 timeout=timeout,
                 interval=interval,
             )
+            self._record_command_cooldown(vehicle_id, cooldown_key)
             return
 
         lock = self._vehicle_command_lock(vehicle_id)
@@ -567,6 +604,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 timeout=timeout,
                 interval=interval,
             )
+            self._record_command_cooldown(vehicle_id, cooldown_key)
         finally:
             lock.release()
 

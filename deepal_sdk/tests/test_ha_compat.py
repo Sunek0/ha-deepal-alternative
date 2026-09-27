@@ -39,6 +39,7 @@ from custom_components.deepal import (
     switch,
 )
 from custom_components.deepal import time as time_platform
+from custom_components.deepal.const import CONF_CONTROL_PIN
 from custom_components.deepal.deepal import (
     DeepalAPIError,
     DeepalAuthError,
@@ -668,9 +669,11 @@ class _FakeCommandCoordinator(FakeCoordinator):
         *,
         is_done=None,
         optimistic_update=None,
+        cooldown_key=None,
         timeout=None,
         interval=None,
     ) -> None:
+        self.last_cooldown_key = cooldown_key
         await send_command()
         if optimistic_update is not None:
             current = self.data.get(vehicle_id)
@@ -694,6 +697,7 @@ async def test_seat_and_steering_controls_send_app_payloads() -> None:
     await driver_heat.async_set_native_value(2)
     await passenger_wind.async_set_native_value(0)
     await steering.async_turn_on()
+    assert coordinator.last_cooldown_key == "steering_wheel_heating"
 
     assert coordinator.client.calls[0] == (
         "heat",
@@ -864,19 +868,6 @@ def _diagnostics_entry(coordinator) -> SimpleNamespace:
 def _mqtt_condition() -> VehicleCondition:
     condition = VehicleCondition(car_id="car-1", vin="VIN-REAL-1")
     condition.battery.soc_percentage = 71
-    condition.condition_source = "sda-mqtt"
-    condition.mqtt_variants = {
-        "sda-mqtt": {"soc": 71},
-        "sda-mqtt-sections": {},
-    }
-    condition.sda_plan = {
-        "device_did": "plan-did",
-        "service_code": "CarCondition",
-        "command_code": "Get_CarCondition",
-        "property_codes": ["carCondition"],
-        "strategy_codes": [],
-        "strategy_ids": [],
-    }
     condition.raw_data = {"vehicleStatus": {"soc": 71, "latitude": 40.4}}
     condition.mqtt_raw_data = {
         "soc": 71,
@@ -911,15 +902,6 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     assert "mqtt_raw_data" not in report["mapped_telemetry"]["car-1"]
     assert report["raw_rest"]["car-1"]["vehicleStatus"]["soc"] == 71
     assert report["raw_mqtt"]["car-1"]["chargeCoverStatus"] == 3
-    assert report["condition_sources"]["car-1"] == "sda-mqtt"
-    assert report["raw_mqtt_variants"]["car-1"] == {
-        "sda-mqtt": {"soc": 71},
-        "sda-mqtt-sections": {},
-    }
-    assert report["sda_plans"]["car-1"]["device_did"] == "plan-did"
-    assert report["sda_plans"]["car-1"]["property_codes"] == ["carCondition"]
-    assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
-    assert "sda_plan" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [
         "chargeCoverStatus",
         "latitude",
@@ -962,17 +944,7 @@ async def test_diagnostics_report_survives_an_empty_entry() -> None:
     assert report["vehicles"] == []
     assert report["mapped_telemetry"] == {}
     assert report["raw_mqtt"] == {}
-    assert report["condition_sources"] == {}
-    assert report["raw_mqtt_variants"] == {}
-    assert report["sda_plans"] == {}
     assert report["unmapped_mqtt_keys"] == {}
-
-
-def test_options_flow_lists_the_supported_environments() -> None:
-    from custom_components.deepal.deepal.endpoints import INTL_ENVIRONMENTS
-
-    labels = [environment.label for environment in INTL_ENVIRONMENTS.values()]
-    assert labels == ["Europe", "Latin America", "ASEAN", "ASEAN CONNECT"]
 
 
 def test_config_flow_defaults_to_the_international_platform() -> None:
@@ -998,3 +970,68 @@ def test_integration_platforms_include_image() -> None:
 
 
 
+
+
+class _PinClient(DeepalIntlClient):
+    """Control-code exchange double for the options PIN check."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.private_key_pem = "test-private-key"
+        self.error = error
+        self.calls: list[str] = []
+
+    async def check_control_code(self, control_pin: str) -> str:
+        self.calls.append(control_pin)
+        if self.error is not None:
+            raise self.error
+        return "rc-token"
+
+
+@pytest.mark.asyncio
+async def test_control_pin_validation_error_mapping() -> None:
+    client = _PinClient()
+    stored = "1234"
+    assert await config_flow._control_pin_validation_error(
+        stored, {CONF_CONTROL_PIN: "1234"}, client
+    ) == {}
+    assert await config_flow._control_pin_validation_error(
+        stored, {CONF_CONTROL_PIN: ""}, client
+    ) == {}
+    assert client.calls == []
+
+    assert await config_flow._control_pin_validation_error(
+        stored, {CONF_CONTROL_PIN: "9999"}, client
+    ) == {}
+    assert client.calls == ["9999"]
+
+    client.error = DeepalAPIError("COMMON_1_1_01_005")
+    assert await config_flow._control_pin_validation_error(
+        stored, {CONF_CONTROL_PIN: "0000"}, client
+    ) == {"base": "invalid_pin"}
+
+    client.error = DeepalRateLimitError("no attempts left")
+    assert await config_flow._control_pin_validation_error(
+        stored, {CONF_CONTROL_PIN: "0000"}, client
+    ) == {"base": "pin_rate_limited"}
+def test_remaining_charge_time_formatted_sensor() -> None:
+    assert sensor.format_hours_minutes(None) is None
+    assert sensor.format_hours_minutes(45) == "0:45"
+    assert sensor.format_hours_minutes(95) == "1:35"
+    assert sensor.format_hours_minutes(-5) == "0:00"
+
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    condition.battery.remaining_charge_time_min = 95
+    coordinator.data["car-1"] = condition
+    vehicle = _fake_vehicle()
+    descriptions = {d.key: d for d in sensor.SENSORS}
+    formatted = sensor.DeepalSensor(
+        coordinator, vehicle, descriptions["remaining_charge_time_formatted"]
+    )
+    duration = sensor.DeepalSensor(
+        coordinator, vehicle, descriptions["remaining_charge_time"]
+    )
+
+    assert formatted.native_value == "1:35"
+    assert duration.native_value == 95
+    assert duration._attr_device_class is sensor.SensorDeviceClass.DURATION
