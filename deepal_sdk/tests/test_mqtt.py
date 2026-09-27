@@ -21,6 +21,7 @@ from deepal.mqtt import (
     login_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
+    normalize_sda_params,
     parse_connack,
     parse_publish,
     read_packet_with_keepalive,
@@ -426,6 +427,22 @@ def test_sda_condition_plan_without_condition_entry():
     assert plan.property_codes == ()
 
 
+def test_sda_condition_plan_uses_application_func_codes():
+    tree = {
+        "data": [
+            {"id": "10", "parentId": "0", "applicationFuncCode": "#carCondition"},
+            {"id": "11", "parentId": "10", "applicationFuncCode": "#socLeft"},
+            {"id": "12", "parentId": "10", "applicationFuncCode": "#chargingInfo"},
+        ]
+    }
+
+    plan = sda_condition_plan(
+        {"mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]}
+    )
+
+    assert plan.property_codes == ("carCondition", "socLeft", "chargingInfo")
+
+
 def test_sda_condition_plan_without_tree():
     plan = sda_condition_plan({"mqttConnectionInfos": [{}]})
 
@@ -659,6 +676,78 @@ def test_mapped_s05_keys_cover_every_key_the_normalization_reads():
         keys_read.update(re.findall(r'"([A-Za-z0-9_]+)"', call))
     assert keys_read
     assert keys_read <= MAPPED_S05_KEYS
+
+
+def test_normalize_sda_params_maps_the_e07_condition():
+    params = {
+        "BcuSocDisp": "91.6",
+        "VIUSocDisp": 92,
+        "VcuResiMilg": 422,
+        "CdcTotMilg": "18894.2",
+        "EspVehSpd": 0,
+        "BcuChrgSts": 1,
+        "AcChrgCnctrSts": 1,
+        "DcChrgCnctrSts": 0,
+        "ObcChrgInpAcIL1": "28.3",
+        "BcuChrgTiDisp": 66,
+        "TboxSocChrgTarSet": 100,
+        "DrvrDoorSts": 2,
+        "PassDoorSts": 2,
+        "LeReDoorSts": 2,
+        "RiReDoorSts": 2,
+        "ObjStTypePLGDoorSt": 2,
+        "FrtGateSts": 2,
+        "DrvrDoorLockLogicSts": 1,
+        "PassDoorLockLogicSts": 1,
+        "DrvrWinPos": 0,
+        "PassWinPos": 0,
+        "LeReWinPos": 0,
+        "RiReWinPos": 0,
+        "ITMSAcIntT": "18.0",
+        "ITMSDrvrAutT": "24.0",
+        "ITMSACOnOff": 0,
+        "ITMSPm25InCarDens": 4,
+        "DrHeatGear": "0",
+        "DrVentGear": "0",
+        "SteeringHeat": 0,
+    }
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["vehicleStatus"]["soc"] == 92
+    assert normalized["vehicleStatus"]["drvMileage"] == 422
+    assert normalized["vehicleStatus"]["totalMileage"] == 18894.2
+    assert normalized["charge"]["chargeStatus"] == 1
+    assert normalized["charge"]["chargeConStatus"] == 1
+    assert normalized["charge"]["acChargeCurrent"] == 28.3
+    assert normalized["charge"]["remainChargeTime"] == 66
+    assert normalized["charge"]["maxSocPercent"] == 100
+    assert normalized["door"]["doors"] == [0, 0, 0, 0]
+    assert normalized["door"]["trunk"] == 0
+    assert normalized["door"]["hood"] == 0
+    assert normalized["door"]["driverLock"] == 0
+    assert normalized["window"]["windows"] == [0, 0, 0, 0]
+    assert normalized["hvac"]["insideTemp"] == 180.0
+    assert normalized["hvac"]["remoteTemp"] == 240.0
+    assert normalized["hvac"]["acStatus"] == 0
+    assert normalized["seat"]["leftFront"]["heatStatus"] == 0
+    assert normalized["seat"]["leftFront"]["ventStatus"] == 0
+
+
+def test_normalize_sda_params_marks_open_states():
+    params = {
+        "DrvrDoorSts": 1,
+        "ObjStTypePLGDoorSt": 1,
+        "DrvrDoorLockLogicSts": 0,
+        "DrvrWinPos": 50,
+    }
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["door"]["doors"][0] == 1
+    assert normalized["door"]["trunk"] == 1
+    assert normalized["door"]["driverLock"] == 1
+    assert normalized["window"]["windows"][0] == 50
 
 
 def test_unmapped_s05_keys_returns_only_unknown_fields():

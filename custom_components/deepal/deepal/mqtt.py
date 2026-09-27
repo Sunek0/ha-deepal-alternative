@@ -394,6 +394,16 @@ def sda_condition_plan(config: Any) -> SdaConditionPlan:
                 break
             subtree.extend(children)
             frontier = {str(node.get("id") or "") for node in children}
+
+    def _candidate_codes() -> Iterator[str]:
+        for node in subtree:
+            code = node.get("propertyCode")
+            if not code:
+                application = node.get("applicationFuncCode")
+                code = str(application).lstrip("#") if application else None
+            if code:
+                yield code
+
     return SdaConditionPlan(
         device_did=next(
             (str(node.get("deviceId")) for node in subtree if node.get("deviceId")),
@@ -401,9 +411,7 @@ def sda_condition_plan(config: Any) -> SdaConditionPlan:
         ),
         service_code=str(selected.get("serviceCode") or SDA_CONDITION_SERVICE),
         command_code=str(selected.get("commandCode") or SDA_CONDITION_COMMAND),
-        property_codes=_unique_strings(
-            node.get("propertyCode") for node in subtree
-        ),
+        property_codes=_unique_strings(_candidate_codes()),
         strategy_codes=_unique_strings(
             node.get("strategyCode") for node in subtree
         ),
@@ -1220,3 +1228,138 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
 def unmapped_s05_keys(params: dict[str, Any]) -> set[str]:
     """Return the S05 parameter keys that no model field consumes."""
     return set(params) - MAPPED_S05_KEYS
+
+
+def _sda_value(params: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = params.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _sda_status(value: Any, closed_value: int) -> int:
+    """Map an SDA status signal to 1 (open/unlocked) or 0 (closed/locked)."""
+    parsed = _as_int(value)
+    if parsed is None:
+        return 0
+    return 0 if parsed == closed_value else 1
+
+
+def _sda_lock(value: Any) -> Optional[int]:
+    """Map an SDA lock signal to the REST convention (0 = locked)."""
+    parsed = _as_int(value)
+    if parsed is None:
+        return None
+    return 0 if parsed == 1 else 1
+
+
+def _sda_tenths(value: Any) -> Optional[float]:
+    parsed = _as_float(value)
+    return parsed * 10 if parsed is not None else None
+
+
+def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Map the flat SDA condition signals into the shared nested condition shape.
+
+    The SDA REST condition (``getCarConditionByCarId``) returns a flat object
+    with SDA-specific names (for example ``BcuSocDisp``, ``VcuResiMilg``,
+    ``CdcTotMilg``, ``DrvrDoorSts``). The mapping follows the values seen in
+    the official app trace for an E07: status ``2`` means closed, lock ``1``
+    means locked, window positions are percentages with ``0`` closed.
+    Unmapped keys stay in the raw payload for diagnostics.
+    """
+    soc = _as_int(_sda_value(params, "VIUSocDisp"))
+    if soc is None:
+        raw_soc = _as_float(_sda_value(params, "BcuSocDisp"))
+        soc = round(raw_soc) if raw_soc is not None else None
+
+    ac_connected = _as_int(_sda_value(params, "AcChrgCnctrSts"))
+    dc_connected = _as_int(_sda_value(params, "DcChrgCnctrSts"))
+    connected = (
+        1
+        if (ac_connected not in (None, 0) or dc_connected not in (None, 0))
+        else 0
+    )
+
+    return {
+        "vehicleStatus": {
+            "soc": soc,
+            "drvMileage": _as_int(_sda_value(params, "VcuResiMilg")),
+            "totalMileage": _as_float(_sda_value(params, "CdcTotMilg")),
+            "speed": _as_float(_sda_value(params, "EspVehSpd")),
+            "engineSts": _as_int(_sda_value(params, "VcuRdySts")),
+            "powerStatus": _as_int(_sda_value(params, "BcmPwrStsFb")),
+            "steeringWheelHeater": _as_int(_sda_value(params, "SteeringHeat")),
+        },
+        "charge": {
+            "chargeStatus": _as_int(_sda_value(params, "BcuChrgSts")),
+            "chargeConStatus": connected,
+            "dcChargeGunConnectStatus": dc_connected,
+            "chargeCurrent": _as_float(_sda_value(params, "BcuBattI")),
+            "acChargeCurrent": _as_float(_sda_value(params, "ObcChrgInpAcIL1")),
+            "dcChargeCurrent": _as_float(_sda_value(params, "ObcChrgDcI")),
+            "remainChargeTime": _as_int(_sda_value(params, "BcuChrgTiDisp")),
+            "maxSocPercent": _as_int(_sda_value(params, "TboxSocChrgTarSet")),
+        },
+        "door": {
+            "doors": [
+                _sda_status(_sda_value(params, "DrvrDoorSts"), 2),
+                _sda_status(_sda_value(params, "PassDoorSts"), 2),
+                _sda_status(_sda_value(params, "LeReDoorSts"), 2),
+                _sda_status(_sda_value(params, "RiReDoorSts"), 2),
+            ],
+            "trunk": _sda_status(_sda_value(params, "ObjStTypePLGDoorSt"), 2),
+            "hood": _sda_status(_sda_value(params, "FrtGateSts"), 2),
+            "driverLock": _sda_lock(_sda_value(params, "DrvrDoorLockLogicSts")),
+            "passengerLock": _sda_lock(
+                _sda_value(params, "PassDoorLockLogicSts")
+            ),
+        },
+        "window": {
+            "windows": [
+                _as_int(_sda_value(params, "DrvrWinPos")),
+                _as_int(_sda_value(params, "PassWinPos")),
+                _as_int(_sda_value(params, "LeReWinPos")),
+                _as_int(_sda_value(params, "RiReWinPos")),
+            ],
+        },
+        "hvac": {
+            "insideTemp": _sda_tenths(_sda_value(params, "ITMSAcIntT")),
+            "remoteTemp": _sda_tenths(_sda_value(params, "ITMSDrvrAutT")),
+            "acStatus": _as_int(_sda_value(params, "ITMSACOnOff")),
+            "insidePm25": _as_float(_sda_value(params, "ITMSPm25InCarDens")),
+            "insideAirQualityLevel": _as_int(
+                _sda_value(params, "ITMSAirQlyInCarLvl")
+            ),
+            "defrostStatus": _as_int(_sda_value(params, "ITMSFrntDefroster")),
+        },
+        "seat": {
+            "leftFront": {
+                "heatStatus": _as_int(_sda_value(params, "DrHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "DrVentGear")),
+            },
+            "rightFront": {
+                "heatStatus": _as_int(_sda_value(params, "PsgHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "PsgVentGear")),
+            },
+            "leftBack": {
+                "heatStatus": _as_int(_sda_value(params, "RearLeHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "RearLeVentGear")),
+            },
+            "rightBack": {
+                "heatStatus": _as_int(_sda_value(params, "RearRiHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "RearRiVentGear")),
+            },
+        },
+        "lamp": {
+            "highBeam": max(
+                _as_int(_sda_value(params, "HCM_LeHiBeSt")) or 0,
+                _as_int(_sda_value(params, "HCM_RiHiBeSt")) or 0,
+            ),
+            "lowBeam": max(
+                _as_int(_sda_value(params, "HCM_LeLoBeSt")) or 0,
+                _as_int(_sda_value(params, "HCM_RiLoBeSt")) or 0,
+            ),
+        },
+    }

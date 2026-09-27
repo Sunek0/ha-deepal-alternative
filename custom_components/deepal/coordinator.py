@@ -278,6 +278,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
             sda = self.client.is_sda_mqtt_vehicle(vehicle)
+            if sda:
+                # The official app reads the SDA condition over REST; the SDA
+                # MQTT broker (prod-appmq, authType 2) is a separate exchange
+                # not implemented yet, so REST comes first.
+                try:
+                    condition = await self.client.get_sda_vehicle_condition(
+                        vehicle_id, vin=vehicle.vin
+                    )
+                    return self._merge_condition(vehicle_id, condition)
+                except DeepalError as err:
+                    _LOGGER.debug(
+                        "Deepal SDA REST condition unavailable for %s: %s",
+                        vehicle_id,
+                        err,
+                    )
             try:
                 condition = await self.client.s05_mqtt_condition(
                     vehicle_id, vin=vehicle.vin, sda=sda
@@ -311,18 +326,6 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     vehicle_id,
                     err,
                 )
-            if sda:
-                try:
-                    condition = await self.client.get_sda_vehicle_condition(
-                        vehicle_id, vin=vehicle.vin
-                    )
-                    return self._merge_condition(vehicle_id, condition)
-                except DeepalError as err:
-                    _LOGGER.debug(
-                        "Deepal SDA REST condition unavailable for %s: %s",
-                        vehicle_id,
-                        err,
-                    )
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )

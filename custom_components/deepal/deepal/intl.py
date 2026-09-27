@@ -117,6 +117,7 @@ from .mqtt import (
     login_request_payload,
     new_request_id,
     normalize_s05_params,
+    normalize_sda_params,
     parse_connack,
     parse_publish,
     read_packet,
@@ -507,6 +508,13 @@ class DeepalIntlClient:
         url = f"{base_url or self.base_url}{path}" if path.startswith("/") else path
         body = json.dumps(json_data or {}, separators=(",", ":"), ensure_ascii=False)
         headers = self._get_headers()
+        if base_url and base_url.rstrip("/") == self.sda_base_url:
+            # The SDA gateway expects the login token without the "Bearer "
+            # prefix (verified against the official app; the intl hosts keep
+            # the prefixed value in Authorization).
+            sda_token = (self.access_token or "").removeprefix("Bearer ").strip()
+            if sda_token:
+                headers["X-Tsp-User-Token"] = sda_token
         if self.enable_api_logging:
             logger.warning(
                 "Deepal API request path=%s headers=%s payload=%s",
@@ -1509,17 +1517,15 @@ class DeepalIntlClient:
         """Fetch the SDA condition over REST for an ``SDA-MQTT`` vehicle.
 
         The endpoint lives on the SDA gateway (``sda_base_url``), not on the
-        international host. The body key is tried as ``carId`` and then
-        ``vehicleId``; the live E07 answered the POST attempts with
-        ``40020 unsupported request method``, so the GET variants are tried
-        too. The response is normalized from ``data``/``params`` or the flat
-        payload.
+        international host. The official app calls it as a GET with the
+        snake_case ``car_id`` query parameter and the login token without the
+        ``Bearer`` prefix; the camelCase keys stay as fallbacks for other
+        regions. The flat SDA response is normalized with the SDA mapping.
         """
         attempts: tuple[
             tuple[str, Optional[dict[str, Any]], Optional[dict[str, Any]]], ...
         ] = (
-            ("POST", {"carId": vehicle_id}, None),
-            ("POST", {"vehicleId": vehicle_id}, None),
+            ("GET", None, {"car_id": vehicle_id}),
             ("GET", None, {"carId": vehicle_id}),
             ("GET", None, {"vehicleId": vehicle_id}),
         )
@@ -1583,10 +1589,26 @@ class DeepalIntlClient:
                     method=method,
                     query=query,
                 )
-            except DeepalAPIError:
+            except DeepalAPIError as exc:
+                logger.debug(
+                    "Deepal SDA function config %s %s failed: %s",
+                    method,
+                    path,
+                    exc,
+                )
                 continue
             if isinstance(data, dict) and data:
+                logger.debug(
+                    "Deepal SDA function config %s %s returned keys=%s",
+                    method,
+                    path,
+                    sorted(data)[:12],
+                )
                 return data
+            logger.debug(
+                "Deepal SDA function config %s %s returned no data", method, path
+            )
+        logger.debug("Deepal SDA function config was not found in any endpoint")
         return {}
 
     def _parse_sda_rest_condition(
@@ -1599,15 +1621,22 @@ class DeepalIntlClient:
             if isinstance(value, dict) and value:
                 payload = value
                 break
-        nested = any(
-            key in payload for key in ("vehicleStatus", "door", "hvac", "charge")
-        )
-        if nested:
-            condition = self.parse_condition(payload, vehicle_id, vin=vin)
-        else:
-            condition = self.parse_condition(
-                normalize_s05_params(payload), vehicle_id, vin=vin
+        if any(key in payload for key in ("vehicleStatus", "door", "hvac", "charge")):
+            normalized = payload
+        elif any(
+            key in payload
+            for key in (
+                "BcuSocDisp",
+                "VIUSocDisp",
+                "VcuResiMilg",
+                "CdcTotMilg",
+                "BcuChrgSts",
             )
+        ):
+            normalized = normalize_sda_params(payload)
+        else:
+            normalized = normalize_s05_params(payload)
+        condition = self.parse_condition(normalized, vehicle_id, vin=vin)
         condition.mqtt_raw_data = payload
         condition.condition_source = "sda-rest"
         return condition

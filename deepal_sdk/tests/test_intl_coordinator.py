@@ -1049,9 +1049,8 @@ async def test_failed_mqtt_exchange_is_kept_for_diagnostics():
         raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
 
     client.s05_mqtt_condition = fail_mqtt
-    client.sda_rest_condition = VehicleCondition(
-        car_id="car-1", vin="VIN", condition_source="sda-rest"
-    )
+    client.sda_rest_condition = None
+    client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
 
     await coordinator._async_fetch_condition("car-1")
 

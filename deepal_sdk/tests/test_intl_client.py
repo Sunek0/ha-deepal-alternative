@@ -253,6 +253,39 @@ S05_BROKER_PARAMS: dict[str, Any] = {
     "lfTyrePressure": 240,
 }
 
+E07_SDA_CONDITION: dict[str, Any] = {
+    "BcuSocDisp": "91.6",
+    "VIUSocDisp": 92,
+    "VcuResiMilg": 422,
+    "CdcTotMilg": "18894.2",
+    "EspVehSpd": 0,
+    "BcuChrgSts": 1,
+    "AcChrgCnctrSts": 1,
+    "DcChrgCnctrSts": 0,
+    "ObcChrgInpAcIL1": "28.3",
+    "BcuChrgTiDisp": 66,
+    "TboxSocChrgTarSet": 100,
+    "DrvrDoorSts": 2,
+    "PassDoorSts": 2,
+    "LeReDoorSts": 2,
+    "RiReDoorSts": 2,
+    "ObjStTypePLGDoorSt": 2,
+    "FrtGateSts": 2,
+    "DrvrDoorLockLogicSts": 1,
+    "PassDoorLockLogicSts": 1,
+    "DrvrWinPos": 0,
+    "PassWinPos": 0,
+    "LeReWinPos": 0,
+    "RiReWinPos": 0,
+    "ITMSAcIntT": "18.0",
+    "ITMSDrvrAutT": "24.0",
+    "ITMSACOnOff": 0,
+    "ITMSPm25InCarDens": 4,
+    "DrHeatGear": "0",
+    "DrVentGear": "0",
+    "SteeringHeat": 0,
+}
+
 
 def _mqtt_config(**overrides: Any) -> dict[str, Any]:
     info: dict[str, Any] = {
@@ -2418,66 +2451,65 @@ async def test_read_s05_params_sda_uses_the_plan_property_list(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_sda_vehicle_condition_uses_the_sda_gateway():
+async def test_get_sda_vehicle_condition_uses_the_app_get_request():
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
         captured["url"] = str(request.url)
-        captured["body"] = json.loads(request.content)
         captured["token"] = request.headers.get("X-Tsp-User-Token")
         return httpx.Response(
             200,
-            json={
-                "success": True,
-                "code": "0",
-                "data": {
-                    "soc": 66,
-                    "totalOdometer": 4321,
-                    "vehicleTemperature": 21.5,
-                },
-            },
+            json={"success": True, "code": "0", "data": E07_SDA_CONDITION},
         )
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
     try:
-        client.access_token = "test_token_123"
+        client.access_token = "Bearer jwtA|jwtB"
         condition = await client.get_sda_vehicle_condition("car-1", vin="VIN")
     finally:
         await client.close()
         await http_client.aclose()
 
+    assert captured["method"] == "GET"
     assert captured["url"] == (
         "https://prod-m.sda.changanauto.sg"
-        "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/getCarConditionByCarId"
+        "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/"
+        "getCarConditionByCarId?car_id=car-1"
     )
-    assert captured["body"] == {"carId": "car-1"}
-    assert captured["token"] == "test_token_123"
+    assert captured["token"] == "jwtA|jwtB"
     assert condition.condition_source == "sda-rest"
-    assert condition.battery.soc_percentage == 66
-    assert condition.total_odometer_km == 4321
-    assert condition.climate.inside_temperature_c == 21.5
+    assert condition.battery.soc_percentage == 92
+    assert condition.battery.remaining_range_km == 422
+    assert condition.total_odometer_km == 18894.2
+    assert condition.battery.charger_connected is True
+    assert condition.battery.remaining_charge_time_min == 66
+    assert condition.battery.charge_limit_percent == 100
+    assert condition.doors.locked is True
+    assert condition.doors.driver_door_open is False
+    assert condition.windows.front_left_open is False
+    assert condition.climate.inside_temperature_c == 18.0
 
 
 @pytest.mark.asyncio
-async def test_get_sda_vehicle_condition_retries_with_vehicle_id():
-    bodies = []
+async def test_get_sda_vehicle_condition_retries_with_the_camel_case_key():
+    queries = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        bodies.append(body)
-        if "carId" in body:
+        queries.append(dict(request.url.params))
+        if "car_id" in request.url.params:
             return httpx.Response(
                 200,
                 json={
                     "success": False,
-                    "code": "COMMON_1_1_01_005",
-                    "msg": "bad request",
+                    "code": "44000",
+                    "msg": "vehicle does not exist",
                 },
             )
         return httpx.Response(
             200,
-            json={"success": True, "code": "0", "data": {"soc": 55}},
+            json={"success": True, "code": "0", "data": {"VIUSocDisp": 55}},
         )
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -2489,43 +2521,8 @@ async def test_get_sda_vehicle_condition_retries_with_vehicle_id():
         await client.close()
         await http_client.aclose()
 
-    assert bodies == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
+    assert queries == [{"car_id": "car-1"}, {"carId": "car-1"}]
     assert condition.battery.soc_percentage == 55
-    assert condition.condition_source == "sda-rest"
-
-
-@pytest.mark.asyncio
-async def test_get_sda_vehicle_condition_falls_back_to_get():
-    seen = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, dict(request.url.params)))
-        if request.method == "POST":
-            return httpx.Response(
-                200,
-                json={
-                    "success": False,
-                    "code": "40020",
-                    "msg": "unsupported request method",
-                },
-            )
-        return httpx.Response(
-            200,
-            json={"success": True, "code": "0", "data": {"soc": 44}},
-        )
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
-    try:
-        client.access_token = "test_token_123"
-        condition = await client.get_sda_vehicle_condition("car-1")
-    finally:
-        await client.close()
-        await http_client.aclose()
-
-    assert [method for method, _params in seen] == ["POST", "POST", "GET"]
-    assert seen[2][1] == {"carId": "car-1"}
-    assert condition.battery.soc_percentage == 44
     assert condition.condition_source == "sda-rest"
 
 
@@ -2600,6 +2597,28 @@ async def test_get_car_function_config_falls_back_to_the_sda_endpoint():
         "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/get-function-config"
     )
     assert tree["functionList"][0]["deviceId"] == "did-sda"
+
+
+@pytest.mark.asyncio
+async def test_get_car_function_config_logs_failures(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"success": False, "code": "COMMON_1_1_01_005", "msg": "no"},
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        with caplog.at_level(logging.DEBUG, logger="deepal_sdk"):
+            tree = await client.get_car_function_config("car-1")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert tree == {}
+    assert "Deepal SDA function config" in caplog.text
 
 
 @pytest.mark.asyncio
