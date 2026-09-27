@@ -77,7 +77,7 @@ vehicle image still work.
 ### Vehicle image
 
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
-  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  (S05, S07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
 
 ### Diagnostics
