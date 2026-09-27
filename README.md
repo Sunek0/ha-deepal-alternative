@@ -20,15 +20,58 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 / S05 Max (`C857` in Europe) | Telemetry over MQTT. Remote controls use the same signed command flow as the other models. |
-| S07 | Telemetry and signed remote controls through the REST API. |
-| SL03 | Telemetry and signed remote controls through the REST API. |
-| L07 | Telemetry and signed remote controls through the REST API. |
+| S05 EV / S05 PHEV | Telemetry over MQTT. Remote controls are experimental and opt-in. |
+| S07 | Not tested. Telemetry and signed remote controls through the REST API. |
+| SL03 | Not tested. Telemetry and signed remote controls through the REST API. |
+| L07 | Not tested. Telemetry and signed remote controls through the REST API. |
 
 Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
 CA/MQTT gateway; every command-capable model, MQTT-backed included, uses the same signed command
 flow. Climate, lights and horn are verified on a real S05. Controls also depend on what each car
 and account allow. For a model not listed here, telemetry and the generic vehicle image still work.
+
+## Supported features
+
+### Authentication and session
+
+- Email-code and SMS-code login on the international platform, with automatic token refresh and a
+  reauthentication flow.
+- Integration options for the scan interval, API logging, the regional environment and the declared
+  Android version.
+
+### Telemetry
+
+- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
+  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
+- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
+  fields.
+- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
+  entities are only created when the vehicle reports the fuel capability and its model is not a
+  BEV, so electric vehicles keep their current entity set.
+- One Home Assistant device per vehicle, with translated entity names.
+
+### Remote controls
+
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
+  and horn.
+- Comfort commands: seat heating and ventilation levels and steering-wheel heating.
+- Every command-capable international vehicle, MQTT-backed S05 included, sends these commands
+  through the same signed flow.
+- On the S05 the charge limit number is not created because the car does not support it.
+- The door lock, window and trunk commands require the remote control PIN created with the account
+  Home Assistant signs in with; their entities are only created once the PIN is saved in the
+  integration options.
+
+### Vehicle image
+
+- One image entity per vehicle: the API picture when it loads, and a bundled per-model render
+  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  page always shows a picture even when the API image is slow or missing.
+
+### Diagnostics
+
+- Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
+  keys and the per-vehicle capability codes reported by the app backend.
 
 ## Recommended setup: use a secondary account
 
@@ -82,49 +125,6 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Scan interval**, **API logging**, **regional environment** and **declared Android version**:
   polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging.
 
-## Supported features
-
-### Authentication and session
-
-- Email-code and SMS-code login on the international platform, with automatic token refresh and a
-  reauthentication flow.
-- Integration options for the scan interval, API logging, the regional environment and the declared
-  Android version.
-
-### Telemetry
-
-- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
-  limit, charge schedule and plan, doors, windows, climate, seats, tires and lamps.
-- MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
-  fields.
-- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
-  entities are only created when the vehicle reports the fuel capability and its model is not a
-  BEV, so electric vehicles keep their current entity set.
-- One Home Assistant device per vehicle, with translated entity names.
-
-### Remote controls
-
-- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
-  and horn.
-- Comfort commands: seat heating and ventilation levels and steering-wheel heating.
-- Every command-capable international vehicle, MQTT-backed S05 included, sends these commands
-  through the same signed flow.
-- On the S05 the charge limit number is not created because the car does not support it.
-- The door lock, window and trunk commands require the remote control PIN created with the account
-  Home Assistant signs in with; their entities are only created once the PIN is saved in the
-  integration options.
-
-### Vehicle image
-
-- One image entity per vehicle: the API picture when it loads, and a bundled per-model render
-  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
-  page always shows a picture even when the API image is slow or missing.
-
-### Diagnostics
-
-- Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
-  keys and the per-vehicle capability codes reported by the app backend.
-
 ## Troubleshooting
 
 - **No control can be changed**: check first whether the official app can change it with the same
@@ -137,29 +137,11 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   device. Sign in again; using the secondary account avoids most of these.
 - **Values look stale**: the vehicle only reports telemetry while it is awake; the integration shows
   the last known snapshot until the car reports again.
-- **"Límite de carga" does not appear on an S05**: the signed `charge_max` command is accepted by
-  the API but does not change the limit on that model and its function configuration reports no
-  SOC-set capability, so the integration does not create the number or the sensor. The charging
-  schedule stays available; delete the orphaned `number.*_charge_limit` entity from the entity
-  registry after updating.
-- **Some sensors are missing on an S05**: speed, gear, outside temperature, PM2.5, air quality,
-  vehicle status, electronic parking brake, rear seat heating, mileage yesterday/trip and the
-  charge limit are not created because the car does not report them. The remaining charge time
-  shows `unknown` while the car has no estimate. Delete the orphaned sensor entries from the entity
-  registry after updating.
 - **Fuel entities are missing on a PHEV**: the integration creates them only when the vehicle's
-  function configuration reports `#oilMileage` and the model is not a BEV. Check `capabilities` in
-  the diagnostics; if the code is absent, the gate does not fire and the change is documented in
-  `docs/phev-fuel-telemetry.md` (pending verification on a real PHEV).
+  function configuration reports `#oilMileage` and the model is not a BEV.
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
-- **"Login attempt or request with invalid authentication" with `/api/image_proxy/...`**: the
-  browser replayed a stale vehicle image URL, something that happens after a reload, a tab resume
-  or a network change and also with other image entities. The vehicle image itself keeps working:
-  the integration falls back to the bundled render. It is a known Home Assistant issue
-  ([core#173230](https://github.com/home-assistant/core/issues/173230)); with `ip_ban_enabled`
-  disabled (the default) the warning is harmless, and a hard refresh drops the stale URL.
 
 ## Disclaimer
 
