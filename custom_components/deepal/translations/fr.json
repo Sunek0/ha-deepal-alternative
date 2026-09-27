@@ -40,11 +40,13 @@
         "description": "Sélectionnez le pays de vente enregistré dans My Changan et l'e-mail du compte. Home Assistant demandera un code de vérification.",
         "data": {
           "country": "Pays de vente",
-          "email": "E-mail"
+          "email": "E-mail",
+          "environment": "Environnement régional"
         },
         "data_description": {
           "country": "Pays de vente du compte, par exemple Espagne. Il est envoyé comme selectcountry et salesCountry ; il ne change pas la passerelle API.",
-          "email": "E-mail utilisé dans l'application My Changan. Il est chiffré avant l'envoi."
+          "email": "E-mail utilisé dans l'application My Changan. Il est chiffré avant l'envoi.",
+          "environment": "Ensemble de passerelles régionales utilisé pour la connexion. Choisissez la région du compte ; les comptes ASEAN échouent sur la passerelle européenne."
         }
       },
       "intl_email_code": {
@@ -62,11 +64,13 @@
         "description": "Sélectionnez le pays de vente et le numéro de mobile national (sans l'indicatif du pays). Home Assistant demandera un code de vérification par SMS.",
         "data": {
           "country": "Pays de vente",
-          "phone": "Numéro de mobile"
+          "phone": "Numéro de mobile",
+          "environment": "Environnement régional"
         },
         "data_description": {
           "country": "Pays de vente du compte. Son indicatif est envoyé avec le numéro de mobile.",
-          "phone": "Numéro de mobile national sans l'indicatif, par exemple 600000000 pour l'Espagne (+34)."
+          "phone": "Numéro de mobile national sans l'indicatif, par exemple 600000000 pour l'Espagne (+34).",
+          "environment": "Ensemble de passerelles régionales utilisé pour la connexion. Choisissez la région du compte ; les comptes ASEAN échouent sur la passerelle européenne."
         }
       },
       "intl_sms_code": {
@@ -113,7 +117,7 @@
           "control_pin": "Code PIN de contrôle à distance",
           "enable_api_logging": "Journaliser le trafic API expurgé",
           "os_version": "Version d'Android déclarée (diagnostic)",
-          "environment": "Environnement régional (diagnostic)"
+          "environment": "Environnement régional"
         },
         "description": "Réglez l'interrogation et les diagnostics. Le code PIN de contrôle active les commandes à distance signées ; les options de diagnostic changent la façon dont l'API voit le client et ne doivent être modifiées qu'en cas de dépannage.",
         "data_description": {

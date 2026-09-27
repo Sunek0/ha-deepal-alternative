@@ -37,6 +37,7 @@ from deepal.mqtt import (
     aes_cbc_encrypt,
     build_publish_packet,
     parse_publish,
+    sda_condition_plan,
 )
 from deepal.intl import (
     CAR_CONTROL_REFRESH_THROTTLE_SECONDS,
@@ -2491,6 +2492,164 @@ async def test_get_sda_vehicle_condition_retries_with_vehicle_id():
     assert bodies == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
     assert condition.battery.soc_percentage == 55
     assert condition.condition_source == "sda-rest"
+
+
+@pytest.mark.asyncio
+async def test_get_sda_vehicle_condition_falls_back_to_get():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, dict(request.url.params)))
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "success": False,
+                    "code": "40020",
+                    "msg": "unsupported request method",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"success": True, "code": "0", "data": {"soc": 44}},
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        condition = await client.get_sda_vehicle_condition("car-1")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert [method for method, _params in seen] == ["POST", "POST", "GET"]
+    assert seen[2][1] == {"carId": "car-1"}
+    assert condition.battery.soc_percentage == 44
+    assert condition.condition_source == "sda-rest"
+
+
+@pytest.mark.asyncio
+async def test_get_car_function_config_uses_the_ca_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {
+                    "functionList": [{"id": "1", "deviceId": "did-1"}]
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        tree = await client.get_car_function_config("car-1")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert captured["url"] == (
+        "https://ca-m.iov.changanauto.sg"
+        "/user-apigw/vot-connect-conf-center/api/device/appGetCarConfFunc"
+    )
+    assert captured["body"]["carId"] == "car-1"
+    assert tree["functionList"][0]["deviceId"] == "did-1"
+
+
+@pytest.mark.asyncio
+async def test_get_car_function_config_falls_back_to_the_sda_endpoint():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "ca-m" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"success": False, "code": "COMMON_1_1_01_005", "msg": "no"},
+            )
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {
+                    "functionList": [{"id": "1", "deviceId": "did-sda"}]
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        tree = await client.get_car_function_config("car-1")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert captured["url"] == (
+        "https://prod-m.sda.changanauto.sg"
+        "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/get-function-config"
+    )
+    assert tree["functionList"][0]["deviceId"] == "did-sda"
+
+
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_fetches_the_tree_when_missing():
+    fetched = {
+        "functionList": [
+            {
+                "id": "1",
+                "deviceId": "did-1",
+                "commandCode": "Get_CarCondition",
+                "propertyCode": "carCondition",
+            }
+        ]
+    }
+    captured_config = {}
+
+    async def fake_config(vehicle_id: str) -> dict:
+        return _mqtt_config()
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_tree(vehicle_id: str) -> dict:
+        return fetched
+
+    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
+        captured_config.update(config)
+        return MqttExchangeResult(
+            params={},
+            source=None,
+            variants={"sda-mqtt": {}},
+            plan=sda_condition_plan(config),
+        )
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client.get_car_function_config = fake_tree
+    client._read_s05_params = fake_params
+
+    with pytest.raises(DeepalAPIError):
+        await client.s05_mqtt_condition("car-1", sda=True)
+    await client.close()
+
+    assert captured_config["functionConfig"] == fetched
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.plan.device_did == "did-1"
+    assert client.last_mqtt_exchange.params == {}
 
 
 @pytest.mark.asyncio

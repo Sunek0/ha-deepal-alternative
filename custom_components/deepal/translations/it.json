@@ -40,11 +40,13 @@
         "description": "Seleziona il paese di vendita registrato in My Changan e l'email dell'account. Home Assistant richiederà un codice di verifica.",
         "data": {
           "country": "Paese di vendita",
-          "email": "Email"
+          "email": "Email",
+          "environment": "Ambiente regionale"
         },
         "data_description": {
           "country": "Paese di vendita dell'account, ad esempio Spagna. Viene inviato come selectcountry e salesCountry; non cambia il gateway API.",
-          "email": "Email usata nell'app My Changan. Viene cifrata prima dell'invio."
+          "email": "Email usata nell'app My Changan. Viene cifrata prima dell'invio.",
+          "environment": "Insieme di gateway regionali usato per il login. Scegli la regione dell'account; gli account ASEAN falliscono sul gateway europeo."
         }
       },
       "intl_email_code": {
@@ -62,11 +64,13 @@
         "description": "Seleziona il paese di vendita e il numero di cellulare nazionale (senza prefisso internazionale). Home Assistant richiederà un codice di verifica via SMS.",
         "data": {
           "country": "Paese di vendita",
-          "phone": "Numero di cellulare"
+          "phone": "Numero di cellulare",
+          "environment": "Ambiente regionale"
         },
         "data_description": {
           "country": "Paese di vendita dell'account. Il suo prefisso viene inviato insieme al numero di cellulare.",
-          "phone": "Numero di cellulare nazionale senza prefisso, ad esempio 600000000 per la Spagna (+34)."
+          "phone": "Numero di cellulare nazionale senza prefisso, ad esempio 600000000 per la Spagna (+34).",
+          "environment": "Insieme di gateway regionali usato per il login. Scegli la regione dell'account; gli account ASEAN falliscono sul gateway europeo."
         }
       },
       "intl_sms_code": {
@@ -113,7 +117,7 @@
           "control_pin": "PIN di controllo remoto",
           "enable_api_logging": "Registra il traffico API oscurato",
           "os_version": "Versione Android dichiarata (diagnostica)",
-          "environment": "Ambiente regionale (diagnostica)"
+          "environment": "Ambiente regionale"
         },
         "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.",
         "data_description": {

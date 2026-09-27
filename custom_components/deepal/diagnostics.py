@@ -39,6 +39,7 @@ TO_REDACT = {
     CONF_REFRESH_TOKEN,
     CONF_USER_ID,
     "vin",
+    "license_plate",
     "thumbnail_url",
     "image_url",
     "imgUrl",
@@ -123,6 +124,11 @@ async def async_get_config_entry_diagnostics(
             car_id: condition.sda_plan
             for car_id, condition in conditions.items()
             if condition.sda_plan is not None
+        },
+        "mqtt_attempts": {
+            vehicle.car_id: coordinator.mqtt_attempt(vehicle.car_id)
+            for vehicle in coordinator.vehicles
+            if coordinator.mqtt_attempt(vehicle.car_id) is not None
         },
         "unmapped_mqtt_keys": {
             car_id: sorted(unmapped_s05_keys(condition.mqtt_raw_data or {}))

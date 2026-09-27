@@ -165,6 +165,14 @@ INTL_CA_GET_DIGITAL_KEY_SUPPORT = (
 INTL_SDA_GET_CAR_CONDITION = (
     "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/getCarConditionByCarId"
 )
+# SDA/VOT per-function tree (CarControlApiKt.GETFUNCTIONCONFIG and
+# MqttAuthApiKt.GETVEHICLESERVICE in the 1.12.0 DEX).
+INTL_SDA_GET_FUNCTION_CONFIG = (
+    "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/get-function-config"
+)
+INTL_SDA_VOT_FUNCTION_CONFIG = (
+    "/app-apigw/vot-app-conf/api/v1/app/config/get-function-config"
+)
 
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"

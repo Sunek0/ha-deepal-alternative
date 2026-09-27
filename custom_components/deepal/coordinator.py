@@ -141,6 +141,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
+        self._mqtt_attempts: dict[str, dict[str, Any]] = {}
+
+    def mqtt_attempt(self, vehicle_id: str) -> dict[str, Any] | None:
+        """Return the last failed MQTT exchange details for diagnostics."""
+        return self._mqtt_attempts.get(vehicle_id)
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -277,6 +282,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 condition = await self.client.s05_mqtt_condition(
                     vehicle_id, vin=vehicle.vin, sda=sda
                 )
+                self._mqtt_attempts.pop(vehicle_id, None)
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
                 if getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES and (
@@ -286,9 +292,19 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                         condition = await self.client.s05_mqtt_condition(
                             vehicle_id, vin=vehicle.vin, sda=sda
                         )
+                        self._mqtt_attempts.pop(vehicle_id, None)
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
                         err = retry_err
+                exchange = getattr(self.client, "last_mqtt_exchange", None)
+                if exchange is not None:
+                    self._mqtt_attempts[vehicle_id] = {
+                        "source": exchange.source,
+                        "variants": exchange.variants,
+                        "plan": (
+                            exchange.plan.as_dict() if exchange.plan else None
+                        ),
+                    }
                 _LOGGER.warning(
                     "Deepal MQTT telemetry unavailable for %s (%s); using the "
                     "REST condition endpoint",

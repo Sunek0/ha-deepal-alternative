@@ -125,6 +125,7 @@ def _coordinator(
     coordinator._command_locks = {}
     coordinator._optimistic_holds = {}
     coordinator._background_tasks = set()
+    coordinator._mqtt_attempts = {}
     coordinator.entry = SimpleNamespace(
         data={
             CONF_ACCESS_TOKEN: "test_token_123",
@@ -1028,6 +1029,36 @@ async def test_condition_falls_back_to_intl_rest_when_sda_rest_fails():
 
     assert client.sda_rest_calls == 1
     assert condition.condition_source == "rest"
+
+
+@pytest.mark.asyncio
+async def test_failed_mqtt_exchange_is_kept_for_diagnostics():
+    from deepal.mqtt import MqttExchangeResult, SdaConditionPlan
+
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        client.last_mqtt_exchange = MqttExchangeResult(
+            params={},
+            source=None,
+            variants={"sda-mqtt": {}, "sda-mqtt-sections": {}},
+            plan=SdaConditionPlan(device_did="plan-did"),
+        )
+        raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="sda-rest"
+    )
+
+    await coordinator._async_fetch_condition("car-1")
+
+    attempt = coordinator.mqtt_attempt("car-1")
+    assert attempt is not None
+    assert attempt["variants"] == {"sda-mqtt": {}, "sda-mqtt-sections": {}}
+    assert attempt["plan"]["device_did"] == "plan-did"
 
 
 @pytest.mark.asyncio

@@ -40,11 +40,13 @@
         "description": "Select the sales country registered in My Changan and the account email. Home Assistant will request a verification code.",
         "data": {
           "country": "Sales country",
-          "email": "Email"
+          "email": "Email",
+          "environment": "Regional environment"
         },
         "data_description": {
           "country": "Sales country of the account, for example Spain. It is sent as selectcountry and salesCountry; it does not change the API gateway.",
-          "email": "Email used in the My Changan app. It is encrypted before it is sent."
+          "email": "Email used in the My Changan app. It is encrypted before it is sent.",
+          "environment": "Regional gateway set used for the login. Choose the region the account belongs to; ASEAN accounts fail against the European gateway."
         }
       },
       "intl_email_code": {
@@ -62,11 +64,13 @@
         "description": "Select the sales country and the national mobile number (without the country prefix). Home Assistant will request a verification code by SMS.",
         "data": {
           "country": "Sales country",
-          "phone": "Mobile number"
+          "phone": "Mobile number",
+          "environment": "Regional environment"
         },
         "data_description": {
           "country": "Sales country of the account. Its dial code is sent together with the mobile number.",
-          "phone": "National mobile number without the dial code, for example 600000000 for Spain (+34)."
+          "phone": "National mobile number without the dial code, for example 600000000 for Spain (+34).",
+          "environment": "Regional gateway set used for the login. Choose the region the account belongs to; ASEAN accounts fail against the European gateway."
         }
       },
       "intl_sms_code": {
@@ -113,7 +117,7 @@
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log redacted API traffic",
           "os_version": "Declared Android version (diagnostic)",
-          "environment": "Regional environment (diagnostic)"
+          "environment": "Regional environment"
         },
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
         "data_description": {

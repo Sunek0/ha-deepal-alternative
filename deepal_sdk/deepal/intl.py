@@ -57,6 +57,8 @@ from deepal.endpoints import (
     INTL_LOGOUT,
     INTL_REFRESH_TOKEN,
     INTL_SDA_GET_CAR_CONDITION,
+    INTL_SDA_GET_FUNCTION_CONFIG,
+    INTL_SDA_VOT_FUNCTION_CONFIG,
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
     REQUEST_ENCRYPTION_PUBLIC_KEY,
@@ -342,6 +344,7 @@ class DeepalIntlClient:
         self.mqtt_tls_insecure = mqtt_tls_insecure
         self.mqtt_sda_probe_grace = mqtt_sda_probe_grace
         self.mqtt_exchange_timeout = mqtt_exchange_timeout
+        self.last_mqtt_exchange: Optional[MqttExchangeResult] = None
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
         self.ca_base_url = (ca_base_url or environment_config.ca_base_url).rstrip("/")
@@ -489,6 +492,9 @@ class DeepalIntlClient:
         json_data: Optional[dict[str, Any]] = None,
         auth_required: bool = False,
         base_url: Optional[str] = None,
+        *,
+        method: str = "POST",
+        query: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Perform an HTTP request against the international gateway."""
         if auth_required and not self.access_token:
@@ -511,12 +517,20 @@ class DeepalIntlClient:
 
         try:
             http_client = await self._http_client()
-            response = await http_client.request(
-                method="POST",
-                url=url,
-                content=body,
-                headers=headers,
-            )
+            if method.upper() == "GET":
+                response = await http_client.request(
+                    method="GET",
+                    url=url,
+                    params=query,
+                    headers=headers,
+                )
+            else:
+                response = await http_client.request(
+                    method=method.upper(),
+                    url=url,
+                    content=body,
+                    headers=headers,
+                )
         except httpx.RequestError as exc:
             logger.error("Network error requesting %s: %s", url, exc)
             raise DeepalConnectionError(f"Failed to connect to Deepal API: {exc}") from exc
@@ -1466,11 +1480,18 @@ class DeepalIntlClient:
         remains the default and the last fallback probe.
         """
         config = await self.get_mqtt_config(vehicle_id)
+        if sda:
+            plan = sda_condition_plan(config)
+            if plan.device_did is None and not plan.property_codes:
+                tree = await self.get_car_function_config(vehicle_id)
+                if tree:
+                    config = {**config, "functionConfig": tree}
         token = await self.get_mqtt_token()
         try:
             result = await self._read_s05_params(config, token, sda=sda)
         except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
             raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
+        self.last_mqtt_exchange = result
         if not result.params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
         condition = self.parse_condition(
@@ -1489,17 +1510,29 @@ class DeepalIntlClient:
 
         The endpoint lives on the SDA gateway (``sda_base_url``), not on the
         international host. The body key is tried as ``carId`` and then
-        ``vehicleId``; the response is normalized from ``data``/``params`` or
-        the flat payload.
+        ``vehicleId``; the live E07 answered the POST attempts with
+        ``40020 unsupported request method``, so the GET variants are tried
+        too. The response is normalized from ``data``/``params`` or the flat
+        payload.
         """
+        attempts: tuple[
+            tuple[str, Optional[dict[str, Any]], Optional[dict[str, Any]]], ...
+        ] = (
+            ("POST", {"carId": vehicle_id}, None),
+            ("POST", {"vehicleId": vehicle_id}, None),
+            ("GET", None, {"carId": vehicle_id}),
+            ("GET", None, {"vehicleId": vehicle_id}),
+        )
         last_error: Optional[DeepalAPIError] = None
-        for key in ("carId", "vehicleId"):
+        for method, body, query in attempts:
             try:
                 raw = await self._request(
                     INTL_SDA_GET_CAR_CONDITION,
-                    json_data={key: vehicle_id},
+                    json_data=body,
                     auth_required=True,
                     base_url=self.sda_base_url,
+                    method=method,
+                    query=query,
                 )
             except DeepalAPIError as exc:
                 last_error = exc
@@ -1509,6 +1542,52 @@ class DeepalIntlClient:
         if last_error is not None:
             raise last_error
         raise DeepalAPIError("SDA REST condition did not return vehicle condition.")
+
+    async def get_car_function_config(self, vehicle_id: str) -> dict[str, Any]:
+        """Fetch the per-function VOT tree used to build the SDA plan.
+
+        The app reads ``appGetCarConfFunc`` into ``CarFuncBean`` entries and
+        derives the condition device and signals from it. The connection
+        configuration does not always carry ``carConfigJson`` (the live E07 did
+        not), so the tree is fetched explicitly, then from the SDA function
+        config endpoints.
+        """
+        payload = {
+            "deviceId": self.device_id,
+            "carId": vehicle_id,
+            "deviceType": 1,
+            "confTimestamp": 0,
+            "deviceTimestamp": str(int(time.time() * 1000)),
+        }
+        attempts: tuple[
+            tuple[str, str, Optional[dict[str, Any]], Optional[dict[str, Any]]], ...
+        ] = (
+            ("POST", INTL_CA_GET_CAR_CONF_FUNC, payload, None),
+            ("POST", INTL_SDA_GET_FUNCTION_CONFIG, {"carId": vehicle_id}, None),
+            ("POST", INTL_SDA_VOT_FUNCTION_CONFIG, {"carId": vehicle_id}, None),
+            ("GET", INTL_SDA_GET_FUNCTION_CONFIG, None, {"carId": vehicle_id}),
+            ("GET", INTL_SDA_VOT_FUNCTION_CONFIG, None, {"carId": vehicle_id}),
+        )
+        for method, path, body, query in attempts:
+            base_url = (
+                self.ca_base_url
+                if path == INTL_CA_GET_CAR_CONF_FUNC
+                else self.sda_base_url
+            )
+            try:
+                data = await self._request(
+                    path,
+                    json_data=body,
+                    auth_required=True,
+                    base_url=base_url,
+                    method=method,
+                    query=query,
+                )
+            except DeepalAPIError:
+                continue
+            if isinstance(data, dict) and data:
+                return data
+        return {}
 
     def _parse_sda_rest_condition(
         self, raw: dict[str, Any], vehicle_id: str, vin: Optional[str] = None

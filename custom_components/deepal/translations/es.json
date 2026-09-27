@@ -40,11 +40,13 @@
         "description": "Selecciona el país de venta registrado en My Changan y el email de la cuenta. Home Assistant solicitará un código de verificación.",
         "data": {
           "country": "País de venta",
-          "email": "Email"
+          "email": "Email",
+          "environment": "Entorno regional"
         },
         "data_description": {
           "country": "País de venta de la cuenta, por ejemplo España. Se envía como selectcountry y salesCountry; no cambia el gateway de la API.",
-          "email": "Email usado en la app My Changan. Se cifra antes de enviarlo."
+          "email": "Email usado en la app My Changan. Se cifra antes de enviarlo.",
+          "environment": "Conjunto de gateways regional usado en el login. Elige la región de la cuenta; las cuentas ASEAN fallan contra el gateway europeo."
         }
       },
       "intl_email_code": {
@@ -62,11 +64,13 @@
         "description": "Selecciona el país de venta y el número de móvil nacional (sin prefijo de país). Home Assistant solicitará un código por SMS.",
         "data": {
           "country": "País de venta",
-          "phone": "Número de móvil"
+          "phone": "Número de móvil",
+          "environment": "Entorno regional"
         },
         "data_description": {
           "country": "País de venta de la cuenta. Su prefijo se envía junto con el número de móvil.",
-          "phone": "Número de móvil nacional sin el prefijo, por ejemplo 600000000 para España (+34)."
+          "phone": "Número de móvil nacional sin el prefijo, por ejemplo 600000000 para España (+34).",
+          "environment": "Conjunto de gateways regional usado en el login. Elige la región de la cuenta; las cuentas ASEAN fallan contra el gateway europeo."
         }
       },
       "intl_sms_code": {
@@ -113,7 +117,7 @@
           "control_pin": "PIN de control remoto",
           "enable_api_logging": "Registrar tráfico API redactado",
           "os_version": "Versión de Android declarada (diagnóstico)",
-          "environment": "Entorno regional (diagnóstico)"
+          "environment": "Entorno regional"
         },
         "description": "Ajusta el sondeo y los diagnósticos. El PIN de control habilita los comandos remotos firmados; las opciones de diagnóstico cambian cómo ve la API al cliente, tócalas solo al solucionar problemas.",
         "data_description": {
