@@ -158,5 +158,4 @@ class DeepalSeatLevelNumber(DeepalEntity, NumberEntity):
             optimistic_update=lambda cond: _set_seat_level(
                 cond, self._seat, self._field, level
             ),
-            cooldown_key=f"seat_{self._function}_{self._seat}",
         )

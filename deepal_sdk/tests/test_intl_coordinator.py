@@ -1073,3 +1073,28 @@ async def test_failed_command_does_not_start_a_cooldown():
         )
 
     assert ("car-1", "honk_horn") not in coordinator._command_cooldowns
+
+
+@pytest.mark.asyncio
+async def test_merge_condition_retains_last_valid_comfort_states():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(car_id="car-1", vin="")
+    previous.climate.steering_wheel_heater_on = True
+    previous.climate.steering_wheel_heater_level = 2
+    previous.climate.defrost_on = True
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    omitted = VehicleCondition(car_id="car-1", vin="")
+    merged = coordinator._merge_condition("car-1", omitted)
+    assert merged.climate.steering_wheel_heater_on is True
+    assert merged.climate.steering_wheel_heater_level == 2
+    assert merged.climate.defrost_on is True
+
+    reported = VehicleCondition(car_id="car-1", vin="")
+    reported.climate.steering_wheel_heater_on = False
+    reported.climate.steering_wheel_heater_level = 0
+    reported.climate.defrost_on = False
+    merged = coordinator._merge_condition("car-1", reported)
+    assert merged.climate.steering_wheel_heater_on is False
+    assert merged.climate.steering_wheel_heater_level == 0
+    assert merged.climate.defrost_on is False

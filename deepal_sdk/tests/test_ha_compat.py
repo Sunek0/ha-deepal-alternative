@@ -697,7 +697,7 @@ async def test_seat_and_steering_controls_send_app_payloads() -> None:
     await driver_heat.async_set_native_value(2)
     await passenger_wind.async_set_native_value(0)
     await steering.async_turn_on()
-    assert coordinator.last_cooldown_key == "steering_wheel_heating"
+    assert coordinator.last_cooldown_key is None
 
     assert coordinator.client.calls[0] == (
         "heat",

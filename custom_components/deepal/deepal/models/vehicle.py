@@ -179,10 +179,16 @@ class ClimateCondition(BaseModel):
     humidity: Optional[float] = None
     inside_pm25: Optional[float] = None
     air_quality_level: Optional[int] = None
-    defrost_on: bool = False
+    defrost_on: Optional[bool] = Field(
+        default=None, description="Front defrost state; None when not reported"
+    )
     fan_level: Optional[int] = None
-    steering_wheel_heater_on: bool = False
-    steering_wheel_heater_level: int = 0
+    steering_wheel_heater_on: Optional[bool] = Field(
+        default=None, description="Steering wheel heater state; None when not reported"
+    )
+    steering_wheel_heater_level: Optional[int] = Field(
+        default=None, description="Steering wheel heater level; None when not reported"
+    )
     driver_seat_ventilation_level: int = 0
     driver_seat_heating_level: int = 0
 

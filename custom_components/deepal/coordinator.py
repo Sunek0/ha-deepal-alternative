@@ -45,16 +45,12 @@ _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 
 # How long the vehicle needs to complete a command's physical cycle before it
-# accepts the same command again (measured on the real car). Commands without
-# an entry here can be repeated immediately.
+# accepts the same command again (measured on the real car). Comfort controls
+# are purposely absent: their changes are frequent adjustments and go through
+# the command queue without a minimum wait.
 _COMMAND_COOLDOWN_SECONDS: dict[str, float] = {
     "flash_lights": 30.0,
     "honk_horn": 6.0,
-    "seat_heating_front_left": 4.0,
-    "seat_ventilation_front_left": 4.0,
-    "seat_heating_front_right": 4.0,
-    "seat_ventilation_front_right": 4.0,
-    "steering_wheel_heating": 4.0,
 }
 
 
@@ -345,6 +341,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if previous is not None:
             if condition.climate.power_on is None:
                 condition.climate.power_on = previous.climate.power_on
+            if condition.climate.steering_wheel_heater_on is None:
+                condition.climate.steering_wheel_heater_on = (
+                    previous.climate.steering_wheel_heater_on
+                )
+            if condition.climate.steering_wheel_heater_level is None:
+                condition.climate.steering_wheel_heater_level = (
+                    previous.climate.steering_wheel_heater_level
+                )
+            if condition.climate.defrost_on is None:
+                condition.climate.defrost_on = previous.climate.defrost_on
             _retain_seat_levels(previous.seats, condition.seats)
         return condition
 

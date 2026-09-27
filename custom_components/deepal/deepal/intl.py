@@ -1291,6 +1291,7 @@ class DeepalIntlClient:
         )
 
         steering_heater = _as_int(status.get("steeringWheelHeater"))
+        defrost = _as_int(hvac.get("defrostStatus"))
         ac_status = hvac.get("acStatus")
 
         climate = ClimateCondition(
@@ -1303,10 +1304,12 @@ class DeepalIntlClient:
             humidity=_as_float(hvac.get("insideHumidity")),
             inside_pm25=_as_float(hvac.get("insidePm25")),
             air_quality_level=_as_int(hvac.get("insideAirQualityLevel")),
-            defrost_on=hvac.get("defrostStatus") not in (None, 0),
+            defrost_on=None if defrost is None else defrost != 0,
             fan_level=_as_int(hvac.get("fanLevel")),
-            steering_wheel_heater_on=steering_heater not in (None, 0),
-            steering_wheel_heater_level=_as_int(status.get("steeringWheelHeaterLevel")) or 0,
+            steering_wheel_heater_on=(
+                None if steering_heater is None else steering_heater != 0
+            ),
+            steering_wheel_heater_level=_as_int(status.get("steeringWheelHeaterLevel")),
         )
 
         lamps = LampsCondition(

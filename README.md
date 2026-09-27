@@ -45,8 +45,7 @@ vehicle image still work.
 
 - Email-code and SMS-code login on the international platform, with automatic token refresh and a
   reauthentication flow.
-- Integration options for the scan interval, API logging, the regional environment and the declared
-  Android version.
+- Integration options for the scan interval, API logging and the regional environment.
 
 ### Telemetry
 
@@ -74,9 +73,9 @@ vehicle image still work.
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
   integration options. The PIN is verified against the account when it is saved, so an invalid one,
   or one created with another account, is rejected instead of stored.
-- After a command that makes the car run a physical cycle (about 30 s for flash, 6 s for horn and
-  4 s for each seat and steering-wheel command), repeating it sooner shows how many seconds to wait
-  instead of sending it and being rejected by the vehicle.
+- Flashing the lights and sounding the horn make the car run a physical cycle (about 30 s and 6 s);
+  repeating them sooner shows how many seconds to wait instead of sending the command and being
+  rejected by the vehicle. Climate, seat and steering wheel changes have no such wait.
 
 ### Vehicle image
 
@@ -142,8 +141,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
-- **Scan interval**, **API logging**, **regional environment** and **declared Android version**:
-  polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging.
+- **Scan interval**, **API logging** and **regional environment**: polling cadence and
+  troubleshooting helpers. Leave the defaults unless you are debugging.
 
 ## Troubleshooting
 

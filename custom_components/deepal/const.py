@@ -30,7 +30,6 @@ CONF_PRIVATE_KEY = "private_key"
 CONF_PUBLIC_KEY = "public_key"
 CONF_CONTROL_PIN = "control_pin"
 CONF_DEVICE_ID = "device_id"
-CONF_OS_VERSION = "os_version"
 CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
@@ -38,7 +37,6 @@ CONF_ENABLE_API_LOGGING = "enable_api_logging"
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
-DEFAULT_OS_VERSION = "9"
 DEFAULT_ENVIRONMENT = "release_eu"
 
 # Device Info

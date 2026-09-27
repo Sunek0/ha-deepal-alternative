@@ -37,7 +37,6 @@ from .const import (
     CONF_PUBLIC_KEY,
     CONF_CONTROL_PIN,
     CONF_DEVICE_ID,
-    CONF_OS_VERSION,
     CONF_ENVIRONMENT,
     CONF_USER_ID,
     CONF_VEHICLE_ID,
@@ -45,7 +44,6 @@ from .const import (
     CONF_ENABLE_API_LOGGING,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_OS_VERSION,
     DEFAULT_ENVIRONMENT,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
@@ -594,15 +592,6 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     CONF_ENABLE_API_LOGGING,
                     default=options.get(CONF_ENABLE_API_LOGGING, False),
                 ): bool,
-                vol.Optional(
-                    CONF_OS_VERSION,
-                    default=options.get(CONF_OS_VERSION, DEFAULT_OS_VERSION),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=["15", "14", "13", "12", "11", "10", "9"],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
                 vol.Optional(
                     CONF_ENVIRONMENT,
                     default=options.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),

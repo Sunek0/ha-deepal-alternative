@@ -1113,8 +1113,9 @@ async def test_get_vehicle_condition_defaults_for_missing_groups():
     assert condition.doors.locked is True
     assert condition.doors.driver_door_open is False
     assert condition.climate.power_on is None
-    assert condition.climate.steering_wheel_heater_on is False
-    assert condition.climate.steering_wheel_heater_level == 0
+    assert condition.climate.steering_wheel_heater_on is None
+    assert condition.climate.steering_wheel_heater_level is None
+    assert condition.climate.defrost_on is None
     assert condition.windows.front_left_open is False
     assert condition.windows.rear_right_open is False
     assert condition.seats.front_left.heating_level is None
