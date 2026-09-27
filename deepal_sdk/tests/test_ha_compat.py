@@ -867,7 +867,15 @@ def _mqtt_condition() -> VehicleCondition:
     condition.condition_source = "sda-mqtt"
     condition.mqtt_variants = {
         "sda-mqtt": {"soc": 71},
-        "sda-mqtt-signal-list": {},
+        "sda-mqtt-sections": {},
+    }
+    condition.sda_plan = {
+        "device_did": "plan-did",
+        "service_code": "CarCondition",
+        "command_code": "Get_CarCondition",
+        "property_codes": ["carCondition"],
+        "strategy_codes": [],
+        "strategy_ids": [],
     }
     condition.raw_data = {"vehicleStatus": {"soc": 71, "latitude": 40.4}}
     condition.mqtt_raw_data = {
@@ -906,9 +914,12 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     assert report["condition_sources"]["car-1"] == "sda-mqtt"
     assert report["raw_mqtt_variants"]["car-1"] == {
         "sda-mqtt": {"soc": 71},
-        "sda-mqtt-signal-list": {},
+        "sda-mqtt-sections": {},
     }
+    assert report["sda_plans"]["car-1"]["device_did"] == "plan-did"
+    assert report["sda_plans"]["car-1"]["property_codes"] == ["carCondition"]
     assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
+    assert "sda_plan" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [
         "chargeCoverStatus",
         "latitude",
@@ -953,6 +964,7 @@ async def test_diagnostics_report_survives_an_empty_entry() -> None:
     assert report["raw_mqtt"] == {}
     assert report["condition_sources"] == {}
     assert report["raw_mqtt_variants"] == {}
+    assert report["sda_plans"] == {}
     assert report["unmapped_mqtt_keys"] == {}
 
 

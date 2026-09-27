@@ -2287,9 +2287,9 @@ async def test_read_s05_params_sda_falls_back_to_signal_list(monkeypatch):
     await client.close()
 
     assert result.params == S05_BROKER_PARAMS
-    assert result.source == "sda-mqtt-signal-list"
+    assert result.source == "sda-mqtt-sections"
     assert result.variants["sda-mqtt"] == {}
-    assert result.variants["sda-mqtt-signal-list"] == S05_BROKER_PARAMS
+    assert result.variants["sda-mqtt-sections"] == S05_BROKER_PARAMS
     assert len(broker.condition_publishes) == 2
     services = _published_services(broker, broker.condition_publishes[1])
     assert services[0]["params"]["SignalList"] == list(SDA_CONDITION_SECTIONS)
@@ -2316,7 +2316,7 @@ async def test_read_s05_params_sda_falls_back_to_legacy(monkeypatch):
     assert result.params == S05_BROKER_PARAMS
     assert result.source == "legacy-mqtt"
     assert result.variants["sda-mqtt"] == {}
-    assert result.variants["sda-mqtt-signal-list"] == {}
+    assert result.variants["sda-mqtt-sections"] == {}
     assert result.variants["legacy-mqtt"] == S05_BROKER_PARAMS
     assert len(broker.condition_publishes) == 3
     services = _published_services(broker, broker.condition_publishes[2])
@@ -2338,7 +2338,7 @@ async def test_read_s05_params_sda_all_variants_empty(monkeypatch):
     assert result.source is None
     assert result.variants == {
         "sda-mqtt": {},
-        "sda-mqtt-signal-list": {},
+        "sda-mqtt-sections": {},
         "legacy-mqtt": {},
     }
     assert len(broker.condition_publishes) == 3
@@ -2373,6 +2373,124 @@ async def test_s05_mqtt_condition_records_the_sda_source():
 
     assert condition.condition_source == "sda-mqtt"
     assert condition.mqtt_variants == {"sda-mqtt": dict(S05_BROKER_PARAMS)}
+
+
+@pytest.mark.asyncio
+async def test_read_s05_params_sda_uses_the_plan_property_list(monkeypatch):
+    tree = {
+        "functionList": [
+            {
+                "id": "2",
+                "deviceId": "plan-did",
+                "commandCode": "Get_CarCondition",
+                "serviceCode": "CarCondition",
+                "strategyCode": "strategy-1",
+                "propertyCode": "carCondition",
+            },
+            {"id": "3", "parentId": "2", "propertyCode": "socLeft"},
+        ]
+    }
+    config = _mqtt_config(carConfigJson=json.dumps(tree))
+    broker = _FakeMqttBroker(
+        {},
+        condition_sequence=[
+            None,
+            {"service_code": "CarCondition", "data": dict(S05_BROKER_PARAMS)},
+        ],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _sda_client()
+
+    result = await client._read_s05_params(config, "test-mqtt-token", sda=True)
+    await client.close()
+
+    assert result.params == S05_BROKER_PARAMS
+    assert result.source == "sda-mqtt-properties"
+    assert result.plan is not None and result.plan.device_did == "plan-did"
+    assert len(broker.condition_publishes) == 2
+    services = _published_services(broker, broker.condition_publishes[1])
+    assert services[0]["params"]["SignalList"] == ["carCondition", "socLeft"]
+    assert services[0]["strategy_code"] == "strategy-1"
+    assert broker.condition_topic == "$vdp/plan-did/properties/get/req"
+    assert broker.subscribe_packet is not None
+    assert b"$vdp/plan-did/properties/get/res" in broker.subscribe_packet
+
+
+@pytest.mark.asyncio
+async def test_get_sda_vehicle_condition_uses_the_sda_gateway():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        captured["token"] = request.headers.get("X-Tsp-User-Token")
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {
+                    "soc": 66,
+                    "totalOdometer": 4321,
+                    "vehicleTemperature": 21.5,
+                },
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        condition = await client.get_sda_vehicle_condition("car-1", vin="VIN")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert captured["url"] == (
+        "https://prod-m.sda.changanauto.sg"
+        "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/getCarConditionByCarId"
+    )
+    assert captured["body"] == {"carId": "car-1"}
+    assert captured["token"] == "test_token_123"
+    assert condition.condition_source == "sda-rest"
+    assert condition.battery.soc_percentage == 66
+    assert condition.total_odometer_km == 4321
+    assert condition.climate.inside_temperature_c == 21.5
+
+
+@pytest.mark.asyncio
+async def test_get_sda_vehicle_condition_retries_with_vehicle_id():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if "carId" in body:
+            return httpx.Response(
+                200,
+                json={
+                    "success": False,
+                    "code": "COMMON_1_1_01_005",
+                    "msg": "bad request",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"success": True, "code": "0", "data": {"soc": 55}},
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalIntlClient(environment="release_ase", httpx_client=http_client)
+    try:
+        client.access_token = "test_token_123"
+        condition = await client.get_sda_vehicle_condition("car-1")
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert bodies == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
+    assert condition.battery.soc_percentage == 55
+    assert condition.condition_source == "sda-rest"
 
 
 @pytest.mark.asyncio

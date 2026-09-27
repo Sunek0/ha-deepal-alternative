@@ -244,3 +244,10 @@ class VehicleCondition(BaseModel):
             "exchange, empty entries included (diagnostics)"
         ),
     )
+    sda_plan: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "SDA condition plan derived from the vehicle function tree: device DID, "
+            "service/command codes and probe property/strategy codes"
+        ),
+    )

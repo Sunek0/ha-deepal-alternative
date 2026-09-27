@@ -14,7 +14,7 @@ import gzip
 import hashlib
 import json
 import struct
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Optional
@@ -275,6 +275,14 @@ def topic_device_id(topic: Optional[str]) -> Optional[str]:
     return None
 
 
+def topic_with_device(topic: Optional[str], did: Optional[str]) -> Optional[str]:
+    """Return the topic with its ``$vdp/<did>`` segment replaced by ``did``."""
+    current = topic_device_id(topic)
+    if topic and current and did and current != did:
+        return topic.replace(current, did)
+    return topic
+
+
 def _first_mapping(value: Any) -> Optional[Mapping[str, Any]]:
     if isinstance(value, Mapping):
         return value
@@ -297,6 +305,110 @@ def _config_sources(config: Any) -> list[Mapping[str, Any]]:
         if cluster is not None:
             sources.append(cluster)
     return sources
+
+
+def _function_nodes(value: Any) -> list[Mapping[str, Any]]:
+    """Collect the ``CarFuncBean``-like nodes of an arbitrary JSON structure."""
+    nodes: list[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        if any(
+            key in value
+            for key in ("commandCode", "propertyCode", "applicationFuncCode", "deviceId")
+        ):
+            nodes.append(value)
+        for child in value.values():
+            nodes.extend(_function_nodes(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            nodes.extend(_function_nodes(child))
+    return nodes
+
+
+def _is_condition_node(node: Mapping[str, Any]) -> bool:
+    text = " ".join(
+        str(node.get(key) or "")
+        for key in (
+            "commandCode",
+            "applicationFuncCode",
+            "propertyCode",
+            "commandName",
+            "propertyName",
+        )
+    ).lower()
+    return "carcondition" in text or "get_carcondition" in text
+
+
+def _unique_strings(values: Iterator[Any]) -> tuple[str, ...]:
+    unique: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in unique:
+            unique.append(text)
+    return tuple(unique)
+
+
+def sda_condition_plan(config: Any) -> SdaConditionPlan:
+    """Derive the SDA condition request plan from the CA function tree.
+
+    The app reads the per-function configuration (``carConfigJson`` inside the
+    connection config or the ``appGetCarConfFunc`` response) into
+    ``CarFuncBean`` entries and derives the MQTT device id and the condition
+    command from it. The tree shape is not fully recovered from the DEX, so the
+    walk is defensive: it accepts any nested JSON and only uses the fields it
+    recognises.
+    """
+    nodes: list[Mapping[str, Any]] = []
+    for source in [config, *_config_sources(config)]:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("carConfigJson", "carConfigFuncJson", "carConfigFunc"):
+            raw = source.get(key)
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    nodes.extend(_function_nodes(json.loads(raw)))
+                except ValueError:
+                    continue
+    if not nodes:
+        nodes = _function_nodes(config)
+
+    condition_nodes = [node for node in nodes if _is_condition_node(node)]
+    selected = condition_nodes[0] if condition_nodes else None
+    if selected is None:
+        device_did = next(
+            (str(node.get("deviceId")) for node in nodes if node.get("deviceId")),
+            None,
+        )
+        return SdaConditionPlan(device_did=device_did)
+
+    selected_id = str(selected.get("id") or "")
+    subtree = [selected]
+    if selected_id:
+        frontier = {selected_id}
+        while frontier:
+            children = [
+                node
+                for node in nodes
+                if str(node.get("parentId") or "") in frontier
+            ]
+            if not children:
+                break
+            subtree.extend(children)
+            frontier = {str(node.get("id") or "") for node in children}
+    return SdaConditionPlan(
+        device_did=next(
+            (str(node.get("deviceId")) for node in subtree if node.get("deviceId")),
+            None,
+        ),
+        service_code=str(selected.get("serviceCode") or SDA_CONDITION_SERVICE),
+        command_code=str(selected.get("commandCode") or SDA_CONDITION_COMMAND),
+        property_codes=_unique_strings(
+            node.get("propertyCode") for node in subtree
+        ),
+        strategy_codes=_unique_strings(
+            node.get("strategyCode") for node in subtree
+        ),
+        strategy_ids=_unique_strings(node.get("strategyId") for node in subtree),
+    )
 
 
 def _first_string(source: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -435,6 +547,29 @@ class MqttTopics:
 
 
 @dataclass(frozen=True)
+class SdaConditionPlan:
+    """SDA condition request plan derived from the CA function tree."""
+
+    device_did: Optional[str] = None
+    service_code: str = SDA_CONDITION_SERVICE
+    command_code: str = SDA_CONDITION_COMMAND
+    property_codes: tuple[str, ...] = ()
+    strategy_codes: tuple[str, ...] = ()
+    strategy_ids: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Serialize the plan for diagnostics."""
+        return {
+            "device_did": self.device_did,
+            "service_code": self.service_code,
+            "command_code": self.command_code,
+            "property_codes": list(self.property_codes),
+            "strategy_codes": list(self.strategy_codes),
+            "strategy_ids": list(self.strategy_ids),
+        }
+
+
+@dataclass(frozen=True)
 class MqttExchangeResult:
     """Raw parameters of one MQTT condition exchange plus its provenance.
 
@@ -447,6 +582,7 @@ class MqttExchangeResult:
     params: dict[str, Any]
     source: Optional[str] = None
     variants: dict[str, dict[str, Any]] = field(default_factory=dict)
+    plan: Optional[SdaConditionPlan] = None
 
 
 def _config_topic_entries(config: Any) -> list[tuple[str, Optional[str], Optional[str]]]:
@@ -733,6 +869,10 @@ def sda_condition_request_payload(
     *,
     condition_query_type: int = 0,
     signal_list: Optional[list[str]] = None,
+    service_code: str = SDA_CONDITION_SERVICE,
+    command_code: str = SDA_CONDITION_COMMAND,
+    strategy_code: Optional[str] = None,
+    strategy_id: Optional[str] = None,
     rt: Optional[str] = "",
     ms: Optional[int] = None,
     st: Optional[int] = None,
@@ -743,18 +883,21 @@ def sda_condition_request_payload(
     The 1.12.0 app builds the SDA request from the VOT service DTO
     (``CarConditionCmdConstant``): ``service_code`` ``CarCondition``,
     ``command_code`` ``Get_CarCondition`` and a ``params`` object with
-    ``ConditionQueryType`` plus an optional ``SignalList``.
+    ``ConditionQueryType`` plus an optional ``SignalList``. When the function
+    tree provides service/command/strategy values, they replace the defaults.
     """
     params: dict[str, Any] = {"ConditionQueryType": condition_query_type}
     if signal_list:
         params["SignalList"] = list(signal_list)
-    services = [
-        {
-            "service_code": SDA_CONDITION_SERVICE,
-            "command_code": SDA_CONDITION_COMMAND,
-            "params": params,
-        }
-    ]
+    service: dict[str, Any] = {
+        "service_code": service_code,
+        "command_code": command_code,
+        "params": params,
+    }
+    if strategy_code:
+        service["strategy_code"] = strategy_code
+    if strategy_id:
+        service["strategy_id"] = strategy_id
     identifiers = dict(basic_info or {})
     identifiers.setdefault("ruid", login_did)
     payload: dict[str, Any] = {
@@ -767,7 +910,7 @@ def sda_condition_request_payload(
         "tf": 0,
         "dt": iso_now(),
         "b": _filter_basic_info(identifiers),
-        "sers": aes_cbc_encrypt(services, secret_key, req_id),
+        "sers": aes_cbc_encrypt([service], secret_key, req_id),
     }
     _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
     return payload

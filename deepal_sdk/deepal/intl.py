@@ -56,6 +56,7 @@ from deepal.endpoints import (
     INTL_LOGIN_BY_MOBILE_PASSWORD,
     INTL_LOGOUT,
     INTL_REFRESH_TOKEN,
+    INTL_SDA_GET_CAR_CONDITION,
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
     REQUEST_ENCRYPTION_PUBLIC_KEY,
@@ -96,9 +97,12 @@ from deepal.mqtt import (
     MQTT_DEFAULT_KEEPALIVE,
     MQTT_SDA_PROBE_GRACE,
     S05_SERVICE_CODES,
+    SDA_CONDITION_COMMAND,
     SDA_CONDITION_SECTIONS,
+    SDA_CONDITION_SERVICE,
     SDA_SERVICE_CODES,
     MqttExchangeResult,
+    SdaConditionPlan,
     aes_cbc_decrypt,
     basic_identifiers,
     build_connect_packet,
@@ -116,8 +120,10 @@ from deepal.mqtt import (
     read_packet,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    sda_condition_plan,
     sda_condition_request_payload,
     secret_from_login_payload,
+    topic_with_device,
     unmapped_s05_keys,
 )
 
@@ -1473,6 +1479,58 @@ class DeepalIntlClient:
         condition.mqtt_raw_data = result.params
         condition.condition_source = result.source
         condition.mqtt_variants = result.variants or None
+        condition.sda_plan = result.plan.as_dict() if result.plan else None
+        return condition
+
+    async def get_sda_vehicle_condition(
+        self, vehicle_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
+        """Fetch the SDA condition over REST for an ``SDA-MQTT`` vehicle.
+
+        The endpoint lives on the SDA gateway (``sda_base_url``), not on the
+        international host. The body key is tried as ``carId`` and then
+        ``vehicleId``; the response is normalized from ``data``/``params`` or
+        the flat payload.
+        """
+        last_error: Optional[DeepalAPIError] = None
+        for key in ("carId", "vehicleId"):
+            try:
+                raw = await self._request(
+                    INTL_SDA_GET_CAR_CONDITION,
+                    json_data={key: vehicle_id},
+                    auth_required=True,
+                    base_url=self.sda_base_url,
+                )
+            except DeepalAPIError as exc:
+                last_error = exc
+                continue
+            if isinstance(raw, dict) and raw:
+                return self._parse_sda_rest_condition(raw, vehicle_id, vin=vin)
+        if last_error is not None:
+            raise last_error
+        raise DeepalAPIError("SDA REST condition did not return vehicle condition.")
+
+    def _parse_sda_rest_condition(
+        self, raw: dict[str, Any], vehicle_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
+        """Map an SDA REST condition payload into the shared vehicle model."""
+        payload: dict[str, Any] = raw
+        for key in ("data", "params"):
+            value = raw.get(key)
+            if isinstance(value, dict) and value:
+                payload = value
+                break
+        nested = any(
+            key in payload for key in ("vehicleStatus", "door", "hvac", "charge")
+        )
+        if nested:
+            condition = self.parse_condition(payload, vehicle_id, vin=vin)
+        else:
+            condition = self.parse_condition(
+                normalize_s05_params(payload), vehicle_id, vin=vin
+            )
+        condition.mqtt_raw_data = payload
+        condition.condition_source = "sda-rest"
         return condition
 
     @staticmethod
@@ -1561,6 +1619,10 @@ class DeepalIntlClient:
                 "S05 MQTT configuration did not include required topics."
             )
 
+        plan = sda_condition_plan(config) if sda else None
+        sda_did = (plan.device_did if plan and plan.device_did else None) or device_did
+        sda_topic = topic_with_device(properties_topic, sda_did) or properties_topic
+
         client_id, username = config_mqtt_identity(
             config,
             login_did,
@@ -1595,7 +1657,15 @@ class DeepalIntlClient:
                     f"reason code {reason_code} ({reason})"
                 )
 
-            writer.write(build_subscribe_packet(1, sorted(set(resolved.subscriptions))))
+            subscriptions = set(resolved.subscriptions)
+            if sda and sda_topic and sda_topic != properties_topic:
+                sda_response = (
+                    sda_topic[:-4] + "/res"
+                    if sda_topic.endswith("/req")
+                    else sda_topic
+                )
+                subscriptions.add(sda_response)
+            writer.write(build_subscribe_packet(1, sorted(subscriptions)))
             await writer.drain()
             await asyncio.wait_for(read_packet(reader), timeout=self.timeout)
 
@@ -1618,7 +1688,13 @@ class DeepalIntlClient:
             if sda:
                 probes: tuple[tuple[str, Optional[tuple[str, ...]]], ...] = (
                     ("sda-mqtt", None),
-                    ("sda-mqtt-signal-list", SDA_CONDITION_SECTIONS),
+                )
+                if plan and plan.property_codes:
+                    probes += (("sda-mqtt-properties", plan.property_codes),)
+                if plan and plan.strategy_codes:
+                    probes += (("sda-mqtt-strategies", plan.strategy_codes),)
+                probes += (
+                    ("sda-mqtt-sections", SDA_CONDITION_SECTIONS),
                     ("legacy-mqtt", None),
                 )
             else:
@@ -1632,16 +1708,33 @@ class DeepalIntlClient:
             def publish_probe(index: int) -> None:
                 nonlocal probe_deadline
                 label, signal_list = probes[index]
-                req_id = new_request_id(device_did)
+                req_id = new_request_id(sda_did or device_did)
                 if label.startswith("sda"):
                     request = sda_condition_request_payload(
-                        device_did,
+                        sda_did or device_did,
                         login_did,
                         secret_key,
                         req_id,
                         basic_info=basic_info,
                         signal_list=list(signal_list) if signal_list else None,
+                        service_code=(
+                            plan.service_code if plan else SDA_CONDITION_SERVICE
+                        ),
+                        command_code=(
+                            plan.command_code if plan else SDA_CONDITION_COMMAND
+                        ),
+                        strategy_code=(
+                            plan.strategy_codes[0]
+                            if plan and plan.strategy_codes
+                            else None
+                        ),
+                        strategy_id=(
+                            plan.strategy_ids[0]
+                            if plan and plan.strategy_ids
+                            else None
+                        ),
                     )
+                    topic = sda_topic or properties_topic
                 else:
                     request = condition_request_payload(
                         device_did,
@@ -1650,9 +1743,10 @@ class DeepalIntlClient:
                         req_id,
                         basic_info=basic_info,
                     )
+                    topic = properties_topic
                 probe_labels[req_id] = label
                 probe_deadline = loop.time() + self.mqtt_sda_probe_grace
-                writer.write(build_publish_packet(properties_topic, request))
+                writer.write(build_publish_packet(topic, request))
 
             def advance_probe() -> bool:
                 """Publish the next condition variant; False when exhausted."""
@@ -1718,18 +1812,27 @@ class DeepalIntlClient:
                 if topic.endswith("/properties/get/res") and len(params) > 10:
                     self._log_s05_discovery(params)
                     return MqttExchangeResult(
-                        params=params, source=source, variants=attempted_variants()
+                        params=params,
+                        source=source,
+                        variants=attempted_variants(),
+                        plan=plan,
                     )
                 partial.update(params)
                 if probe_index >= 0 and len(partial) > 30:
                     self._log_s05_discovery(partial)
                     return MqttExchangeResult(
-                        params=partial, source=source, variants=attempted_variants()
+                        params=partial,
+                        source=source,
+                        variants=attempted_variants(),
+                        plan=plan,
                     )
 
             self._log_s05_discovery(partial)
             return MqttExchangeResult(
-                params=partial, source=source, variants=attempted_variants()
+                params=partial,
+                source=source,
+                variants=attempted_variants(),
+                plan=plan,
             )
         finally:
             try:

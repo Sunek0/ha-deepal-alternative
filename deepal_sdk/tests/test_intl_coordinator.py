@@ -49,6 +49,8 @@ class _FakeIntlClient(DeepalIntlClient):
         self.refresh_calls = 0
         self.mqtt_condition: VehicleCondition | None = None
         self.mqtt_sda_flags: list[bool] = []
+        self.sda_rest_condition: VehicleCondition | None = None
+        self.sda_rest_calls = 0
 
     async def s05_mqtt_condition(
         self, vehicle_id: str, vin: str | None = None, *, sda: bool = False
@@ -58,6 +60,14 @@ class _FakeIntlClient(DeepalIntlClient):
         if self.mqtt_condition is not None:
             return self.mqtt_condition
         return VehicleCondition(car_id=vehicle_id, vin=vin or "")
+
+    async def get_sda_vehicle_condition(
+        self, vehicle_id: str, vin: str | None = None
+    ) -> VehicleCondition:
+        self.sda_rest_calls += 1
+        if self.sda_rest_condition is None:
+            raise DeepalAPIError("SDA REST condition unavailable")
+        return self.sda_rest_condition
 
     async def refresh_tokens(self, force: bool = False) -> AuthToken:
         self.refresh_calls += 1
@@ -978,6 +988,45 @@ async def test_condition_marks_the_rest_source():
     condition = await coordinator._async_fetch_condition("car-1")
 
     assert client.mqtt_sda_flags == []
+    assert condition.condition_source == "rest"
+
+
+@pytest.mark.asyncio
+async def test_condition_falls_back_to_sda_rest_for_sda_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        raise DeepalAPIError("MQTT unavailable")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="sda-rest"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.sda_rest_calls == 1
+    assert condition.condition_source == "sda-rest"
+
+
+@pytest.mark.asyncio
+async def test_condition_falls_back_to_intl_rest_when_sda_rest_fails():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        raise DeepalAPIError("MQTT unavailable")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = None
+    client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.sda_rest_calls == 1
     assert condition.condition_source == "rest"
 
 

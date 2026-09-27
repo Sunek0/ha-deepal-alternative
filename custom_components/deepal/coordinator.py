@@ -295,6 +295,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     vehicle_id,
                     err,
                 )
+            if sda:
+                try:
+                    condition = await self.client.get_sda_vehicle_condition(
+                        vehicle_id, vin=vehicle.vin
+                    )
+                    return self._merge_condition(vehicle_id, condition)
+                except DeepalError as err:
+                    _LOGGER.debug(
+                        "Deepal SDA REST condition unavailable for %s: %s",
+                        vehicle_id,
+                        err,
+                    )
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )

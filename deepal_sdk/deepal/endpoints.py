@@ -161,6 +161,10 @@ INTL_CA_GET_CAR_AUTH_LIST = (
 INTL_CA_GET_DIGITAL_KEY_SUPPORT = (
     "/app-apigw/sda-app-control/api/v2/sda-app/dk/query-supported-featured"
 )
+# SDA REST condition (MqttAuthApiKt.GETCARCONDITIONBYCARID in the 1.12.0 DEX).
+INTL_SDA_GET_CAR_CONDITION = (
+    "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/getCarConditionByCarId"
+)
 
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"
