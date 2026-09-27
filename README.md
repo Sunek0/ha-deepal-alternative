@@ -8,10 +8,16 @@ L07) over the official international and chinese API.
 - Unofficial project, not affiliated with Changan Automobile. Use it at your own risk.
 - Remote commands act on the real vehicle. Make sure it is safe before using locks, windows, trunk,
   climate, lights or horn.
-- It cannot drive the car: the BLE/digital-key path is not implemented.
 - Signing in with an account can sign that account out of the official My Changan app, and signing
   in to the app again can invalidate the Home Assistant session. Use a **secondary account** shared
   from your main account to avoid this (see below).
+
+## Requirements
+
+- Home Assistant 2026.3.0.
+- An international My Changan account (email or SMS login). The HACS metadata advertises the
+  countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
+  Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
 
 ## Supported vehicles
 
@@ -89,14 +95,6 @@ secondary account only for Home Assistant:
    not need it.
 5. Sign out of the app and add the integration in Home Assistant with the **new** account. Your main
    account can stay signed in on the phone.
-
-## Requirements
-
-- Home Assistant 2026.3.0 or newer, matching the `homeassistant` baseline in `hacs.json`
-  (Python 3.13+; Home Assistant 2026.9 uses Python 3.14).
-- An international My Changan account (email or SMS login). The HACS metadata advertises the
-  countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
-  Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
 
 ## Installation
 
