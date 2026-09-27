@@ -912,18 +912,41 @@ async def test_app_comfort_overlay_uses_server_condition():
     client.http_condition = app_condition
 
     mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
-    mqtt_condition.seats.front_left.ventilation_level = 6
+    mqtt_condition.seats.front_left.ventilation_level = None
+    mqtt_condition.seats.front_right.ventilation_level = 3
     mqtt_condition.climate.steering_wheel_heater_on = True
 
     merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
     assert merged.seats.front_left.ventilation_level == 2
+    assert merged.seats.front_right.ventilation_level == 3
     assert merged.climate.steering_wheel_heater_on is True
 
     client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
     plain = VehicleCondition(car_id="car-1", vin="VIN")
-    plain.seats.front_left.ventilation_level = 6
+    plain.seats.front_left.ventilation_level = None
     merged = await coordinator._overlay_app_comfort(vehicle, plain)
-    assert merged.seats.front_left.ventilation_level == 6
+    assert merged.seats.front_left.ventilation_level is None
+
+
+@pytest.mark.asyncio
+async def test_merge_condition_retains_last_valid_seat_levels():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(car_id="car-1", vin="")
+    previous.seats.front_left.ventilation_level = 2
+    previous.seats.front_right.heating_level = 1
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    unknown = VehicleCondition(car_id="car-1", vin="")
+    merged = coordinator._merge_condition("car-1", unknown)
+    assert merged.seats.front_left.ventilation_level == 2
+    assert merged.seats.front_right.heating_level == 1
+    assert merged.seats.rear_left.heating_level is None
+
+    reported = VehicleCondition(car_id="car-1", vin="")
+    reported.seats.front_left.ventilation_level = 3
+    merged = coordinator._merge_condition("car-1", reported)
+    assert merged.seats.front_left.ventilation_level == 3
+    assert merged.seats.front_right.heating_level == 1
 
 
 @pytest.mark.asyncio

@@ -719,15 +719,18 @@ def _first(params: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _seat_heat_level(value: Any) -> Optional[int]:
-    """Convert the raw 0-6 seat heat gear to the app's 0-3 level scale."""
+def _seat_level(value: Any) -> Optional[int]:
+    """Return a seat heating or ventilation level, or None when it is unknown.
+
+    The vehicle reports both functions 1:1 with the app's 0-3 levels, and it
+    sends 6 while the seat module is asleep. The sleep sentinel and any other
+    out-of-range value mean the level is unknown, not a level, so callers can
+    keep the last valid value instead of exposing a made-up one.
+    """
     parsed = _as_int(value)
-    return parsed // 2 if parsed is not None else None
-
-
-def _seat_vent_level(value: Any) -> Optional[int]:
-    """Return the seat ventilation level (reported 1:1, unlike heat)."""
-    return _as_int(value)
+    if parsed is None or not 0 <= parsed <= 3:
+        return None
+    return parsed
 
 
 def _to_millis(value: Any) -> int:
@@ -862,22 +865,22 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         },
         "seat": {
             "leftFront": {
-                "heatStatus": _seat_heat_level(params.get("driverSeatHeatStatus")),
-                "ventStatus": _seat_vent_level(params.get("driverSeatAirStatus")),
+                "heatStatus": _seat_level(params.get("driverSeatHeatStatus")),
+                "ventStatus": _seat_level(params.get("driverSeatAirStatus")),
             },
             "rightFront": {
-                "heatStatus": _seat_heat_level(params.get("passengerSeatHeatStatus")),
-                "ventStatus": _seat_vent_level(params.get("passengerSeatAirStatus")),
+                "heatStatus": _seat_level(params.get("passengerSeatHeatStatus")),
+                "ventStatus": _seat_level(params.get("passengerSeatAirStatus")),
             },
             "leftBack": {
-                "heatStatus": _seat_heat_level(params.get("leftBackSeatHeatStatus")),
-                "ventStatus": _seat_vent_level(
+                "heatStatus": _seat_level(params.get("leftBackSeatHeatStatus")),
+                "ventStatus": _seat_level(
                     params.get("leftBackSeatVentilateStatus")
                 ),
             },
             "rightBack": {
-                "heatStatus": _seat_heat_level(params.get("rightBackSeatHeatStatus")),
-                "ventStatus": _seat_vent_level(
+                "heatStatus": _seat_level(params.get("rightBackSeatHeatStatus")),
+                "ventStatus": _seat_level(
                     params.get("rightBackSeatVentilateStatus")
                 ),
             },

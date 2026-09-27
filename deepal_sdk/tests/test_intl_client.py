@@ -1117,8 +1117,8 @@ async def test_get_vehicle_condition_defaults_for_missing_groups():
     assert condition.climate.steering_wheel_heater_level == 0
     assert condition.windows.front_left_open is False
     assert condition.windows.rear_right_open is False
-    assert condition.seats.front_left.heating_level == 0
-    assert condition.seats.front_right.ventilation_level == 0
+    assert condition.seats.front_left.heating_level is None
+    assert condition.seats.front_right.ventilation_level is None
     assert condition.tires.front_left.pressure_bar is None
     assert condition.tires.rear_right.alarm is False
     assert condition.mileage_yesterday_km is None
@@ -3194,12 +3194,12 @@ async def test_condition_without_ac_status_reports_unknown_power():
 
 
 @pytest.mark.asyncio
-async def test_negative_seat_levels_are_normalized():
+async def test_out_of_range_seat_levels_are_unknown():
     payload = {
         "seat": {
-            "leftFront": {"heatStatus": -1, "ventStatus": -1},
+            "leftFront": {"heatStatus": -1, "ventStatus": 6},
             "rightFront": {"heatStatus": 0, "ventStatus": 1},
-            "leftBack": {"level": -1},
+            "leftBack": {"level": 4},
         }
     }
 
@@ -3211,9 +3211,9 @@ async def test_negative_seat_levels_are_normalized():
     condition = await client.get_vehicle_condition("car-1")
     await client.close()
 
-    assert condition.seats.front_left.heating_level == 0
-    assert condition.seats.front_left.ventilation_level == 0
-    assert condition.seats.rear_left.heating_level == 0
+    assert condition.seats.front_left.heating_level is None
+    assert condition.seats.front_left.ventilation_level is None
+    assert condition.seats.rear_left.heating_level is None
     assert condition.seats.front_right.ventilation_level == 1
 
 

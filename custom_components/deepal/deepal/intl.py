@@ -18,8 +18,10 @@ from .endpoints import (
     DEFAULT_INTL_ENVIRONMENT,
     INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
     INTL_CA_GET_AUTH_TOKEN,
+    INTL_CA_GET_CAR_AUTH_LIST,
     INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CA_GET_CONN_CONF,
+    INTL_CA_GET_DIGITAL_KEY_SUPPORT,
     INTL_CHARGE_ADD_PLAN,
     INTL_CHARGE_DELETE_PLAN,
     INTL_CHARGE_MODIFY_PLAN,
@@ -74,6 +76,7 @@ from .models import (
     BatteryCondition,
     ClimateCondition,
     CommandResult,
+    DigitalKeySupport,
     DoorsCondition,
     FuelCondition,
     LampsCondition,
@@ -82,6 +85,7 @@ from .models import (
     TiresCondition,
     TireStatus,
     Vehicle,
+    VehicleAuthorizations,
     VehicleCapabilities,
     VehicleCondition,
     WindowsCondition,
@@ -294,6 +298,7 @@ class DeepalIntlClient:
         public_key: Optional[str] = None,
         base_url: Optional[str] = None,
         ca_base_url: Optional[str] = None,
+        sda_base_url: Optional[str] = None,
         timeout: float = 15.0,
         enable_api_logging: bool = False,
         signing_policy: str = SIGNING_POLICY_APP,
@@ -325,6 +330,9 @@ class DeepalIntlClient:
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
         self.ca_base_url = (ca_base_url or environment_config.ca_base_url).rstrip("/")
+        self.sda_base_url = (
+            sda_base_url or environment_config.sda_base_url
+        ).rstrip("/")
         self.timeout = timeout
         self.enable_api_logging = enable_api_logging
         self.signing_policy = signing_policy
@@ -972,6 +980,120 @@ class DeepalIntlClient:
         )
         return None
 
+    async def get_digital_key_support(
+        self, vehicle_id: Optional[str] = None
+    ) -> Optional[DigitalKeySupport]:
+        """Check whether the phone is supported for the digital key.
+
+        Read-only: queries the SDA gateway ``query-supported-featured`` endpoint
+        with the account user id and the phone identity. The European gateway
+        answers with a ``flag`` that selects the key scheme: 0 the Changan (CA)
+        BLE key, 1 the ICCE (Huawei wallet) key, 2 the Honor key. Never raises
+        for an unavailable feature; a missing user id or any request failure
+        logs and returns ``None``.
+        """
+        if not self.user_id:
+            logger.debug("Digital key support requires the account user id.")
+            return None
+
+        payload: dict[str, Any] = {
+            "userId": self.user_id,
+            "deviceInfo": {
+                "terminal": self.device_type,
+                "romVersion": self.os_version,
+                "clientVersion": self.app_version,
+            },
+        }
+        if vehicle_id:
+            payload["carId"] = vehicle_id
+
+        try:
+            data = await self._request(
+                INTL_CA_GET_DIGITAL_KEY_SUPPORT,
+                json_data=payload,
+                auth_required=True,
+                base_url=self.sda_base_url,
+            )
+        except DeepalRateLimitError as exc:
+            logger.warning(
+                "Digital key support request was rate limited; skipping: %s", exc
+            )
+            return None
+        except DeepalAuthError as exc:
+            logger.debug("Digital key support authentication failed: %s", exc)
+            return None
+        except DeepalError as exc:
+            logger.debug("Digital key support unavailable: %s", exc)
+            return None
+
+        flag = data.get("flag") if isinstance(data, dict) else None
+        if not isinstance(flag, int) or isinstance(flag, bool):
+            logger.debug("Digital key support response carried no flag: %r", data)
+            return None
+        logger.debug("Digital key support flag=%s", flag)
+        return DigitalKeySupport.from_flag(flag, raw=data)
+
+    async def get_vehicle_authorizations(
+        self, car_id: str
+    ) -> Optional[VehicleAuthorizations]:
+        """Fetch the per-vehicle function authorization list, or None.
+
+        Read-only: the list tells which functions the signed-in account may use
+        on the vehicle (``DigitalKey`` among them). The endpoint is not deployed
+        in every region — the European SDA gateway answers 404 — in which case
+        the SDK returns no authorization. The request body key was not recovered
+        from the DEX (the builder is VMP-extracted), so the known candidates are
+        tried in order. Any failure is non-fatal: callers fall back to their
+        generic behavior.
+        """
+        candidates: list[dict[str, Any]] = [
+            {"carId": car_id},
+            {"vehicleId": car_id},
+            {"userId": self.user_id, "carId": car_id},
+            {"carId": car_id, "userId": self.user_id},
+        ]
+
+        empty_result: Optional[VehicleAuthorizations] = None
+        for body in candidates:
+            try:
+                data = await self._request(
+                    INTL_CA_GET_CAR_AUTH_LIST,
+                    json_data=body,
+                    auth_required=True,
+                    base_url=self.sda_base_url,
+                )
+            except DeepalRateLimitError as exc:
+                logger.warning(
+                    "Vehicle authorization request was rate limited; skipping: %s",
+                    exc,
+                )
+                return None
+            except DeepalAuthError as exc:
+                logger.debug("Vehicle authorization authentication failed: %s", exc)
+                return None
+            except DeepalAPIError as exc:
+                logger.debug(
+                    "Vehicle authorization body %s was rejected: %s",
+                    next(iter(body)),
+                    exc,
+                )
+                continue
+            except DeepalError as exc:
+                logger.debug("Vehicle authorizations unavailable: %s", exc)
+                return None
+
+            result = VehicleAuthorizations.from_payload(data)
+            if result.raw_codes:
+                logger.debug(
+                    "Vehicle authorization accepted body key=%s", next(iter(body))
+                )
+                return result
+            empty_result = result
+
+        if empty_result is not None:
+            logger.debug("Vehicle authorization response carried no function codes")
+        return empty_result
+
     async def get_vehicle_condition(
         self, vehicle_id: str, vin: Optional[str] = None
     ) -> VehicleCondition:
@@ -1018,9 +1140,17 @@ class DeepalIntlClient:
             parsed = _as_float(value)
             return parsed / 10 if parsed is not None else None
 
-        def _level(value: Any) -> int:
+        def _level(value: Any) -> Optional[int]:
+            """Return a seat level within 0-3, or None when it is unknown.
+
+            Missing values and out-of-range values (the MQTT sleep sentinel 6
+            included) mean the real level is unknown, not a level; callers keep
+            the last valid value instead of exposing a made-up one.
+            """
             level = _as_int(value)
-            return level if level is not None and level > 0 else 0
+            if level is None or not 0 <= level <= 3:
+                return None
+            return level
 
         charge_status = charge.get("chargeStatus")
         if charge_status not in (None, 0):

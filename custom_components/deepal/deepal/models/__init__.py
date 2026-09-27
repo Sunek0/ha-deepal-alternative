@@ -2,6 +2,15 @@
 
 from .auth import AuthToken, UserProfile
 from .command import CommandResult, CommandResultStatus
+from .digital_key import (
+    DIGITAL_KEY_FUNCTION_CODE,
+    PHONE_SUPPORT_CA_KEY,
+    PHONE_SUPPORT_HONOR_KEY,
+    PHONE_SUPPORT_ICCE_KEY,
+    DigitalKeyKeyType,
+    DigitalKeySupport,
+    VehicleAuthorizations,
+)
 from .vehicle import (
     S05_TRIM_MAX,
     S05_TRIM_PRO,
@@ -29,6 +38,13 @@ __all__ = [
     "UserProfile",
     "CommandResult",
     "CommandResultStatus",
+    "DIGITAL_KEY_FUNCTION_CODE",
+    "PHONE_SUPPORT_CA_KEY",
+    "PHONE_SUPPORT_HONOR_KEY",
+    "PHONE_SUPPORT_ICCE_KEY",
+    "DigitalKeyKeyType",
+    "DigitalKeySupport",
+    "VehicleAuthorizations",
     "S05_TRIM_MAX",
     "S05_TRIM_PRO",
     "S05_TRIM_UNKNOWN",

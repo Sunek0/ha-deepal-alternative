@@ -203,6 +203,18 @@ class DeepalBinarySensorDescription(BinarySensorEntityDescription):
     value_fn: Callable[[Any, Any], bool | None]
 
 
+def _seat_level_on(position: str, field: str) -> Callable[[Any, Any], bool | None]:
+    """Return a value function for a seat function whose level may be unknown."""
+
+    def _value(condition: Any, vehicle: Any) -> bool | None:
+        level = getattr(getattr(condition.seats, position), field)
+        if level is None or not 0 <= level <= 3:
+            return None
+        return level > 0
+
+    return _value
+
+
 def _charging(condition: Any, vehicle: Any) -> bool | None:
     status = condition.battery.charging_status
     if status is None:
@@ -366,42 +378,42 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
     DeepalBinarySensorDescription(
         key="front_left_seat_heating",
         name="Front Left Seat Heating",
-        value_fn=lambda cond, vehicle: cond.seats.front_left.heating_level > 0,
+        value_fn=_seat_level_on("front_left", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
         icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_heating",
         name="Front Right Seat Heating",
-        value_fn=lambda cond, vehicle: cond.seats.front_right.heating_level > 0,
+        value_fn=_seat_level_on("front_right", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
         icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="rear_left_seat_heating",
         name="Rear Left Seat Heating",
-        value_fn=lambda cond, vehicle: cond.seats.rear_left.heating_level > 0,
+        value_fn=_seat_level_on("rear_left", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
         icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="rear_right_seat_heating",
         name="Rear Right Seat Heating",
-        value_fn=lambda cond, vehicle: cond.seats.rear_right.heating_level > 0,
+        value_fn=_seat_level_on("rear_right", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
         icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="front_left_seat_ventilation",
         name="Front Left Seat Ventilation",
-        value_fn=lambda cond, vehicle: cond.seats.front_left.ventilation_level > 0,
+        value_fn=_seat_level_on("front_left", "ventilation_level"),
         device_class=None,
         icon="mdi:car-seat-cooler",
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_ventilation",
         name="Front Right Seat Ventilation",
-        value_fn=lambda cond, vehicle: cond.seats.front_right.ventilation_level > 0,
+        value_fn=_seat_level_on("front_right", "ventilation_level"),
         device_class=None,
         icon="mdi:car-seat-cooler",
     ),

@@ -152,8 +152,12 @@ class WindowsCondition(BaseModel):
 
 class SeatStatus(BaseModel):
     """Heating and ventilation level of one seat."""
-    heating_level: int = 0
-    ventilation_level: int = 0
+    heating_level: Optional[int] = Field(
+        default=None, description="0-3 level, None when the vehicle did not report it"
+    )
+    ventilation_level: Optional[int] = Field(
+        default=None, description="0-3 level, None when the vehicle did not report it"
+    )
 
 
 class SeatsCondition(BaseModel):

@@ -394,6 +394,34 @@ def test_seat_and_steering_entity_contract() -> None:
     assert steering._attr_translation_key == "steering_wheel_heating"
 
 
+def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    condition.seats.front_left.heating_level = None
+    condition.seats.front_right.ventilation_level = 6
+    coordinator.data["car-1"] = condition
+    vehicle = _fake_vehicle()
+
+    driver_heat = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_left", "heating"
+    )
+    passenger_wind = number.DeepalSeatLevelNumber(
+        coordinator, vehicle, "front_right", "ventilation"
+    )
+    descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
+    heating_binary = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["front_left_seat_heating"]
+    )
+    ventilation_binary = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["front_right_seat_ventilation"]
+    )
+
+    assert driver_heat.native_value is None
+    assert passenger_wind.native_value is None
+    assert heating_binary.is_on is None
+    assert ventilation_binary.is_on is None
+
+
 def _model_vehicle(car_id: str, **fields) -> SimpleNamespace:
     values = {
         "car_id": car_id,

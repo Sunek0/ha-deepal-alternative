@@ -1140,9 +1140,17 @@ class DeepalIntlClient:
             parsed = _as_float(value)
             return parsed / 10 if parsed is not None else None
 
-        def _level(value: Any) -> int:
+        def _level(value: Any) -> Optional[int]:
+            """Return a seat level within 0-3, or None when it is unknown.
+
+            Missing values and out-of-range values (the MQTT sleep sentinel 6
+            included) mean the real level is unknown, not a level; callers keep
+            the last valid value instead of exposing a made-up one.
+            """
             level = _as_int(value)
-            return level if level is not None and level > 0 else 0
+            if level is None or not 0 <= level <= 3:
+                return None
+            return level
 
         charge_status = charge.get("chargeStatus")
         if charge_status not in (None, 0):

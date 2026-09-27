@@ -123,11 +123,18 @@ class DeepalSeatLevelNumber(DeepalEntity, NumberEntity):
 
     @property
     def native_value(self) -> int | None:
-        """Return the seat heating or ventilation level."""
+        """Return the seat heating or ventilation level.
+
+        An unknown or out-of-range level is exposed as unknown instead of a
+        number the slider cannot represent.
+        """
         cond = self.condition
         if not cond:
             return None
-        return getattr(getattr(cond.seats, self._seat), self._field)
+        level = getattr(getattr(cond.seats, self._seat), self._field)
+        if level is None or not 0 <= level <= 3:
+            return None
+        return level
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the seat level (0 turns the function off)."""

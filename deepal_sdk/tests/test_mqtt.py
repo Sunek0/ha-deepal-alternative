@@ -410,7 +410,7 @@ def test_normalize_s05_params_maps_telemetry():
         "rightFrontTireTemperature": 32.0,
         "leftRearTireTemperature": 30.5,
         "rightRearTireTemperature": 33.0,
-        "driverSeatHeatStatus": 4,
+        "driverSeatHeatStatus": 2,
         "driverSeatAirStatus": 2,
         "passengerSeatHeatStatus": 0,
         "passengerSeatAirStatus": 0,
@@ -439,8 +439,8 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["tire"]["rightBack"]["alarm"] == 1
     assert condition["seat"]["leftFront"]["heatStatus"] == 2
     assert condition["seat"]["leftFront"]["ventStatus"] == 2
-    assert condition["seat"]["leftBack"]["heatStatus"] == 1
-    assert condition["seat"]["leftBack"]["ventStatus"] == 4
+    assert condition["seat"]["leftBack"]["heatStatus"] == 2
+    assert condition["seat"]["leftBack"]["ventStatus"] is None
     assert condition["seat"]["rightBack"]["heatStatus"] == 0
     assert condition["vehicleStatus"]["engineSts"] == 1
     assert condition["vehicleStatus"]["powerStatus"] == 2
@@ -473,18 +473,21 @@ def test_normalize_s05_params_maps_remain_charge_time_sentinel():
 def test_normalize_s05_params_maps_seat_sides_and_scales():
     condition = normalize_s05_params(
         {
-            "driverSeatHeatStatus": 6,
+            "driverSeatHeatStatus": 2,
             "driverSeatAirStatus": 3,
-            "passengerSeatHeatStatus": 4,
+            "passengerSeatHeatStatus": 6,
             "passengerSeatAirStatus": 1,
             "leftBackSeatHeatStatus": 0,
+            "rightBackSeatVentilateStatus": 4,
         }
     )
-    assert condition["seat"]["leftFront"]["heatStatus"] == 3
+    assert condition["seat"]["leftFront"]["heatStatus"] == 2
     assert condition["seat"]["leftFront"]["ventStatus"] == 3
-    assert condition["seat"]["rightFront"]["heatStatus"] == 2
+    assert condition["seat"]["rightFront"]["heatStatus"] is None
     assert condition["seat"]["rightFront"]["ventStatus"] == 1
     assert condition["seat"]["leftBack"]["heatStatus"] == 0
+    assert condition["seat"]["rightBack"]["heatStatus"] is None
+    assert condition["seat"]["rightBack"]["ventStatus"] is None
 
 
 def test_normalize_s05_params_accepts_legacy_spellings():

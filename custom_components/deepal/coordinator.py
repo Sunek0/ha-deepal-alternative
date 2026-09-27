@@ -84,6 +84,39 @@ def _path_set(obj: Any, path: str, value: Any) -> None:
     setattr(obj, parts[-1], value)
 
 
+_SEAT_POSITIONS = ("front_left", "front_right", "rear_left", "rear_right")
+_SEAT_LEVEL_FIELDS = ("heating_level", "ventilation_level")
+
+
+def _overlay_seat_levels(source: Any, target: Any) -> None:
+    """Copy the seat levels a source actually reported onto the target.
+
+    Fields the source does not know (``None``) are left alone, so a partial
+    app condition cannot wipe a level the MQTT snapshot did report.
+    """
+    for position in _SEAT_POSITIONS:
+        source_seat = getattr(source, position)
+        target_seat = getattr(target, position)
+        for field in _SEAT_LEVEL_FIELDS:
+            value = getattr(source_seat, field)
+            if value is not None:
+                setattr(target_seat, field, value)
+
+
+def _retain_seat_levels(previous: Any, condition: Any) -> None:
+    """Keep the last valid seat levels when a report comes back unknown.
+
+    The S05 sends its sleep sentinel while a seat module sleeps; the previous
+    valid level is still the car's real state, so it must not be reset.
+    """
+    for position in _SEAT_POSITIONS:
+        previous_seat = getattr(previous, position)
+        seat = getattr(condition, position)
+        for field in _SEAT_LEVEL_FIELDS:
+            if getattr(seat, field) is None:
+                setattr(seat, field, getattr(previous_seat, field))
+
+
 class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleCondition]]):
     """Class to manage fetching Changan Deepal data from API."""
 
@@ -178,7 +211,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return condition
         raw = app_condition.raw_data or {}
         if raw.get("seat"):
-            condition.seats = app_condition.seats
+            _overlay_seat_levels(app_condition.seats, condition.seats)
         if (raw.get("vehicleStatus") or {}).get("steeringWheelHeater") is not None:
             condition.climate.steering_wheel_heater_on = (
                 app_condition.climate.steering_wheel_heater_on
@@ -283,15 +316,19 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     def _merge_condition(
         self, vehicle_id: str, condition: VehicleCondition
     ) -> VehicleCondition:
-        """Keep the last known AC state when the vehicle omits it.
+        """Keep the last known state for the fields the vehicle did not report.
 
         S05 condition payloads have no ``hvac.acStatus``; overwriting the state
         with the parser default would turn the climate entity off after every
-        poll, discarding optimistic command feedback.
+        poll, discarding optimistic command feedback. The same applies to the
+        seat levels: the sleep sentinel means unknown, and the last valid level
+        is still the car's real state.
         """
         previous = (self.data or {}).get(vehicle_id)
-        if previous is not None and condition.climate.power_on is None:
-            condition.climate.power_on = previous.climate.power_on
+        if previous is not None:
+            if condition.climate.power_on is None:
+                condition.climate.power_on = previous.climate.power_on
+            _retain_seat_levels(previous.seats, condition.seats)
         return condition
 
     @staticmethod
