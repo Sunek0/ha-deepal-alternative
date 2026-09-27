@@ -28,13 +28,6 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
 
-Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
-CA/MQTT gateway; every command-capable model, MQTT-backed included, uses the same signed command
-flow. Vehicles reporting `protocolType: SDA-MQTT` (E07) use the same gateway with the SDA
-`Get_CarCondition` service. Climate, lights and horn are verified on a real S05. Controls also
-depend on what each car and account allow. For a model not listed here, telemetry and the generic
-vehicle image still work.
-
 ## Supported features
 
 ### Authentication and session
