@@ -1247,11 +1247,16 @@ def _sda_status(value: Any, closed_value: int) -> int:
 
 
 def _sda_lock(value: Any) -> Optional[int]:
-    """Map an SDA lock signal to the REST convention (0 = locked)."""
+    """Map an SDA lock signal to the REST convention (0 = locked).
+
+    The E07 reports ``2`` while the car is locked (same convention as the
+    ``2`` closed state), so only that value means locked; ``1`` is unlocked and
+    missing values stay unknown.
+    """
     parsed = _as_int(value)
     if parsed is None:
         return None
-    return 0 if parsed == 1 else 1
+    return 0 if parsed == 2 else 1
 
 
 def _sda_tenths(value: Any) -> Optional[float]:
@@ -1299,7 +1304,9 @@ def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
             "chargeCurrent": _as_float(_sda_value(params, "BcuBattI")),
             "acChargeCurrent": _as_float(_sda_value(params, "ObcChrgInpAcIL1")),
             "dcChargeCurrent": _as_float(_sda_value(params, "ObcChrgDcI")),
-            "remainChargeTime": _as_int(_sda_value(params, "BcuChrgTiDisp")),
+            "remainChargeTime": _as_charge_time(
+                _sda_value(params, "BcuChrgTiDisp")
+            ),
             "maxSocPercent": _as_int(_sda_value(params, "TboxSocChrgTarSet")),
         },
         "door": {

@@ -111,6 +111,11 @@ async def async_get_config_entry_diagnostics(
             car_id: condition.mqtt_raw_data
             for car_id, condition in conditions.items()
         },
+        "raw_sda": {
+            car_id: condition.mqtt_raw_data
+            for car_id, condition in conditions.items()
+            if condition.condition_source == "sda-rest"
+        },
         "condition_sources": {
             car_id: condition.condition_source
             for car_id, condition in conditions.items()

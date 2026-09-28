@@ -271,8 +271,8 @@ E07_SDA_CONDITION: dict[str, Any] = {
     "RiReDoorSts": 2,
     "ObjStTypePLGDoorSt": 2,
     "FrtGateSts": 2,
-    "DrvrDoorLockLogicSts": 1,
-    "PassDoorLockLogicSts": 1,
+    "DrvrDoorLockLogicSts": 2,
+    "PassDoorLockLogicSts": 2,
     "DrvrWinPos": 0,
     "PassWinPos": 0,
     "LeReWinPos": 0,
@@ -2458,6 +2458,7 @@ async def test_get_sda_vehicle_condition_uses_the_app_get_request():
         captured["method"] = request.method
         captured["url"] = str(request.url)
         captured["token"] = request.headers.get("X-Tsp-User-Token")
+        captured["encoding"] = request.headers.get("Accept-Encoding")
         return httpx.Response(
             200,
             json={"success": True, "code": "0", "data": E07_SDA_CONDITION},
@@ -2479,6 +2480,7 @@ async def test_get_sda_vehicle_condition_uses_the_app_get_request():
         "getCarConditionByCarId?car_id=car-1"
     )
     assert captured["token"] == "jwtA|jwtB"
+    assert captured["encoding"] == "identity"
     assert condition.condition_source == "sda-rest"
     assert condition.battery.soc_percentage == 92
     assert condition.battery.remaining_range_km == 422

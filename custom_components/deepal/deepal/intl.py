@@ -511,10 +511,12 @@ class DeepalIntlClient:
         if base_url and base_url.rstrip("/") == self.sda_base_url:
             # The SDA gateway expects the login token without the "Bearer "
             # prefix (verified against the official app; the intl hosts keep
-            # the prefixed value in Authorization).
+            # the prefixed value in Authorization) and answers with a body that
+            # only decodes when compression is disabled.
             sda_token = (self.access_token or "").removeprefix("Bearer ").strip()
             if sda_token:
                 headers["X-Tsp-User-Token"] = sda_token
+            headers["Accept-Encoding"] = "identity"
         if self.enable_api_logging:
             logger.warning(
                 "Deepal API request path=%s headers=%s payload=%s",

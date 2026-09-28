@@ -1014,6 +1014,22 @@ def test_login_client_uses_the_selected_environment() -> None:
     assert client.app_id == "ca"
 
 
+@pytest.mark.asyncio
+async def test_diagnostics_report_keeps_the_raw_sda_payload() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")
+    condition = _mqtt_condition()
+    condition.condition_source = "sda-rest"
+    condition.mqtt_raw_data = {"DrvrDoorLockLogicSts": 2, "VIUSocDisp": 80}
+    coordinator = _DiagnosticsCoordinator([vehicle], {"car-1": condition}, {})
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    assert report["raw_sda"]["car-1"]["DrvrDoorLockLogicSts"] == 2
+    assert report["raw_sda"]["car-1"]["VIUSocDisp"] == 80
+
+
 def test_options_flow_lists_the_supported_environments() -> None:
     from custom_components.deepal.deepal.endpoints import INTL_ENVIRONMENTS
 

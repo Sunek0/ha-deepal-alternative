@@ -697,8 +697,8 @@ def test_normalize_sda_params_maps_the_e07_condition():
         "RiReDoorSts": 2,
         "ObjStTypePLGDoorSt": 2,
         "FrtGateSts": 2,
-        "DrvrDoorLockLogicSts": 1,
-        "PassDoorLockLogicSts": 1,
+        "DrvrDoorLockLogicSts": 2,
+        "PassDoorLockLogicSts": 2,
         "DrvrWinPos": 0,
         "PassWinPos": 0,
         "LeReWinPos": 0,
@@ -738,7 +738,7 @@ def test_normalize_sda_params_marks_open_states():
     params = {
         "DrvrDoorSts": 1,
         "ObjStTypePLGDoorSt": 1,
-        "DrvrDoorLockLogicSts": 0,
+        "DrvrDoorLockLogicSts": 2,
         "DrvrWinPos": 50,
     }
 
@@ -746,8 +746,17 @@ def test_normalize_sda_params_marks_open_states():
 
     assert normalized["door"]["doors"][0] == 1
     assert normalized["door"]["trunk"] == 1
-    assert normalized["door"]["driverLock"] == 1
+    assert normalized["door"]["driverLock"] == 0
     assert normalized["window"]["windows"][0] == 50
+
+
+def test_normalize_sda_params_unlocked_and_charge_sentinel():
+    params = {"DrvrDoorLockLogicSts": 1, "BcuChrgTiDisp": 8191}
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["door"]["driverLock"] == 1
+    assert normalized["charge"]["remainChargeTime"] is None
 
 
 def test_unmapped_s05_keys_returns_only_unknown_fields():
