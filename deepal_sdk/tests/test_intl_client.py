@@ -4022,6 +4022,42 @@ async def test_refresh_logs_when_cac_token_renewed(caplog):
 
 
 @pytest.mark.asyncio
+async def test_refresh_kept_token_does_not_repeat_cac_warning(caplog):
+    expires = int(time.time()) + 60
+    token = _jwt_with_exp(expires)
+    counter: dict = {}
+    client = _client(_refresh_request_counter(counter, token=token))
+    client.access_token = token
+    client.access_token_expires_at = expires
+    client.refresh_token = "old_refresh"
+
+    with caplog.at_level(logging.WARNING, logger="deepal_sdk"):
+        await client.refresh_tokens()
+        await client.refresh_tokens()
+    await client.close()
+
+    assert counter["requests"] == 1
+    assert "did not return a new CAC token" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_forced_refresh_runs_after_a_kept_token_attempt():
+    expires = int(time.time()) + 60
+    token = _jwt_with_exp(expires)
+    counter: dict = {}
+    client = _client(_refresh_request_counter(counter, token=token))
+    client.access_token = token
+    client.access_token_expires_at = expires
+    client.refresh_token = "old_refresh"
+
+    await client.refresh_tokens()
+    await client.refresh_tokens(force=True)
+    await client.close()
+
+    assert counter["requests"] == 2
+
+
+@pytest.mark.asyncio
 async def test_tsp_token_source_override():
     captured = {}
 

@@ -375,6 +375,7 @@ class DeepalIntlClient:
         self._last_refresh_attempt_at: Optional[float] = None
         self._refresh_attempt_sequence = 0
         self._refresh_attempt_error: Optional[BaseException] = None
+        self._last_refresh_kept_token = False
 
     async def _http_client(self) -> httpx.AsyncClient:
         """Return the managed HTTP client, creating it outside the event loop."""
@@ -883,8 +884,11 @@ class DeepalIntlClient:
         """Run one refresh attempt while holding the per-client lock."""
         if (
             not force
-            and not self.access_token_expires_soon()
             and self._refresh_is_throttled()
+            and (
+                not self.access_token_expires_soon()
+                or self._last_refresh_kept_token
+            )
         ):
             logger.info(
                 "Deepal refresh throttled by the app window (%.0f s); keeping the "
@@ -897,6 +901,7 @@ class DeepalIntlClient:
         # window for reactive attempts too, like the app interceptor does.
         self._last_refresh_attempt_at = time.monotonic()
         self._refresh_attempt_error = None
+        previous_access_token = self.access_token
         try:
             data = await self._request(
                 INTL_REFRESH_TOKEN,
@@ -917,12 +922,19 @@ class DeepalIntlClient:
             self.cac_user_id = data.get("cacUserId") or self.cac_user_id
             self._log_session_fields()
 
+            rotated = self.access_token != previous_access_token
+            self._last_refresh_kept_token = not rotated
             if data.get("cacToken"):
                 logger.info("Deepal token refresh returned a new CAC token")
-            else:
+            elif rotated:
                 logger.warning(
                     "Deepal token refresh did not return a new CAC token; the CA/MQTT "
                     "bootstrap keeps the previous one"
+                )
+            else:
+                logger.debug(
+                    "Deepal token refresh kept the current access token; keeping "
+                    "the session"
                 )
 
             token = self._current_auth_token()

@@ -27,6 +27,37 @@ def test_sensitive_keys_masked():
     assert out["nested"]["access_token"] == "[redacted]"
 
 
+def test_plate_and_location_masked():
+    payload = {
+        "plateNumber": "TEST-PLATE-1",
+        "licensePlate": "TEST-PLATE-1",
+        "Lat": 38.9,
+        "Lng": -0.37,
+        "latitude": 38.9,
+        "longitude": -0.37,
+        "carLatitude": 38.9,
+        "carLongitude": -0.37,
+        "latestDate": "2026-09-30T10:00:00Z",
+        "soc": 50,
+    }
+
+    out = redact_for_log(payload)
+
+    for key in (
+        "plateNumber",
+        "licensePlate",
+        "Lat",
+        "Lng",
+        "latitude",
+        "longitude",
+        "carLatitude",
+        "carLongitude",
+    ):
+        assert out[key] == "[redacted]", key
+    assert out["latestDate"] == "2026-09-30T10:00:00Z"
+    assert out["soc"] == 50
+
+
 def test_long_strings_truncated():
     out = redact_for_log({"note": "x" * 600})
 
@@ -55,7 +86,11 @@ def test_safe_headers_keeps_region_only():
 def test_is_sensitive_key():
     assert is_sensitive_key("X-Tsp-User-Token")
     assert is_sensitive_key("seriralNo")
+    assert is_sensitive_key("plateNumber")
+    assert is_sensitive_key("Lat")
+    assert is_sensitive_key("carLatitude")
     assert not is_sensitive_key("soc")
+    assert not is_sensitive_key("latestDate")
 
 
 @pytest.mark.asyncio
