@@ -1,6 +1,7 @@
 """Tests for the Home Assistant coordinator command flow."""
 
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -34,6 +35,7 @@ class _FakeIntlClient(DeepalIntlClient):
 
     def __init__(self, results: list[CommandResult]) -> None:
         self.access_token = "test_token_123"
+        self.access_token_expires_at: int | None = None
         self.refresh_token: str | None = "test_refresh_123"
         self.private_key_pem = "test_private_key"
         self.user_id = "user-1"
@@ -47,6 +49,20 @@ class _FakeIntlClient(DeepalIntlClient):
         self.capabilities: VehicleCapabilities | None = None
         self.capabilities_error: Exception | None = None
         self.refresh_calls = 0
+        self.wake_calls = 0
+        self.wake_error: Exception | None = None
+
+    async def wake_vehicle(self, vehicle_id: str) -> None:
+        self.events.append("wake")
+        self.wake_calls += 1
+        if self.wake_error is not None:
+            raise self.wake_error
+
+    async def s05_mqtt_condition(
+        self, vehicle_id: str, vin: str | None = None
+    ) -> VehicleCondition:
+        self.events.append("mqtt_condition")
+        return await self.get_vehicle_condition(vehicle_id, vin=vin)
 
     async def refresh_tokens(self, force: bool = False) -> AuthToken:
         self.refresh_calls += 1
@@ -105,6 +121,9 @@ def _coordinator(
     coordinator._command_cooldowns = {}
     coordinator._optimistic_holds = {}
     coordinator._background_tasks = set()
+    coordinator._last_wake_at = {}
+    coordinator._wake_poll_interval = 0.01
+    coordinator._wake_report_timeout = 0.1
     coordinator.entry = SimpleNamespace(
         data={
             CONF_ACCESS_TOKEN: "test_token_123",
@@ -1098,3 +1117,139 @@ async def test_merge_condition_retains_last_valid_comfort_states():
     assert merged.climate.steering_wheel_heater_on is False
     assert merged.climate.steering_wheel_heater_level == 0
     assert merged.climate.defrost_on is False
+
+
+def _mqtt_vehicle(car_id: str = "car-1", protocol: str | None = "MQTT") -> Vehicle:
+    return Vehicle(car_id=car_id, vin="VIN-PLACEHOLDER-1", protocol_type=protocol)
+
+
+@pytest.mark.asyncio
+async def test_refresh_wakes_stale_mqtt_vehicle():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale + 30]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.events == ["wake", "mqtt_condition", "condition"]
+    assert client.wake_calls == 1
+    assert "car-1" in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_refresh_skips_wake_when_mqtt_report_is_fresh():
+    client = _FakeIntlClient([])
+    now = int(time.time())
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=now
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.events == []
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_wake_is_throttled_per_vehicle():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._last_wake_at["car-1"] = time.monotonic()
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.events == []
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_raises_when_woken_vehicle_does_not_report():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale] * 20
+
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_refresh_vehicle("car-1")
+
+    assert "did not report fresh data" in str(err.value)
+    assert client.wake_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_wake_failure_keeps_cached_refresh():
+    client = _FakeIntlClient([])
+    client.wake_error = DeepalAPIError("wake rejected", code="VVCC_-1_-1_02_023")
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.wake_calls == 1
+    assert client.events == ["wake"]
+    assert "car-1" not in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_refresh_rest_vehicle_uses_condition_inquiry():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.events == ["condition_inquiry"]
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_periodic_update_does_not_wake():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+
+    await coordinator._async_update_data()
+
+    assert client.wake_calls == 0
+    assert "wake" not in client.events

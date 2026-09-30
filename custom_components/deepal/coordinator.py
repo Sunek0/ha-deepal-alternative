@@ -31,6 +31,9 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
+    WAKE_COOLDOWN,
+    WAKE_REPORT_TIMEOUT,
+    WAKE_STALE_AFTER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,6 +44,7 @@ _COMMAND_LOCK_TIMEOUT = 30.0
 _STATELESS_COMMAND_TIMEOUT = 15.0
 _OPTIMISTIC_CONFIRM_TIMEOUT = 15.0
 _CONDITION_FETCH_INTERVAL = 5.0
+_WAKE_POLL_INTERVAL = 5.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 
@@ -152,6 +156,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
+        self._last_wake_at: dict[str, float] = {}
+        self._wake_poll_interval = _WAKE_POLL_INTERVAL
+        self._wake_report_timeout = WAKE_REPORT_TIMEOUT
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -473,6 +480,92 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         await self._async_with_session_retry(
             lambda: self.client.control_condition_inquiry(vehicle_id)
         )
+
+    def _vehicle(self, vehicle_id: str) -> Vehicle | None:
+        """Return the cached vehicle entry for an id, if it was fetched."""
+        return next(
+            (item for item in self.vehicles if item.car_id == vehicle_id), None
+        )
+
+    def _should_wake(self, vehicle_id: str, report_ts: int | None) -> bool:
+        """Return whether an explicit refresh should wake this vehicle.
+
+        Waking the car drains the 12 V battery, so it is throttled per vehicle
+        and only happens when the last report is older than the stale threshold.
+        """
+        last_wake = self._last_wake_at.get(vehicle_id)
+        if last_wake is not None and time.monotonic() - last_wake < WAKE_COOLDOWN:
+            return False
+        if report_ts is None:
+            return True
+        return time.time() - report_ts > WAKE_STALE_AFTER
+
+    async def async_wake_vehicle(self, vehicle_id: str) -> None:
+        """Wake an MQTT vehicle, recovering an expired session."""
+        if not isinstance(self.client, DeepalIntlClient):
+            raise HomeAssistantError("Remote wake requires the international platform")
+        await self._async_with_session_retry(
+            lambda: self.client.wake_vehicle(vehicle_id)
+        )
+
+    async def _async_wait_for_report(
+        self, vehicle_id: str, previous: int | None
+    ) -> bool:
+        """Poll the MQTT snapshot until it reports newer than ``previous``."""
+        vehicle = self._vehicle(vehicle_id)
+        vin = vehicle.vin if vehicle is not None else None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._wake_report_timeout
+        while loop.time() < deadline:
+            await asyncio.sleep(self._wake_poll_interval)
+            try:
+                condition = await self.client.s05_mqtt_condition(vehicle_id, vin=vin)
+            except DeepalError as err:
+                _LOGGER.debug(
+                    "Deepal wake poll failed for %s: %s", vehicle_id, err
+                )
+                continue
+            report_ts = condition.last_updated_timestamp
+            if previous is None or (report_ts is not None and report_ts > previous):
+                return True
+        return False
+
+    async def async_refresh_vehicle(self, vehicle_id: str) -> None:
+        """Refresh one vehicle, waking it first when its report is stale.
+
+        MQTT vehicles are woken through the app's ``TxWakeup`` service when the
+        last report is older than the stale threshold and the per-vehicle wake
+        cooldown elapsed; the coordinator waits for a newer report and raises a
+        Home Assistant error when none arrives. REST vehicles keep the signed
+        condition-inquiry request.
+        """
+        vehicle = self._vehicle(vehicle_id)
+        current = (self.data or {}).get(vehicle_id)
+        previous = current.last_updated_timestamp if current is not None else None
+
+        if vehicle is not None and self._uses_mqtt(vehicle):
+            if self._should_wake(vehicle_id, previous):
+                try:
+                    await self.async_wake_vehicle(vehicle_id)
+                except DeepalError as err:
+                    _LOGGER.warning(
+                        "Deepal wake request failed for %s: %s", vehicle_id, err
+                    )
+                else:
+                    self._last_wake_at[vehicle_id] = time.monotonic()
+                    if not await self._async_wait_for_report(vehicle_id, previous):
+                        _LOGGER.warning(
+                            "Deepal vehicle %s did not report fresh data within "
+                            "%.0f s after the wake request",
+                            vehicle_id,
+                            self._wake_report_timeout,
+                        )
+                        raise HomeAssistantError(
+                            "The vehicle did not report fresh data after the wake "
+                            "request; it may be offline or asleep"
+                        )
+        else:
+            await self.async_condition_inquiry(vehicle_id)
 
     def _schedule_condition_inquiry(self, vehicle_id: str) -> None:
         """Nudge the vehicle for fresh data without delaying the command.

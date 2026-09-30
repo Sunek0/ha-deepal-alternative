@@ -94,6 +94,7 @@ from .mqtt import (
     CHARGE_TIME_SENTINEL,
     MQTT_CONNACK_REASONS,
     MQTT_DEFAULT_KEEPALIVE,
+    MqttTopics,
     S05_SERVICE_CODES,
     aes_cbc_decrypt,
     basic_identifiers,
@@ -114,6 +115,7 @@ from .mqtt import (
     resolve_mqtt_topics,
     secret_from_login_payload,
     unmapped_s05_keys,
+    wake_request_payload,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -1517,10 +1519,20 @@ class DeepalIntlClient:
             cid=first_value("carId", "car_id", "cid"),
         )
 
-    async def _read_s05_params(
+    async def _open_s05_mqtt(
         self, config: dict[str, Any], token: str
-    ) -> dict[str, Any]:
-        """Run one MQTT 5.0 login + condition exchange and return the raw parameters."""
+    ) -> tuple[
+        asyncio.StreamReader,
+        asyncio.StreamWriter,
+        MqttTopics,
+        dict[str, Any],
+        Optional[str],
+    ]:
+        """Connect, subscribe and log in; return the open session and login result.
+
+        The caller owns the returned writer and must close it with
+        :meth:`_close_s05_mqtt`.
+        """
         info = ((config.get("mqttConnectionInfos") or [None])[0]) or {}
         cluster = ((info.get("clusterInfos") or [None])[0]) or {}
         host = str(cluster.get("brokerUrl", "")).replace("ssl://", "")
@@ -1528,10 +1540,9 @@ class DeepalIntlClient:
         resolved = resolve_mqtt_topics(config, fallback_did=self.mqtt_client_id)
         login_topic = resolved.login_publish
         login_did = resolved.login_did
-        properties_topic = resolved.properties_publish
         device_did = resolved.device_did
 
-        if not host or not login_topic or not login_did or not properties_topic or not device_did:
+        if not host or not login_topic or not login_did or not device_did:
             raise DeepalAPIError(
                 "S05 MQTT configuration did not include required topics."
             )
@@ -1586,11 +1597,74 @@ class DeepalIntlClient:
             await writer.drain()
 
             secret_key: Optional[str] = None
-            partial: dict[str, Any] = {}
-            requested = False
             loop = asyncio.get_running_loop()
             deadline = loop.time() + max(self.timeout, 20.0)
+            while loop.time() < deadline and secret_key is None:
+                try:
+                    first, body = await read_packet_with_keepalive(
+                        reader,
+                        writer,
+                        max(0.05, deadline - loop.time()),
+                        self.mqtt_keepalive,
+                    )
+                except asyncio.TimeoutError:
+                    break
+                if first >> 4 != 3:
+                    continue
+                _topic, payload, packet_id = parse_publish(first, body)
+                if packet_id is not None:
+                    writer.write(build_puback_packet(packet_id))
+                    await writer.drain()
+                secret_key = secret_from_login_payload(payload)
+        except BaseException:
+            await self._close_s05_mqtt(writer)
+            raise
+        return reader, writer, resolved, basic_info, secret_key
 
+    @staticmethod
+    async def _close_s05_mqtt(writer: asyncio.StreamWriter) -> None:
+        """Send DISCONNECT and close the one-shot MQTT session."""
+        try:
+            writer.write(build_disconnect_packet())
+            await writer.drain()
+        except (ConnectionError, OSError, ssl.SSLError):
+            pass
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, TimeoutError, ssl.SSLError):
+            pass
+
+    async def _read_s05_params(
+        self, config: dict[str, Any], token: str
+    ) -> dict[str, Any]:
+        """Run one MQTT 5.0 login + condition exchange and return the raw parameters."""
+        reader, writer, resolved, basic_info, secret_key = await self._open_s05_mqtt(
+            config, token
+        )
+        try:
+            properties_topic = resolved.properties_publish
+            device_did = resolved.device_did
+            if not properties_topic or not device_did or not secret_key:
+                return {}
+            req_id = new_request_id(device_did)
+            writer.write(
+                build_publish_packet(
+                    properties_topic,
+                    condition_request_payload(
+                        device_did,
+                        resolved.login_did or device_did,
+                        secret_key,
+                        req_id,
+                        basic_info=basic_info,
+                    ),
+                )
+            )
+            await writer.drain()
+
+            partial: dict[str, Any] = {}
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(self.timeout, 20.0)
             while loop.time() < deadline:
                 try:
                     first, body = await read_packet_with_keepalive(
@@ -1608,26 +1682,6 @@ class DeepalIntlClient:
                     writer.write(build_puback_packet(packet_id))
                     await writer.drain()
 
-                if not secret_key:
-                    secret_key = secret_from_login_payload(payload)
-                    if secret_key:
-                        req_id = new_request_id(device_did)
-                        writer.write(
-                            build_publish_packet(
-                                properties_topic,
-                                condition_request_payload(
-                                    device_did,
-                                    login_did,
-                                    secret_key,
-                                    req_id,
-                                    basic_info=basic_info,
-                                ),
-                            )
-                        )
-                        await writer.drain()
-                        requested = True
-                    continue
-
                 params = self._s05_params_from_payload(payload, secret_key)
                 if not params:
                     continue
@@ -1635,23 +1689,114 @@ class DeepalIntlClient:
                     self._log_s05_discovery(params)
                     return params
                 partial.update(params)
-                if requested and len(partial) > 30:
+                if len(partial) > 30:
                     self._log_s05_discovery(partial)
                     return partial
 
             self._log_s05_discovery(partial)
             return partial
         finally:
+            await self._close_s05_mqtt(writer)
+
+    async def wake_vehicle(self, vehicle_id: str) -> None:
+        """Wake an MQTT-backed vehicle so it publishes fresh condition data.
+
+        Publishes the app's ``TxWakeup``/``Cnr_ReWakeup`` service on the
+        ``properties/set/req`` topic and returns once the gateway acknowledges
+        it with ``000000``. The vehicle then reports within a few seconds; the
+        caller polls the condition for the fresh snapshot.
+        """
+        config = await self.get_mqtt_config(vehicle_id)
+        token = await self.get_mqtt_token()
+        try:
+            reader, writer, resolved, basic_info, secret_key = await self._open_s05_mqtt(
+                config, token
+            )
+        except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+            raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
+
+        try:
             try:
-                writer.write(build_disconnect_packet())
+                set_topic = resolved.properties_set_publish
+                device_did = resolved.device_did
+                login_did = resolved.login_did
+                if not set_topic or not device_did or not login_did:
+                    raise DeepalAPIError(
+                        "S05 MQTT configuration did not include the properties/set topic."
+                    )
+                if not secret_key:
+                    raise DeepalAPIError("S05 MQTT login did not return a secretKey.")
+
+                req_id = new_request_id(device_did)
+                writer.write(
+                    build_publish_packet(
+                        set_topic,
+                        wake_request_payload(
+                            device_did,
+                            login_did,
+                            secret_key,
+                            req_id,
+                            basic_info=basic_info,
+                        ),
+                    )
+                )
                 await writer.drain()
-            except (ConnectionError, OSError, ssl.SSLError):
-                pass
-            writer.close()
+
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + max(self.timeout, 20.0)
+                while loop.time() < deadline:
+                    try:
+                        first, body = await read_packet_with_keepalive(
+                            reader,
+                            writer,
+                            max(0.05, deadline - loop.time()),
+                            self.mqtt_keepalive,
+                        )
+                    except asyncio.TimeoutError:
+                        break
+                    if first >> 4 != 3:
+                        continue
+                    _topic, payload, packet_id = parse_publish(first, body)
+                    if packet_id is not None:
+                        writer.write(build_puback_packet(packet_id))
+                        await writer.drain()
+                    if payload.get("r") != req_id:
+                        continue
+                    result = self._service_result_from_payload(payload, secret_key)
+                    if result is None:
+                        continue
+                    code, success = result
+                    if success:
+                        return
+                    raise DeepalAPIError(
+                        f"Vehicle wake was rejected: {code}", code=code
+                    )
+                raise DeepalAPIError("Vehicle wake did not return a response.")
+            except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+                raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
+        finally:
+            await self._close_s05_mqtt(writer)
+
+    @staticmethod
+    def _service_result_from_payload(
+        payload: dict[str, Any], secret_key: str
+    ) -> Optional[tuple[str, bool]]:
+        """Return the first service result ``(code, success)`` of one MQTT message."""
+        req_id = payload.get("r")
+        if not isinstance(req_id, str):
+            return None
+        for field in ("rs", "sers"):
+            encrypted = payload.get(field)
+            if not isinstance(encrypted, str) or not encrypted:
+                continue
             try:
-                await writer.wait_closed()
-            except (ConnectionError, TimeoutError, ssl.SSLError):
-                pass
+                items = aes_cbc_decrypt(encrypted, secret_key, req_id)
+            except (ValueError, json.JSONDecodeError, OSError):
+                continue
+            for item in items:
+                if isinstance(item, dict) and item.get("code"):
+                    return str(item["code"]), bool(item.get("success"))
+        return None
 
     @staticmethod
     def _s05_params_from_payload(

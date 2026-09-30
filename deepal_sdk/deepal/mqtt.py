@@ -39,6 +39,7 @@ LOGIN_PUB_TOPIC_TEMPLATE = "$vdp/%s/client/loginout"
 LOGIN_SUB_TOPIC_TEMPLATE = "$vdp/%s/server/loginout"
 EVENT_SUB_TOPIC_TEMPLATE = "$vdp/%s/%s/server/event"
 EVENT_3D_SUB_TOPIC_TEMPLATE = "$vdp/%s/%s-3D/server/event"
+PROPERTIES_SET_TOPIC_TEMPLATE = "$vdp/%s/properties/set/req"
 
 # Command channels the one-shot telemetry exchange never consumes.
 COMMAND_TOPIC_MARKERS = ("/commands/", "/set/", "/client/action")
@@ -367,6 +368,10 @@ def _classify_topic(
     if not topic:
         return None
     lowered = topic.lower()
+    if "/properties/set/" in lowered:
+        if direction == "sub" or lowered.endswith("/res"):
+            return "properties_subscribe"
+        return "properties_set_publish"
     if any(marker in lowered for marker in COMMAND_TOPIC_MARKERS):
         return "command"
     kind = _normalize_msg_type(msg_type)
@@ -396,6 +401,7 @@ class MqttTopics:
     login_publish: Optional[str] = None
     login_subscribe: Optional[str] = None
     properties_publish: Optional[str] = None
+    properties_set_publish: Optional[str] = None
     event_subscribe: Optional[str] = None
     subscriptions: tuple[str, ...] = ()
     login_did: Optional[str] = None
@@ -488,10 +494,18 @@ def resolve_mqtt_topics(
         if properties_subscribe and properties_subscribe.endswith("/res"):
             selected["properties_publish"] = properties_subscribe[:-4] + "/req"
 
+    if not selected.get("properties_set_publish"):
+        properties_publish = selected.get("properties_publish")
+        if properties_publish and "/properties/get/" in properties_publish:
+            selected["properties_set_publish"] = properties_publish.replace(
+                "/properties/get/", "/properties/set/"
+            )
+
     if did:
         selected.setdefault("login_publish", LOGIN_PUB_TOPIC_TEMPLATE % did)
         selected.setdefault("login_subscribe", LOGIN_SUB_TOPIC_TEMPLATE % did)
         selected.setdefault("event", EVENT_SUB_TOPIC_TEMPLATE % (did, did))
+        selected.setdefault("properties_set_publish", PROPERTIES_SET_TOPIC_TEMPLATE % did)
         login_did = login_did or did
         device_did = device_did or did
 
@@ -504,6 +518,7 @@ def resolve_mqtt_topics(
         login_publish=selected.get("login_publish"),
         login_subscribe=selected.get("login_subscribe"),
         properties_publish=selected.get("properties_publish"),
+        properties_set_publish=selected.get("properties_set_publish"),
         event_subscribe=selected.get("event"),
         subscriptions=tuple(dict.fromkeys(subscriptions)),
         login_did=login_did,
@@ -679,6 +694,44 @@ def condition_request_payload(
     }
     _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
     return payload
+
+
+# Vehicle wake service (live-verified 2026-09-30): TxWakeup / Cnr_ReWakeup on
+# the properties/set/req topic makes the car publish a fresh report in ~20 s.
+WAKE_SERVICE_CODE = "TxWakeup"
+WAKE_COMMAND_CODE = "Cnr_ReWakeup"
+
+
+def wake_request_payload(
+    device_did: str,
+    login_did: str,
+    secret_key: str,
+    req_id: str,
+    basic_info: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build the MQTT ``properties/set/req`` message that wakes the vehicle."""
+    services = [
+        {
+            "service_code": WAKE_SERVICE_CODE,
+            "command_code": WAKE_COMMAND_CODE,
+            "service_req_id": req_id,
+            "params": {},
+        }
+    ]
+    identifiers = dict(basic_info or {})
+    identifiers.setdefault("ruid", login_did)
+    return {
+        "did": device_did,
+        "r": req_id,
+        "v": "v1.0.0",
+        "mt": "properties",
+        "e": 1,
+        "z": "gzip",
+        "tf": 0,
+        "dt": iso_now(),
+        "b": _filter_basic_info(identifiers),
+        "sers": aes_cbc_encrypt(services, secret_key, req_id),
+    }
 
 
 def _as_int(value: Any) -> Optional[int]:

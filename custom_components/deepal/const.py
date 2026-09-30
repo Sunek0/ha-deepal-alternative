@@ -39,6 +39,12 @@ DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 
+# Vehicle wake (MQTT): an explicit refresh wakes a stale car, throttled so
+# repeated refreshes cannot drain the 12 V battery.
+WAKE_STALE_AFTER = 120  # seconds since the last report before waking
+WAKE_COOLDOWN = 300  # seconds between wakes per vehicle
+WAKE_REPORT_TIMEOUT = 60  # seconds to wait for the fresh report after a wake
+
 # Device Info
 MANUFACTURER = "Changan Auto"
 DEFAULT_MODEL = "Deepal S05 Max"

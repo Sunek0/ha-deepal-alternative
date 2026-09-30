@@ -29,7 +29,12 @@ from deepal import (
     FLASH_HONK_FLASH_BEE,
     FLASH_HONK_OFF,
 )
-from deepal.mqtt import aes_cbc_encrypt, build_publish_packet, parse_publish
+from deepal.mqtt import (
+    aes_cbc_decrypt,
+    aes_cbc_encrypt,
+    build_publish_packet,
+    parse_publish,
+)
 from deepal.intl import (
     CAR_CONTROL_REFRESH_THROTTLE_SECONDS,
     INTL_REFRESH_THROTTLE_SECONDS,
@@ -124,6 +129,10 @@ class _FakeMqttBroker:
         self.login_payload: Optional[dict[str, Any]] = None
         self.condition_topic: Optional[str] = None
         self.condition_payload: Optional[dict[str, Any]] = None
+        self.wake_topic: Optional[str] = None
+        self.wake_payload: Optional[dict[str, Any]] = None
+        self.wake_code = "200"
+        self.wake_success = True
         self.pings = 0
         self.params = params
         self.secret_key = secret_key
@@ -166,6 +175,28 @@ class _FakeMqttBroker:
                         "r": payload["r"],
                         "rs": [{"params": {"secretKey": self.secret_key}}],
                     },
+                )
+            )
+            return
+        if "properties/set/req" in topic:
+            self.wake_topic = topic
+            self.wake_payload = payload
+            req_id = payload["r"]
+            encrypted = aes_cbc_encrypt(
+                [
+                    {
+                        "code": self.wake_code,
+                        "success": self.wake_success,
+                        "service_req_id": req_id,
+                    }
+                ],
+                self.secret_key,
+                req_id,
+            )
+            self.reader.feed_data(
+                build_publish_packet(
+                    "$vdp/device-did/properties/set/res",
+                    {"r": req_id, "rs": encrypted},
                 )
             )
             return
@@ -245,7 +276,10 @@ def _mqtt_config(**overrides: Any) -> dict[str, Any]:
             },
             {
                 "msgType": "properties",
-                "pubTopics": ["$vdp/device-did/properties/get/req"],
+                "pubTopics": [
+                    "$vdp/device-did/properties/get/req",
+                    "$vdp/device-did/properties/set/req",
+                ],
                 "subTopics": ["$vdp/device-did/properties/get/res"],
             },
             {
@@ -262,6 +296,29 @@ def _mqtt_config(**overrides: Any) -> dict[str, Any]:
     }
     info.update(overrides)
     return {"mqttConnectionInfos": [info]}
+
+
+def _mqtt_http_handler():
+    """Mock HTTP handler serving the CA config and token for wake tests."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/getConnConf") or path.endswith("/appGetCarConfFunc"):
+            return httpx.Response(
+                200, json={"success": True, "code": "000000", "data": _mqtt_config()}
+            )
+        if path.endswith("/getAuthTokenByUserId"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "000000",
+                    "data": {"authToken": "test-mqtt-token"},
+                },
+            )
+        return httpx.Response(200, json={"success": True, "code": "000000", "data": {}})
+
+    return handler
 
 
 @pytest.mark.asyncio
@@ -2073,9 +2130,63 @@ async def test_read_s05_params_runs_mqtt5_exchange(monkeypatch):
         "cid": "car-1",
         "ruid": "login-did",
     }
+    assert broker.wake_topic is None
 
     assert broker.writes[-1] == b"\xe0\x02\x00\x00"
     assert broker.writes_before_close == len(broker.writes)
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_vehicle_publishes_wake_service(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.wake_topic == "$vdp/device-did/properties/set/req"
+    assert broker.wake_payload is not None
+    assert broker.wake_payload["mt"] == "properties"
+    assert broker.wake_payload["did"] == "device-did"
+    assert "a" not in broker.wake_payload and "pl" not in broker.wake_payload
+    assert broker.wake_payload["b"] == {
+        "vin": "VIN-PLACEHOLDER-1",
+        "uid": "test-user-1",
+        "cid": "car-1",
+        "ruid": "login-did",
+    }
+    services = aes_cbc_decrypt(
+        broker.wake_payload["sers"], broker.secret_key, broker.wake_payload["r"]
+    )
+    assert services[0]["service_code"] == "TxWakeup"
+    assert services[0]["command_code"] == "Cnr_ReWakeup"
+    assert services[0]["service_req_id"] == broker.wake_payload["r"]
+    assert services[0]["params"] == {}
+    assert broker.condition_topic is None
+    assert broker.writes[-1] == b"\xe0\x02\x00\x00"
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_vehicle_raises_on_rejected_service(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    broker.wake_success = False
+    broker.wake_code = "VVCC_-1_-1_02_023"
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError) as err:
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert err.value.code == "VVCC_-1_-1_02_023"
+    assert "rejected" in str(err.value)
     assert broker.close_count == 1
 
 

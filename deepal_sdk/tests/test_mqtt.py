@@ -205,6 +205,52 @@ def test_resolve_mqtt_topics_from_topic_infos():
     assert all("/set/" not in topic for topic in resolved.subscriptions)
 
 
+def test_resolve_mqtt_topics_distinguishes_properties_get_and_set():
+    config = {
+        "mqttConnectionInfos": [
+            {
+                "topicInfos": [
+                    {
+                        "msgType": "properties",
+                        "pubTopics": [
+                            "$vdp/device-did/properties/set/req",
+                            "$vdp/device-did/properties/get/req",
+                        ],
+                        "subTopics": [
+                            "$vdp/device-did/properties/get/res",
+                            "$vdp/device-did/properties/report",
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    resolved = resolve_mqtt_topics(config)
+    assert resolved.properties_publish == "$vdp/device-did/properties/get/req"
+    assert resolved.properties_set_publish == "$vdp/device-did/properties/set/req"
+    assert "$vdp/device-did/properties/set/req" not in resolved.subscriptions
+    assert "$vdp/device-did/properties/set/res" not in resolved.subscriptions
+
+
+def test_resolve_mqtt_topics_derives_properties_set_topic():
+    config = {
+        "mqttConnectionInfos": [
+            {
+                "clientId": "did-9",
+                "topicInfos": [
+                    {
+                        "msgType": "properties",
+                        "pubTopics": ["$vdp/did-9/properties/get/req"],
+                    }
+                ],
+            }
+        ]
+    }
+    resolved = resolve_mqtt_topics(config)
+    assert resolved.properties_publish == "$vdp/did-9/properties/get/req"
+    assert resolved.properties_set_publish == "$vdp/did-9/properties/set/req"
+
+
 def test_resolve_mqtt_topics_from_app_maps_and_excludes_commands():
     config = {
         "mqttConnectionInfos": [
@@ -267,6 +313,7 @@ def test_resolve_mqtt_topics_without_config_returns_empty_roles():
     resolved = resolve_mqtt_topics({})
     assert resolved.login_publish is None
     assert resolved.properties_publish is None
+    assert resolved.properties_set_publish is None
     assert resolved.subscriptions == ()
 
 
