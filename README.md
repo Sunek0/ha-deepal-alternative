@@ -1,7 +1,6 @@
 # ha-deepal-alternative
 
-Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, SL03,
-L07) over the official international and chinese API.
+Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, E07) over the official international and chinese API.
 
 ## Important warnings
 
@@ -27,17 +26,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | Model | Notes |
 | --- | --- |
 | S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
-| E07 (SDA platform) | **Beta:** MQTT telemetry through the SDA condition service; pending verification on a real car (issue #2). |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
-| SL03 | Not tested. Telemetry and signed remote controls through the REST API. |
-| L07 | Not tested. Telemetry and signed remote controls through the REST API. |
-
-Vehicles whose API reports `protocolType: MQTT` (S05 in Europe) report telemetry through the
-CA/MQTT gateway; every command-capable model, MQTT-backed included, uses the same signed command
-flow. Vehicles reporting `protocolType: SDA-MQTT` (E07) use the same gateway with the SDA
-`Get_CarCondition` service. Climate, lights and horn are verified on a real S05. Controls also
-depend on what each car and account allow. For a model not listed here, telemetry and the generic
-vehicle image still work.
+| E07 | Only tested on SDA API. Telemetry and signed remote controls through the REST API. |
 
 ## Supported features
 
@@ -80,7 +70,7 @@ vehicle image still work.
 ### Vehicle image
 
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
-  (S05, S07, SL03, L07 or a generic Deepal placeholder) served instantly otherwise, so the device
+  (S05, S07, E07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
 
 ### Diagnostics
