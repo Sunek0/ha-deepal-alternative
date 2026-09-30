@@ -56,6 +56,7 @@ class DeepalDoorsLock(DeepalEntity, LockEntity):
             lambda: self.client.control_doors(self._car_id, False),
             is_done=lambda: self.is_locked is True,
             optimistic_update=lambda cond: _set_locked(cond, True),
+            wake_first=True,
         )
 
     async def async_unlock(self, **kwargs: Any) -> None:
@@ -64,4 +65,5 @@ class DeepalDoorsLock(DeepalEntity, LockEntity):
             lambda: self.client.control_doors(self._car_id, True),
             is_done=lambda: self.is_locked is False,
             optimistic_update=lambda cond: _set_locked(cond, False),
+            wake_first=True,
         )

@@ -57,6 +57,15 @@ _COMMAND_COOLDOWN_SECONDS: dict[str, float] = {
     "honk_horn": 6.0,
 }
 
+# Gateway code returned when a signed command is submitted while the vehicle is
+# still asleep. The code itself is a generic "Operation failed"; the observed
+# meaning is only known for command submission (live S05, 2026-09-30).
+_ASLEEP_COMMAND_ERROR_CODE = "APP_1_1_05_001"
+_ASLEEP_COMMAND_MESSAGE = (
+    "The vehicle did not accept the command; it may not have woken up or be "
+    "offline. Try again once it is awake."
+)
+
 
 def _command_failure_message(result: CommandResult) -> str:
     """Build the error message for a failed command result."""
@@ -157,6 +166,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
         self._last_wake_at: dict[str, float] = {}
+        self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
         self._wake_report_timeout = WAKE_REPORT_TIMEOUT
         self._mqtt_attempts: dict[str, dict[str, Any]] = {}
@@ -563,6 +573,60 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 return True
         return False
 
+    async def _async_wake_and_wait(self, vehicle_id: str) -> bool | None:
+        """Wake one vehicle and wait for a newer condition report.
+
+        Returns True when a newer report arrived, False when the wake was
+        accepted but the vehicle did not report within the wait window, and
+        None when the wake request itself failed. The wake cooldown is
+        recorded as soon as the wake is accepted, whether or not the report
+        arrives afterwards.
+        """
+        current = (self.data or {}).get(vehicle_id)
+        previous = current.last_updated_timestamp if current is not None else None
+        try:
+            await self.async_wake_vehicle(vehicle_id)
+        except DeepalError as err:
+            _LOGGER.warning(
+                "Deepal wake request failed for %s: %s", vehicle_id, err
+            )
+            return None
+        self._last_wake_at[vehicle_id] = time.monotonic()
+        if await self._async_wait_for_report(vehicle_id, previous):
+            return True
+        _LOGGER.warning(
+            "Deepal vehicle %s did not report fresh data within %.0f s after "
+            "the wake request",
+            vehicle_id,
+            self._wake_report_timeout,
+        )
+        return False
+
+    async def _async_prepare_pin_command(self, vehicle_id: str) -> None:
+        """Wake a stale MQTT vehicle before a PIN-gated command.
+
+        Best effort: a missing vehicle, a fresh report, a throttled wake or a
+        wake that does not produce a new report all let the command proceed;
+        only failed wake outcomes are logged. The per-vehicle wake lock
+        serializes concurrent commands so they do not open duplicate MQTT
+        sessions, and the throttle is re-checked inside it.
+        """
+        vehicle = self._vehicle(vehicle_id)
+        if (
+            vehicle is None
+            or not self._uses_mqtt(vehicle)
+            or self.client.is_sda_mqtt_vehicle(vehicle)
+        ):
+            return
+        current = (self.data or {}).get(vehicle_id)
+        previous = current.last_updated_timestamp if current is not None else None
+        if not self._should_wake(vehicle_id, previous):
+            return
+        async with self._vehicle_wake_lock(vehicle_id):
+            if not self._should_wake(vehicle_id, previous):
+                return
+            await self._async_wake_and_wait(vehicle_id)
+
     async def async_refresh_vehicle(self, vehicle_id: str) -> None:
         """Refresh one vehicle, waking it first when its report is stale.
 
@@ -582,26 +646,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # is not implemented for the SDA architecture, so the refresh
                 # falls through to the normal SDA condition update.
                 return
-            if self._should_wake(vehicle_id, previous):
-                try:
-                    await self.async_wake_vehicle(vehicle_id)
-                except DeepalError as err:
-                    _LOGGER.warning(
-                        "Deepal wake request failed for %s: %s", vehicle_id, err
-                    )
-                else:
-                    self._last_wake_at[vehicle_id] = time.monotonic()
-                    if not await self._async_wait_for_report(vehicle_id, previous):
-                        _LOGGER.warning(
-                            "Deepal vehicle %s did not report fresh data within "
-                            "%.0f s after the wake request",
-                            vehicle_id,
-                            self._wake_report_timeout,
-                        )
-                        raise HomeAssistantError(
-                            "The vehicle did not report fresh data after the wake "
-                            "request; it may be offline or asleep"
-                        )
+            if self._should_wake(vehicle_id, previous) and (
+                await self._async_wake_and_wait(vehicle_id)
+            ) is False:
+                raise HomeAssistantError(
+                    "The vehicle did not report fresh data after the wake "
+                    "request; it may be offline or asleep"
+                )
         else:
             await self.async_condition_inquiry(vehicle_id)
 
@@ -652,6 +703,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             self._command_locks[vehicle_id] = lock
         return lock
 
+    def _vehicle_wake_lock(self, vehicle_id: str) -> asyncio.Lock:
+        """Return the per-vehicle wake lock, creating it on first use."""
+        lock = self._wake_locks.get(vehicle_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._wake_locks[vehicle_id] = lock
+        return lock
+
     def _check_command_cooldown(self, vehicle_id: str, cooldown_key: str) -> None:
         """Reject a command whose vehicle cycle is still running.
 
@@ -689,6 +748,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         optimistic_update: Callable[[VehicleCondition], VehicleCondition] | None = None,
         serialize: bool | None = None,
         cooldown_key: str | None = None,
+        wake_first: bool = False,
         timeout: float = _COMMAND_TIMEOUT,
         interval: float = _COMMAND_RESULT_INTERVAL,
     ) -> None:
@@ -700,12 +760,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         failing. Stateless commands (lights, horn) never wait, and commands for
         different vehicles are independent. ``cooldown_key`` gates commands the
         car is still cycling; the cooldown starts once the command is confirmed.
+        ``wake_first`` wakes a stale MQTT vehicle before the command is sent,
+        outside the command lock; the wake is best-effort and never blocks the
+        command.
         """
         if not isinstance(self.client, DeepalIntlClient):
             raise HomeAssistantError("Remote commands require the international platform")
 
         if cooldown_key is not None:
             self._check_command_cooldown(vehicle_id, cooldown_key)
+
+        if wake_first:
+            await self._async_prepare_pin_command(vehicle_id)
 
         if serialize is None:
             serialize = optimistic_update is not None
@@ -759,7 +825,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         current = (self.data or {}).get(vehicle_id)
         previous_last_updated = current.last_updated_timestamp if current else None
 
-        command_id = await self._async_with_session_retry(send_command)
+        try:
+            command_id = await self._async_with_session_retry(send_command)
+        except DeepalAPIError as err:
+            if str(getattr(err, "code", None)) == _ASLEEP_COMMAND_ERROR_CODE:
+                raise HomeAssistantError(_ASLEEP_COMMAND_MESSAGE) from err
+            raise
 
         if optimistic_update is None and is_done is None:
             await self._async_confirm_stateless_command(

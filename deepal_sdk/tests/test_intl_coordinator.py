@@ -137,6 +137,7 @@ def _coordinator(
     coordinator._optimistic_holds = {}
     coordinator._background_tasks = set()
     coordinator._last_wake_at = {}
+    coordinator._wake_locks = {}
     coordinator._wake_poll_interval = 0.01
     coordinator._wake_report_timeout = 0.1
     coordinator._mqtt_attempts = {}
@@ -1399,3 +1400,241 @@ async def test_periodic_update_does_not_wake():
 
     assert client.wake_calls == 0
     assert "wake" not in client.events
+
+
+def _stale_condition(
+    car_id: str = "car-1", stale_seconds: int = 3600
+) -> VehicleCondition:
+    return VehicleCondition(
+        car_id=car_id,
+        vin="",
+        last_updated_timestamp=int(time.time()) - stale_seconds,
+    )
+
+
+async def _run_pin_command(
+    coordinator: DeepalDataUpdateCoordinator,
+    events: list[str] | None = None,
+) -> list[str]:
+    sent: list[str] = []
+
+    async def send_command() -> str:
+        sent.append("cmd-1")
+        if events is not None:
+            events.append("send")
+        return "cmd-1"
+
+    await coordinator.async_execute_command(
+        "car-1",
+        send_command,
+        wake_first=True,
+        timeout=1.0,
+        interval=0.01,
+    )
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_pin_command_wakes_stale_mqtt_vehicle_first():
+    client = _FakeIntlClient([_success_result()])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale + 30]
+
+    sent = await _run_pin_command(coordinator, client.events)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 1
+    assert client.events.index("wake") < client.events.index("send")
+    assert "car-1" in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_pin_command_skips_wake_when_mqtt_report_is_fresh():
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(
+        client,
+        data={"car-1": _current_condition(timestamp=int(time.time()))},
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pin_command_wake_is_throttled_per_vehicle():
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._last_wake_at["car-1"] = time.monotonic()
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pin_command_wake_failure_still_sends_the_command():
+    client = _FakeIntlClient([_success_result()])
+    client.wake_error = DeepalAPIError(
+        "wake rejected", code="VVCC_-1_-1_02_023"
+    )
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 1
+    assert "car-1" not in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_pin_command_sends_after_wake_without_a_fresh_report():
+    client = _FakeIntlClient([_success_result()])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale] * 50
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 1
+    assert "car-1" in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_non_pin_command_does_not_wake():
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    async def send_command() -> str:
+        return "cmd-1"
+
+    await coordinator.async_execute_command(
+        "car-1", send_command, timeout=1.0, interval=0.01
+    )
+
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pin_command_does_not_wake_rest_vehicle():
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pin_command_does_not_wake_sda_mqtt_vehicle():
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle(protocol="SDA-MQTT")]
+
+    sent = await _run_pin_command(coordinator)
+
+    assert sent == ["cmd-1"]
+    assert client.wake_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pin_commands_wake_once():
+    client = _FakeIntlClient([_success_result(), _success_result()])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client, data={"car-1": _stale_condition()}
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale + 30] * 10
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_wake = client.wake_vehicle
+
+    async def delayed_wake(vehicle_id: str) -> None:
+        started.set()
+        await release.wait()
+        await original_wake(vehicle_id)
+
+    client.wake_vehicle = delayed_wake
+
+    async def send_command() -> str:
+        return "cmd-1"
+
+    first = asyncio.create_task(
+        coordinator.async_execute_command(
+            "car-1", send_command, wake_first=True, timeout=1.0, interval=0.01
+        )
+    )
+    await started.wait()
+    second = asyncio.create_task(
+        coordinator.async_execute_command(
+            "car-1", send_command, wake_first=True, timeout=1.0, interval=0.01
+        )
+    )
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert client.wake_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_asleep_command_rejection_is_actionable():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+
+    async def send_command() -> str:
+        raise DeepalAPIError(
+            "API Error: APP_1_1_05_001 Operation failed",
+            code="APP_1_1_05_001",
+        )
+
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_execute_command("car-1", send_command)
+
+    assert "did not accept the command" in str(err.value)
+    assert "may not have woken up" in str(err.value)
+    assert isinstance(err.value.__cause__, DeepalAPIError)
+    assert err.value.__cause__.code == "APP_1_1_05_001"
+
+
+@pytest.mark.asyncio
+async def test_other_command_rejections_keep_the_api_error():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+
+    async def send_command() -> str:
+        raise DeepalAPIError(
+            "API Error: COMMON_1_1_01_008", code="COMMON_1_1_01_008"
+        )
+
+    with pytest.raises(DeepalAPIError) as err:
+        await coordinator.async_execute_command("car-1", send_command)
+
+    assert err.value.code == "COMMON_1_1_01_008"

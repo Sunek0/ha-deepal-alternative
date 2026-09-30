@@ -51,6 +51,16 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   BEV, so electric vehicles keep their current entity set.
 - One Home Assistant device per vehicle, with translated entity names.
 
+### Vehicle wake
+
+- MQTT-backed vehicles (S05) report telemetry only while they are awake. The refresh button wakes a
+  sleeping vehicle with the same service the official app uses and waits for a fresh report; wakes
+  are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
+  never wakes the car.
+- Waking the vehicle can take up to 20 seconds before it reports again.
+- REST-backed and `SDA-MQTT` vehicles keep using the signed condition request; the MQTT wake is only
+  available for CA/MQTT vehicles.
+
 ### Remote controls
 
 - Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
@@ -63,6 +73,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
   integration options. The PIN is verified against the account when it is saved, so an invalid one,
   or one created with another account, is rejected instead of stored.
+- When the car is asleep, the PIN commands wake it first: the first attempt can take up to 20
+  seconds while the vehicle wakes up and reports before the command is sent.
 - Flashing the lights and sounding the horn make the car run a physical cycle (about 30 s and 6 s);
   repeating them sooner shows how many seconds to wait instead of sending the command and being
   rejected by the vehicle. Climate, seat and steering wheel changes have no such wait.
@@ -144,7 +156,8 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   PIN (step 4 above) and save it again in the integration options.
 - **Home Assistant asks to reauthenticate**: the session was invalidated from the app or another
   device. Sign in again; using the secondary account avoids most of these.
-- **Values look stale**: the vehicle only reports telemetry while it is awake; the integration shows
+- **Values look stale**: the vehicle only reports telemetry while it is awake; use the refresh
+  button to wake an MQTT-backed car (the first PIN command wakes it too), or the integration shows
   the last known snapshot until the car reports again.
 - **Fuel entities are missing on a PHEV**: the integration creates them only when the vehicle's
   function configuration reports `#oilMileage` and the model is not a BEV.

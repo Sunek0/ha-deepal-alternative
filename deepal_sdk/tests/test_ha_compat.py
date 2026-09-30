@@ -653,6 +653,18 @@ class _FakeCommandClient:
         self.calls.append(("steer", vehicle_id, open_value))
         return "cmd-1"
 
+    async def control_doors(self, vehicle_id: str, open_value: bool) -> str:
+        self.calls.append(("doors", vehicle_id, open_value))
+        return "cmd-1"
+
+    async def control_windows(self, vehicle_id: str, open_value: bool) -> str:
+        self.calls.append(("windows", vehicle_id, open_value))
+        return "cmd-1"
+
+    async def control_trunk(self, vehicle_id: str, open_value: bool) -> str:
+        self.calls.append(("trunk", vehicle_id, open_value))
+        return "cmd-1"
+
 
 class _FakeCommandCoordinator(FakeCoordinator):
     """Run commands synchronously and apply the optimistic update."""
@@ -661,6 +673,7 @@ class _FakeCommandCoordinator(FakeCoordinator):
         super().__init__()
         self.data = {condition.car_id: condition}
         self.client = _FakeCommandClient()
+        self.last_wake_first: bool | None = None
 
     async def async_execute_command(
         self,
@@ -670,10 +683,12 @@ class _FakeCommandCoordinator(FakeCoordinator):
         is_done=None,
         optimistic_update=None,
         cooldown_key=None,
+        wake_first=None,
         timeout=None,
         interval=None,
     ) -> None:
         self.last_cooldown_key = cooldown_key
+        self.last_wake_first = wake_first
         await send_command()
         if optimistic_update is not None:
             current = self.data.get(vehicle_id)
@@ -713,6 +728,31 @@ async def test_seat_and_steering_controls_send_app_payloads() -> None:
     assert condition.seats.front_left.heating_level == 2
     assert condition.seats.front_right.ventilation_level == 0
     assert condition.climate.steering_wheel_heater_on is True
+
+
+@pytest.mark.asyncio
+async def test_pin_entities_request_a_wake_before_the_command() -> None:
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator = _FakeCommandCoordinator(condition)
+    vehicle = _fake_vehicle()
+    doors = lock.DeepalDoorsLock(coordinator, vehicle)
+    windows = cover.DeepalWindowsCover(coordinator, vehicle)
+    trunk = cover.DeepalTrunkCover(coordinator, vehicle)
+
+    await doors.async_unlock()
+    assert coordinator.last_wake_first is True
+
+    await windows.async_open_cover()
+    assert coordinator.last_wake_first is True
+
+    await trunk.async_open_cover()
+    assert coordinator.last_wake_first is True
+
+    assert [call[0] for call in coordinator.client.calls] == [
+        "doors",
+        "windows",
+        "trunk",
+    ]
 
 
 def test_entity_icons() -> None:

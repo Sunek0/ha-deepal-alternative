@@ -1,167 +1,237 @@
-# Deepal Python SDK
+# Deepal SDK
 
-Python SDK asíncrono para interactuar con la API de telemática y control remoto de vehículos **Changan Deepal** (S05 Max, S07, SL03, L07).
+Asynchronous Python SDK for the **Changan Deepal / My Changan** connected-vehicle platforms.
+It signs in, reads telemetry and sends remote commands to Deepal vehicles (S05, S07, SL03, L07)
+through the official mobile-app APIs.
 
-## Características
+> Unofficial project, not affiliated with Changan Automobile. Use it at your own risk. Remote
+> commands act on a real vehicle: make sure it is safe before locking doors, moving windows or
+> starting the climate control.
 
-- ⚡ **Asíncrono:** Construido sobre `httpx` y `asyncio`.
-- 🔐 **Autenticación:** Login por SMS code en la plataforma SDA, bind de OAuth tokens y login por código de verificación enviado por correo en la plataforma internacional (`DeepalIntlClient`).
-- 🚗 **Telemática del vehículo:** Consulta de batería (SOC %), autonomía (km), odómetro acumulado (`CdcTotMilg`), estado de puertas, ventanas, climatización y neumáticos.
-- 🎛️ **Control Remoto:** Comandos para bloqueo de puertas, climatización remota y estado del cargador.
-- 📐 **Tipado estricto:** Modelos de datos validados con Pydantic v2.
+## Platforms
 
-## Instalación
+The SDK speaks to two different Changan platforms, each with its own client:
+
+| Client | Platform | Base host | Login | Reference |
+| --- | --- | --- | --- | --- |
+| `DeepalIntlClient` | International (My Changan app, Europe/LatAm) | `m.iov.changanauto.com.de` | Email or SMS verification code | [`docs/intl-api.md`](docs/intl-api.md) |
+| `DeepalClient` | SDA (mainland China) | `pre-acenter.sda.changan.com.cn` | SMS code or a pasted access token | [`docs/sda-api.md`](docs/sda-api.md) |
+
+The international platform is the fully implemented path: REST telemetry, remote commands signed
+with the account keypair, S05 MQTT telemetry (`docs/mqtt-telemetry.md`) and read-only digital key
+checks. The SDA client is a thin access-token client for the Chinese platform; its commands are
+recovered from the app but not verified live.
+
+## Requirements
+
+- Python 3.10 or newer.
+- Runtime dependencies: `httpx`, `pydantic` v2 and `cryptography`.
+
+## Installation
+
+The package is distributed from the repository (it is not on PyPI):
 
 ```bash
-pip install -e .
+pip install -e deepal_sdk
 ```
 
-Los ejemplos de `examples/` se pueden ejecutar directamente con cualquier intérprete que tenga las
-dependencias del SDK, sin necesidad de instalarlo antes:
+For the test dependencies:
 
 ```bash
-python deepal_sdk/examples/basic_status.py
+pip install -e "deepal_sdk[dev]"
 ```
 
-## Ejemplo de Uso
+The examples under `deepal_sdk/examples/` make the SDK importable from their own location, so they
+also run from a clean checkout with any interpreter that has the runtime dependencies.
+
+## Quickstart: international platform
 
 ```python
 import asyncio
+
+from deepal import DeepalIntlClient
+
+
+async def main() -> None:
+    async with DeepalIntlClient(country="ES", language="es_ES") as client:
+        await client.request_email_code("you@example.com")
+        code = input("Verification code: ").strip()
+        token = await client.login_with_email_code("you@example.com", code)
+
+        vehicles = await client.get_vehicles()
+        for vehicle in vehicles:
+            condition = await client.get_vehicle_condition(vehicle.car_id)
+            print(
+                vehicle.series_name,
+                condition.battery.soc_percentage,
+                condition.total_odometer_km,
+            )
+
+        print("Logged in:", bool(token.access_token))
+
+
+asyncio.run(main())
+```
+
+SMS login is equivalent: `request_sms_code(phone, country_code)` followed by
+`login_with_sms_code(phone, code, country_code)`. The phone number is national (no `+` prefix) and
+the dial code is passed separately.
+
+### Persist the session
+
+The access token, the command-signing keypair and the device id are account credentials. Persist
+them so a restart does not force a new login (the app treats the keypair as a stable identity):
+
+```python
+# Save after login
+access_token = token.access_token
+refresh_token = token.refresh_token
+cac_token = token.cac_token
+user_id = client.user_id
+private_key_pem = client.private_key_pem
+public_key = client.public_key
+device_id = client.device_id
+
+# Restore later
+client = DeepalIntlClient(country="ES", device_id=device_id)
+client.access_token = access_token
+client.refresh_token = refresh_token
+client.cac_token = cac_token
+client.user_id = user_id
+client.set_login_keypair(private_key_pem, public_key)
+```
+
+Store these values as secrets (for example in an OS keyring or the password manager of your
+application), never in source control.
+
+### Send a remote command
+
+Commands are signed with the login private key. Door, window and trunk commands additionally
+require the remote-control PIN created with the account, which the SDK exchanges for a short-lived
+control token:
+
+```python
+client.control_pin = "123456"
+
+command_id = await client.control_air_conditioner(
+    vehicle.car_id, enabled=True, target_temp_c=22.0
+)
+result = await client.control_result_status(vehicle.car_id, command_id)
+print(result.status)
+```
+
+See [`docs/intl-api.md`](docs/intl-api.md#10-remote-commands) for the complete command list, the
+signature construction, the PIN/token rules and the command result codes.
+
+### MQTT telemetry (S05)
+
+Vehicles that report `protocol_type == "MQTT"` do not refresh their state over REST; the SDK
+performs the app's single-use MQTT exchange instead:
+
+```python
+if DeepalIntlClient.is_mqtt_vehicle(vehicle):
+    condition = await client.s05_mqtt_condition(vehicle.car_id)
+else:
+    condition = await client.get_vehicle_condition(vehicle.car_id)
+```
+
+The bootstrap, the connection options and the parameter mapping are documented in
+[`docs/mqtt-telemetry.md`](docs/mqtt-telemetry.md).
+
+## Quickstart: SDA (China) platform
+
+```python
+import asyncio
+
 from deepal import DeepalClient
 
-async def main():
-    async with DeepalClient(access_token="TU_TOKEN_AQUI") as client:
-        # Listar vehículos
+
+async def main() -> None:
+    async with DeepalClient(access_token="sda_access_token") as client:
         vehicles = await client.get_vehicles()
-        for car in vehicles:
-            print(f"Coche: {car.series_name} | VIN: {car.vin}")
-            
-            # Consultar telemática
-            cond = await client.get_vehicle_condition(car.car_id)
-            print(f"Batería: {cond.battery.soc_percentage}%")
-            print(f"Autonomía: {cond.battery.remaining_range_km} km")
-            print(f"Odómetro: {cond.total_odometer_km} km")
+        condition = await client.get_vehicle_condition(vehicles[0].car_id)
+        print(condition.battery.soc_percentage, condition.doors.locked)
+
 
 asyncio.run(main())
 ```
 
-## Login por correo (plataforma internacional)
+The SMS login flow (`request_sms_code` / `login_with_code`) is implemented but the recommended path
+is an access token issued by the SDA platform. See [`docs/sda-api.md`](docs/sda-api.md) for the
+headers, the telemetry mapping and the unverified caveats.
 
-La app My Changan/Deepal europea autentica con un código de verificación enviado al correo. El
-`DeepalIntlClient` implementa ese flujo contra el gateway internacional (`m.iov.changanauto.com.de`),
-cifrando el correo con la clave pública RSA de la app:
+## Error handling
+
+All errors derive from `DeepalError`, so a single `except` can cover the SDK:
 
 ```python
-import asyncio
-from deepal import DeepalIntlClient
+from deepal import (
+    DeepalAPIError,
+    DeepalAuthError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
+    DeepalConnectionError,
+    DeepalRateLimitError,
+)
 
-async def main():
-    async with DeepalIntlClient(country="ES", language="es_ES") as client:
-        await client.request_email_code("tu-correo@ejemplo.com")
-        code = input("Código recibido por correo: ")
-        token = await client.login_with_email_code("tu-correo@ejemplo.com", code)
-        print(f"Access Token: {token.access_token}")
-        print(f"Refresh Token: {token.refresh_token}")
-
-asyncio.run(main())
+try:
+    condition = await client.get_vehicle_condition(vehicle.car_id)
+except DeepalAuthError:
+    ...  # the session is gone: log in again (or refresh the tokens)
+except DeepalConnectionError:
+    ...  # network or timeout: retry later
+except DeepalAPIError as err:
+    ...  # gateway rejected the call; err.code and err.status_code carry the detail
 ```
 
-También hay un ejemplo listo para ejecutar:
+- `DeepalAuthError`: missing, expired or rejected session (HTTP 401/403 and the app kick-out codes).
+- `DeepalRateLimitError`: the gateway rate-limits the request or the control PIN has no attempts
+  left.
+- `DeepalCommandAuthError`: the command-signing material was rejected, or the PIN is expired/not
+  set.
+- `DeepalCommandNotReady`: a signed command was attempted without the private key or the PIN.
+- `DeepalAPIError`: any other gateway or HTTP failure, with `code` and `status_code`.
+- `DeepalConnectionError`: transport failure (`httpx.RequestError`).
+
+The full code-to-exception mapping is in [`docs/intl-api.md`](docs/intl-api.md#11-errors). For the SDA
+client only `DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError` are raised.
+
+## Diagnostics
+
+`DeepalIntlClient(enable_api_logging=True)` logs every request and response at `WARNING` level with
+tokens, keys, VINs, emails, phones, PINs and serial numbers redacted, and truncates long strings.
+Payload parsing never fails on missing groups: absent telemetry is reported as `None`, `False` or
+`0` according to [`docs/models.md`](docs/models.md).
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [`docs/intl-api.md`](docs/intl-api.md) | International platform: environments, headers, login, session refresh, telemetry, capabilities, digital key, signed commands, errors, diagnostics |
+| [`docs/sda-api.md`](docs/sda-api.md) | SDA (China) platform: access token, headers, methods, telemetry mapping, limitations |
+| [`docs/mqtt-telemetry.md`](docs/mqtt-telemetry.md) | S05 MQTT bootstrap, connection options and parameter mapping |
+| [`docs/models.md`](docs/models.md) | Every public Pydantic model, its fields and their semantics |
+
+Runnable examples:
+
+| Example | Shows |
+| --- | --- |
+| [`examples/email_login_example.py`](examples/email_login_example.py) | Email-code login against the international platform |
+| [`examples/sms_login_example.py`](examples/sms_login_example.py) | SMS-code login against the international platform |
+| [`examples/basic_status.py`](examples/basic_status.py) | Vehicle list and telemetry over the SDA client |
+| [`examples/login_example.py`](examples/login_example.py) | SMS login against the SDA platform |
+| [`examples/digital_key_status.py`](examples/digital_key_status.py) | Read-only digital key and authorization checks |
+
+## Development
 
 ```bash
-python deepal_sdk/examples/email_login_example.py
+.venv/bin/python -m pytest deepal_sdk/tests -q
 ```
 
-## Login por teléfono/SMS (plataforma internacional)
+The test suite uses `httpx.MockTransport` and fake clients; it never contacts the real API. When
+changing the SDK, update the reference document for the affected platform in the same change.
 
-Si tu cuenta de la app My Changan está registrada con un número de teléfono, usa el flujo SMS
-internacional. El código de país se envía sin el prefijo `+` (el SDK lo elimina si lo incluyes) y el
-número debe ser nacional, sin prefijo de país; el ejemplo deduce el código de país a partir del país
-para los mercados soportados:
+## Home Assistant integration
 
-```python
-import asyncio
-from deepal import DeepalIntlClient
-
-async def main():
-    async with DeepalIntlClient(country="ES", language="es_ES") as client:
-        await client.request_sms_code("600000000", "34")
-        code = input("Código recibido por SMS: ")
-        token = await client.login_with_sms_code("600000000", code, "34")
-        print(f"Access Token: {token.access_token}")
-
-asyncio.run(main())
-```
-
-Ejemplo ejecutable:
-
-```bash
-python deepal_sdk/examples/sms_login_example.py
-```
-
-## Telemetría internacional
-
-`DeepalIntlClient` también lee vehículos y estado (SOC, autonomía, odómetro, puertas y clima) y
-refresca la sesión cuando el access token caduca:
-
-```python
-import asyncio
-from deepal import DeepalIntlClient
-
-async def main():
-    async with DeepalIntlClient(country="ES") as client:
-        client.access_token = "TU_ACCESS_TOKEN"
-        client.refresh_token = "TU_REFRESH_TOKEN"
-        client.cac_token = "TU_CAC_TOKEN"
-
-        vehicles = await client.get_vehicles()
-        for car in vehicles:
-            cond = await client.get_vehicle_condition(car.car_id)
-            print(f"{car.series_name}: {cond.battery.soc_percentage}% | {cond.total_odometer_km} km")
-
-        await client.refresh_tokens()
-
-asyncio.run(main())
-```
-
-La condición internacional incluye además presión y alarma de neumáticos (`cond.tires`), nivel de calor y
-ventilación por asiento (`cond.seats`), posición de las ventanillas (`cond.windows`) y estado y nivel de
-la calefacción del volante (`cond.climate.steering_wheel_heater_on` / `steering_wheel_heater_level`).
-
-En los PHEV/range-extender, `cond.fuel` expone el nivel, el volumen, la capacidad del depósito, la
-autonomía de combustible y la temperatura (`fuel.level_percent`, `volume_l`, `tank_capacity_l`,
-`remaining_range_km`, `temperature_c`). El SDK pide el bloque `fuel` siempre; un BEV lo devuelve
-vacío y los valores quedan en `None`.
-
-### Integración de Home Assistant
-
-Añade la integración y elige la plataforma **International (Europe)**: el flujo hace el login real
-en Home Assistant (código por email o SMS), genera el par de claves de firma y guarda los tokens,
-el `user_id` y el país. Si la sesión caduca, Home Assistant pedirá reautenticarse. En las opciones
-de la entrada puedes ajustar el intervalo de sondeo, el PIN de control remoto y el registro de
-tráfico API redactado (útil para diagnosticar).
-
-Los vehículos con backend MQTT (Deepal S05) usan la telemetría MQTT cuando la entrada tiene
-`user_id`; si el gateway CA rechaza la cuenta, la integración avisa y continúa con la condición
-REST. Usan el mismo flujo de comandos firmados que el resto de modelos: no hace falta activar
-ninguna opción. Clima, luces y claxon están confirmados contra un S05 real por otra integración
-open-source que ataca los mismos endpoints.
-
-### Control del clima (plataforma internacional)
-
-Para habilitar el control del aire acondicionado, el login debe haber generado la clave privada (el
-flujo de la integración lo hace automáticamente). Aparecerá una entidad `climate` por vehículo con
-encendido/apagado y temperatura objetivo entre 16 y 30 °C. El SDK también permite enviar el comando
-directamente:
-
-```python
-await client.control_air_conditioner("CAR_ID", enabled=True, target_temp_c=22.0)
-```
-
-## Estructura del Proyecto
-
-- `deepal/client.py`: Cliente HTTP asíncrono principal (`DeepalClient`).
-- `deepal/intl.py`: Cliente de la plataforma internacional (`DeepalIntlClient`, login por correo).
-- `deepal/models/`: Modelos Pydantic para `Vehicle`, `VehicleCondition`, `AuthToken`, etc.
-- `deepal/endpoints.py`: Constantes de URLs y endpoints de la API.
-- `examples/`: Scripts de demostración para login y consulta de estado.
+The repository also ships a Home Assistant integration that consumes the SDK; its user
+documentation is in the [root README](../README.md).

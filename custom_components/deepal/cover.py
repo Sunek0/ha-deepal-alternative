@@ -81,6 +81,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
             lambda: self.client.control_windows(self._car_id, True),
             is_done=lambda: self.is_closed is False,
             optimistic_update=lambda cond: _set_windows(cond, True),
+            wake_first=True,
         )
 
     async def async_close_cover(self, **kwargs: Any) -> None:
@@ -89,6 +90,7 @@ class DeepalWindowsCover(DeepalEntity, CoverEntity):
             lambda: self.client.control_windows(self._car_id, False),
             is_done=lambda: self.is_closed is True,
             optimistic_update=lambda cond: _set_windows(cond, False),
+            wake_first=True,
         )
 
 
@@ -118,6 +120,7 @@ class DeepalTrunkCover(DeepalEntity, CoverEntity):
             lambda: self.client.control_trunk(self._car_id, True),
             is_done=lambda: self.is_closed is False,
             optimistic_update=lambda cond: _set_trunk(cond, True),
+            wake_first=True,
         )
 
     async def async_close_cover(self, **kwargs: Any) -> None:
@@ -126,4 +129,5 @@ class DeepalTrunkCover(DeepalEntity, CoverEntity):
             lambda: self.client.control_trunk(self._car_id, False),
             is_done=lambda: self.is_closed is True,
             optimistic_update=lambda cond: _set_trunk(cond, False),
+            wake_first=True,
         )
