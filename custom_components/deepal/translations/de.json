@@ -40,11 +40,13 @@
         "description": "Wähle das in My Changan registrierte Verkaufsland und die E-Mail des Kontos. Home Assistant fordert einen Bestätigungscode an.",
         "data": {
           "country": "Verkaufsland",
-          "email": "E-Mail"
+          "email": "E-Mail",
+          "environment": "Regionale Umgebung"
         },
         "data_description": {
           "country": "Verkaufsland des Kontos, zum Beispiel Spanien. Es wird als selectcountry und salesCountry gesendet; es ändert nichts am API-Gateway.",
-          "email": "E-Mail, die in der My Changan App verwendet wird. Sie wird vor dem Senden verschlüsselt."
+          "email": "E-Mail, die in der My Changan App verwendet wird. Sie wird vor dem Senden verschlüsselt.",
+          "environment": "Regionale Gateway-Gruppe für die Anmeldung. Wähle die Region des Kontos; ASEAN-Konten scheitern am europäischen Gateway."
         }
       },
       "intl_email_code": {
@@ -62,11 +64,13 @@
         "description": "Wähle das Verkaufsland und die nationale Mobilnummer (ohne Ländervorwahl). Home Assistant fordert einen Bestätigungscode per SMS an.",
         "data": {
           "country": "Verkaufsland",
-          "phone": "Mobilnummer"
+          "phone": "Mobilnummer",
+          "environment": "Regionale Umgebung"
         },
         "data_description": {
           "country": "Verkaufsland des Kontos. Dessen Vorwahl wird zusammen mit der Mobilnummer gesendet.",
-          "phone": "Nationale Mobilnummer ohne Vorwahl, zum Beispiel 600000000 für Spanien (+34)."
+          "phone": "Nationale Mobilnummer ohne Vorwahl, zum Beispiel 600000000 für Spanien (+34).",
+          "environment": "Regionale Gateway-Gruppe für die Anmeldung. Wähle die Region des Kontos; ASEAN-Konten scheitern am europäischen Gateway."
         }
       },
       "intl_sms_code": {
@@ -112,7 +116,7 @@
           "scan_interval": "Abfrageintervall (Sekunden)",
           "control_pin": "Fernsteuerungs-PIN",
           "enable_api_logging": "Redigierten API-Verkehr protokollieren",
-          "environment": "Regionale Umgebung (Diagnose)"
+          "environment": "Regionale Umgebung"
         },
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
         "data_description": {

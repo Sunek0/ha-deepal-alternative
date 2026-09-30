@@ -236,3 +236,24 @@ class VehicleCondition(BaseModel):
         default=None,
         description="Original decrypted S05 MQTT parameters, kept for diagnostics",
     )
+    condition_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Service that produced the snapshot: sda-mqtt, sda-mqtt-signal-list, "
+            "legacy-mqtt or rest"
+        ),
+    )
+    mqtt_variants: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Raw parameters of every MQTT condition variant attempted in the last "
+            "exchange, empty entries included (diagnostics)"
+        ),
+    )
+    sda_plan: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "SDA condition plan derived from the vehicle function tree: device DID, "
+            "service/command codes and probe property/strategy codes"
+        ),
+    )

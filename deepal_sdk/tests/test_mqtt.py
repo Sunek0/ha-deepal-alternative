@@ -21,10 +21,13 @@ from deepal.mqtt import (
     login_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
+    normalize_sda_params,
     parse_connack,
     parse_publish,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    sda_condition_plan,
+    sda_condition_request_payload,
     secret_from_login_payload,
     topic_device_id,
     unmapped_s05_keys,
@@ -357,6 +360,145 @@ def test_condition_request_payload_is_encrypted():
     assert services[0]["service_code"] == "car_condition"
 
 
+def test_sda_condition_request_payload_shape():
+    payload = sda_condition_request_payload(
+        "car-did",
+        "login-did",
+        "secret-key-12345",
+        "req-1",
+        basic_info={"vin": "VIN123"},
+    )
+
+    assert payload["did"] == "car-did"
+    assert payload["mt"] == "properties"
+    assert payload["b"] == {"ruid": "login-did", "vin": "VIN123"}
+    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
+    assert services == [
+        {
+            "service_code": "CarCondition",
+            "command_code": "Get_CarCondition",
+            "params": {"ConditionQueryType": 0},
+        }
+    ]
+
+
+def test_sda_condition_request_payload_with_signal_list():
+    payload = sda_condition_request_payload(
+        "car-did",
+        "login-did",
+        "secret-key-12345",
+        "req-1",
+        signal_list=["door", "hvac"],
+    )
+
+    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
+    assert services[0]["params"] == {
+        "ConditionQueryType": 0,
+        "SignalList": ["door", "hvac"],
+    }
+
+
+def test_sda_condition_request_payload_with_plan_overrides():
+    payload = sda_condition_request_payload(
+        "car-did",
+        "login-did",
+        "secret-key-12345",
+        "req-1",
+        service_code="TreeService",
+        command_code="TreeCommand",
+        strategy_code="strategy-1",
+        strategy_id="strategy-id-1",
+    )
+
+    services = aes_cbc_decrypt(payload["sers"], "secret-key-12345", "req-1")
+    assert services == [
+        {
+            "service_code": "TreeService",
+            "command_code": "TreeCommand",
+            "params": {"ConditionQueryType": 0},
+            "strategy_code": "strategy-1",
+            "strategy_id": "strategy-id-1",
+        }
+    ]
+
+
+def test_sda_condition_plan_from_function_tree():
+    tree = {
+        "functionList": [
+            {
+                "id": "1",
+                "deviceId": "did-other",
+                "commandCode": "Cnr_AllAcON",
+                "propertyCode": "ac",
+            },
+            {
+                "id": "2",
+                "deviceId": "did-condition",
+                "commandCode": "Get_CarCondition",
+                "serviceCode": "CarCondition",
+                "strategyCode": "strategy-1",
+                "strategyId": "strategy-id-1",
+                "propertyCode": "carCondition",
+            },
+            {"id": "3", "parentId": "2", "propertyCode": "socLeft"},
+            {"id": "4", "parentId": "2", "propertyCode": "battery"},
+        ]
+    }
+    config = {
+        "mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]
+    }
+
+    plan = sda_condition_plan(config)
+
+    assert plan.device_did == "did-condition"
+    assert plan.service_code == "CarCondition"
+    assert plan.command_code == "Get_CarCondition"
+    assert plan.property_codes == ("carCondition", "socLeft", "battery")
+    assert plan.strategy_codes == ("strategy-1",)
+    assert plan.strategy_ids == ("strategy-id-1",)
+
+
+def test_sda_condition_plan_without_condition_entry():
+    tree = {
+        "functionList": [
+            {"id": "1", "deviceId": "did-only", "commandCode": "Cnr_AllAcON"}
+        ]
+    }
+    config = {"mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]}
+
+    plan = sda_condition_plan(config)
+
+    assert plan.device_did == "did-only"
+    assert plan.service_code == "CarCondition"
+    assert plan.command_code == "Get_CarCondition"
+    assert plan.property_codes == ()
+
+
+def test_sda_condition_plan_uses_application_func_codes():
+    tree = {
+        "data": [
+            {"id": "10", "parentId": "0", "applicationFuncCode": "#carCondition"},
+            {"id": "11", "parentId": "10", "applicationFuncCode": "#socLeft"},
+            {"id": "12", "parentId": "10", "applicationFuncCode": "#chargingInfo"},
+        ]
+    }
+
+    plan = sda_condition_plan(
+        {"mqttConnectionInfos": [{"carConfigJson": json.dumps(tree)}]}
+    )
+
+    assert plan.property_codes == ("carCondition", "socLeft", "chargingInfo")
+
+
+def test_sda_condition_plan_without_tree():
+    plan = sda_condition_plan({"mqttConnectionInfos": [{}]})
+
+    assert plan.device_did is None
+    assert plan.service_code == "CarCondition"
+    assert plan.command_code == "Get_CarCondition"
+    assert plan.property_codes == ()
+
+
 def test_login_request_payload_shape():
     payload = login_request_payload("login-did", "req-1")
     assert payload["did"] == "login-did"
@@ -581,6 +723,87 @@ def test_mapped_s05_keys_cover_every_key_the_normalization_reads():
         keys_read.update(re.findall(r'"([A-Za-z0-9_]+)"', call))
     assert keys_read
     assert keys_read <= MAPPED_S05_KEYS
+
+
+def test_normalize_sda_params_maps_the_e07_condition():
+    params = {
+        "BcuSocDisp": "91.6",
+        "VIUSocDisp": 92,
+        "VcuResiMilg": 422,
+        "CdcTotMilg": "18894.2",
+        "EspVehSpd": 0,
+        "BcuChrgSts": 1,
+        "AcChrgCnctrSts": 1,
+        "DcChrgCnctrSts": 0,
+        "ObcChrgInpAcIL1": "28.3",
+        "BcuChrgTiDisp": 66,
+        "TboxSocChrgTarSet": 100,
+        "DrvrDoorSts": 2,
+        "PassDoorSts": 2,
+        "LeReDoorSts": 2,
+        "RiReDoorSts": 2,
+        "ObjStTypePLGDoorSt": 2,
+        "FrtGateSts": 2,
+        "DrvrDoorLockLogicSts": 2,
+        "PassDoorLockLogicSts": 2,
+        "DrvrWinPos": 0,
+        "PassWinPos": 0,
+        "LeReWinPos": 0,
+        "RiReWinPos": 0,
+        "ITMSAcIntT": "18.0",
+        "ITMSDrvrAutT": "24.0",
+        "ITMSACOnOff": 0,
+        "ITMSPm25InCarDens": 4,
+        "DrHeatGear": "0",
+        "DrVentGear": "0",
+        "SteeringHeat": 0,
+    }
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["vehicleStatus"]["soc"] == 92
+    assert normalized["vehicleStatus"]["drvMileage"] == 422
+    assert normalized["vehicleStatus"]["totalMileage"] == 18894.2
+    assert normalized["charge"]["chargeStatus"] == 1
+    assert normalized["charge"]["chargeConStatus"] == 1
+    assert normalized["charge"]["acChargeCurrent"] == 28.3
+    assert normalized["charge"]["remainChargeTime"] == 66
+    assert normalized["charge"]["maxSocPercent"] == 100
+    assert normalized["door"]["doors"] == [0, 0, 0, 0]
+    assert normalized["door"]["trunk"] == 0
+    assert normalized["door"]["hood"] == 0
+    assert normalized["door"]["driverLock"] == 0
+    assert normalized["window"]["windows"] == [0, 0, 0, 0]
+    assert normalized["hvac"]["insideTemp"] == 180.0
+    assert normalized["hvac"]["remoteTemp"] == 240.0
+    assert normalized["hvac"]["acStatus"] == 0
+    assert normalized["seat"]["leftFront"]["heatStatus"] == 0
+    assert normalized["seat"]["leftFront"]["ventStatus"] == 0
+
+
+def test_normalize_sda_params_marks_open_states():
+    params = {
+        "DrvrDoorSts": 1,
+        "ObjStTypePLGDoorSt": 1,
+        "DrvrDoorLockLogicSts": 2,
+        "DrvrWinPos": 50,
+    }
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["door"]["doors"][0] == 1
+    assert normalized["door"]["trunk"] == 1
+    assert normalized["door"]["driverLock"] == 0
+    assert normalized["window"]["windows"][0] == 50
+
+
+def test_normalize_sda_params_unlocked_and_charge_sentinel():
+    params = {"DrvrDoorLockLogicSts": 1, "BcuChrgTiDisp": 8191}
+
+    normalized = normalize_sda_params(params)
+
+    assert normalized["door"]["driverLock"] == 1
+    assert normalized["charge"]["remainChargeTime"] is None
 
 
 def test_unmapped_s05_keys_returns_only_unknown_fields():

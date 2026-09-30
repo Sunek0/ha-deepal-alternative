@@ -159,6 +159,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._last_wake_at: dict[str, float] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
         self._wake_report_timeout = WAKE_REPORT_TIMEOUT
+        self._mqtt_attempts: dict[str, dict[str, Any]] = {}
+
+    def mqtt_attempt(self, vehicle_id: str) -> dict[str, Any] | None:
+        """Return the last failed MQTT exchange details for diagnostics."""
+        return self._mqtt_attempts.get(vehicle_id)
 
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
@@ -292,10 +297,27 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             (item for item in self.vehicles if item.car_id == vehicle_id), None
         )
         if vehicle is not None and self._uses_mqtt(vehicle):
+            sda = self.client.is_sda_mqtt_vehicle(vehicle)
+            if sda:
+                # The official app reads the SDA condition over REST; the SDA
+                # MQTT broker (prod-appmq, authType 2) is a separate exchange
+                # not implemented yet, so REST comes first.
+                try:
+                    condition = await self.client.get_sda_vehicle_condition(
+                        vehicle_id, vin=vehicle.vin
+                    )
+                    return self._merge_condition(vehicle_id, condition)
+                except DeepalError as err:
+                    _LOGGER.debug(
+                        "Deepal SDA REST condition unavailable for %s: %s",
+                        vehicle_id,
+                        err,
+                    )
             try:
                 condition = await self.client.s05_mqtt_condition(
-                    vehicle_id, vin=vehicle.vin
+                    vehicle_id, vin=vehicle.vin, sda=sda
                 )
+                self._mqtt_attempts.pop(vehicle_id, None)
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
                 if getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES and (
@@ -303,11 +325,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 ):
                     try:
                         condition = await self.client.s05_mqtt_condition(
-                            vehicle_id, vin=vehicle.vin
+                            vehicle_id, vin=vehicle.vin, sda=sda
                         )
+                        self._mqtt_attempts.pop(vehicle_id, None)
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
                         err = retry_err
+                exchange = getattr(self.client, "last_mqtt_exchange", None)
+                if exchange is not None:
+                    self._mqtt_attempts[vehicle_id] = {
+                        "source": exchange.source,
+                        "variants": exchange.variants,
+                        "plan": (
+                            exchange.plan.as_dict() if exchange.plan else None
+                        ),
+                    }
                 _LOGGER.warning(
                     "Deepal MQTT telemetry unavailable for %s (%s); using the "
                     "REST condition endpoint",
@@ -317,6 +349,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )
+        condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)
 
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
@@ -544,6 +577,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         previous = current.last_updated_timestamp if current is not None else None
 
         if vehicle is not None and self._uses_mqtt(vehicle):
+            if self.client.is_sda_mqtt_vehicle(vehicle):
+                # The app reads SDA conditions over REST and the CA-broker wake
+                # is not implemented for the SDA architecture, so the refresh
+                # falls through to the normal SDA condition update.
+                return
             if self._should_wake(vehicle_id, previous):
                 try:
                     await self.async_wake_vehicle(vehicle_id)

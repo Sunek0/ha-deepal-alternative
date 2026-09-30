@@ -837,13 +837,17 @@ def test_integration_has_no_removed_api_references() -> None:
 class _DiagnosticsCoordinator:
     """Coordinator double for the diagnostics report."""
 
-    def __init__(self, vehicles, conditions, capabilities) -> None:
+    def __init__(self, vehicles, conditions, capabilities, attempts=None) -> None:
         self.vehicles = vehicles
         self.data = conditions
         self._capabilities = capabilities
+        self._attempts = attempts or {}
 
     def vehicle_capabilities(self, car_id: str):
         return self._capabilities.get(car_id)
+
+    def mqtt_attempt(self, car_id: str):
+        return self._attempts.get(car_id)
 
 
 def _diagnostics_entry(coordinator) -> SimpleNamespace:
@@ -868,6 +872,19 @@ def _diagnostics_entry(coordinator) -> SimpleNamespace:
 def _mqtt_condition() -> VehicleCondition:
     condition = VehicleCondition(car_id="car-1", vin="VIN-REAL-1")
     condition.battery.soc_percentage = 71
+    condition.condition_source = "sda-mqtt"
+    condition.mqtt_variants = {
+        "sda-mqtt": {"soc": 71},
+        "sda-mqtt-sections": {},
+    }
+    condition.sda_plan = {
+        "device_did": "plan-did",
+        "service_code": "CarCondition",
+        "command_code": "Get_CarCondition",
+        "property_codes": ["carCondition"],
+        "strategy_codes": [],
+        "strategy_ids": [],
+    }
     condition.raw_data = {"vehicleStatus": {"soc": 71, "latitude": 40.4}}
     condition.mqtt_raw_data = {
         "soc": 71,
@@ -889,7 +906,16 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     )
     capabilities = VehicleCapabilities.from_codes(["#driverSeatVent"])
     coordinator = _DiagnosticsCoordinator(
-        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": capabilities}
+        [vehicle],
+        {"car-1": _mqtt_condition()},
+        {"car-1": capabilities},
+        {
+            "car-1": {
+                "source": None,
+                "variants": {"sda-mqtt": {}, "sda-mqtt-sections": {}},
+                "plan": {"device_did": "plan-did"},
+            }
+        },
     )
 
     report = await diagnostics.async_get_config_entry_diagnostics(
@@ -902,6 +928,17 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     assert "mqtt_raw_data" not in report["mapped_telemetry"]["car-1"]
     assert report["raw_rest"]["car-1"]["vehicleStatus"]["soc"] == 71
     assert report["raw_mqtt"]["car-1"]["chargeCoverStatus"] == 3
+    assert report["condition_sources"]["car-1"] == "sda-mqtt"
+    assert report["raw_mqtt_variants"]["car-1"] == {
+        "sda-mqtt": {"soc": 71},
+        "sda-mqtt-sections": {},
+    }
+    assert report["sda_plans"]["car-1"]["device_did"] == "plan-did"
+    assert report["sda_plans"]["car-1"]["property_codes"] == ["carCondition"]
+    assert report["mqtt_attempts"]["car-1"]["variants"]["sda-mqtt"] == {}
+    assert report["mqtt_attempts"]["car-1"]["plan"] == {"device_did": "plan-did"}
+    assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
+    assert "sda_plan" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [
         "chargeCoverStatus",
         "latitude",
@@ -911,7 +948,10 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
 @pytest.mark.asyncio
 async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
     vehicle = Vehicle(
-        car_id="car-1", vin="VIN-REAL-1", thumbnail_url="https://example.invalid/car.png"
+        car_id="car-1",
+        vin="VIN-REAL-1",
+        license_plate="1234-ABC",
+        thumbnail_url="https://example.invalid/car.png",
     )
     coordinator = _DiagnosticsCoordinator(
         [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
@@ -927,7 +967,9 @@ async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
     assert "test-private-key" not in serialized
     assert "1234" not in json.dumps(report["config_entry_data"])
     assert "600000000" not in serialized
+    assert "1234-ABC" not in serialized
     assert report["vehicles"][0]["vin"] == REDACTED
+    assert report["vehicles"][0]["license_plate"] == REDACTED
     assert report["config_entry_data"]["access_token"] == REDACTED
     assert report["raw_mqtt"]["car-1"]["latitude"] == REDACTED
     assert report["capabilities"]["car-1"] is None
@@ -944,7 +986,59 @@ async def test_diagnostics_report_survives_an_empty_entry() -> None:
     assert report["vehicles"] == []
     assert report["mapped_telemetry"] == {}
     assert report["raw_mqtt"] == {}
+    assert report["condition_sources"] == {}
+    assert report["raw_mqtt_variants"] == {}
+    assert report["sda_plans"] == {}
+    assert report["mqtt_attempts"] == {}
     assert report["unmapped_mqtt_keys"] == {}
+
+
+def test_login_options_include_australia_and_the_environment() -> None:
+    assert config_flow.COUNTRY_OPTIONS["AU"] == "Australia (+61)"
+    assert config_flow.COUNTRY_DIAL_CODES["AU"] == "61"
+
+    selector_config = config_flow._environment_selector().config
+    values = [option["value"] for option in selector_config["options"]]
+    assert values == [
+        "release_eu",
+        "release_znm",
+        "release_ase",
+        "release_ase_connect",
+    ]
+
+
+def test_login_client_uses_the_selected_environment() -> None:
+    flow = object.__new__(config_flow.DeepalConfigFlow)
+    flow._reauth_identity = {}
+
+    client = flow._intl_login_client("AU", "release_ase")
+
+    assert client.environment == "release_ase"
+    assert client.base_url == "https://m.iov.changanauto.sg"
+    assert client.app_id == "ca"
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_keeps_the_raw_sda_payload() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")
+    condition = _mqtt_condition()
+    condition.condition_source = "sda-rest"
+    condition.mqtt_raw_data = {"DrvrDoorLockLogicSts": 2, "VIUSocDisp": 80}
+    coordinator = _DiagnosticsCoordinator([vehicle], {"car-1": condition}, {})
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    assert report["raw_sda"]["car-1"]["DrvrDoorLockLogicSts"] == 2
+    assert report["raw_sda"]["car-1"]["VIUSocDisp"] == 80
+
+
+def test_options_flow_lists_the_supported_environments() -> None:
+    from custom_components.deepal.deepal.endpoints import INTL_ENVIRONMENTS
+
+    labels = [environment.label for environment in INTL_ENVIRONMENTS.values()]
+    assert labels == ["Europe", "Latin America", "ASEAN", "ASEAN CONNECT"]
 
 
 def test_config_flow_defaults_to_the_international_platform() -> None:

@@ -14,8 +14,8 @@ import gzip
 import hashlib
 import json
 import struct
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -31,8 +31,36 @@ S05_SERVICE_CODES = (
     "THU_Service",
 )
 
+# SDA/VOT condition service recovered from the 1.12.0 DEX: CarConditionCmdConstant
+# (M = Get_CarCondition, P_ConditionQueryType, P_SignalList, SK = CarCondition) and
+# RemoteControlConstant.MQTT_CMD_METHOD_CAR_CONDITION.
+SDA_CONDITION_SERVICE = "CarCondition"
+SDA_CONDITION_COMMAND = "Get_CarCondition"
+SDA_SERVICE_CODES = (SDA_CONDITION_SERVICE, SDA_CONDITION_COMMAND)
+
+# The app's condition sections (CarConditionStrategy.buildStrategy), used as the
+# SignalList probe for SDA vehicles.
+SDA_CONDITION_SECTIONS = (
+    "vehicleStatus",
+    "location",
+    "door",
+    "window",
+    "tire",
+    "seat",
+    "lamp",
+    "charge",
+    "hvac",
+    "fuel",
+    "welcome",
+    "departurePlan",
+    "airConditionPlan",
+    "warmCoolingBox",
+)
+
 MQTT_PROTOCOL_LEVEL = 5
 MQTT_DEFAULT_KEEPALIVE = 60
+# Seconds to wait for one SDA probe response before publishing the next variant.
+MQTT_SDA_PROBE_GRACE = 3.0
 
 # Topic templates from the app's MqttConstantKt (1.12.0 DEX recovery).
 LOGIN_PUB_TOPIC_TEMPLATE = "$vdp/%s/client/loginout"
@@ -248,6 +276,14 @@ def topic_device_id(topic: Optional[str]) -> Optional[str]:
     return None
 
 
+def topic_with_device(topic: Optional[str], did: Optional[str]) -> Optional[str]:
+    """Return the topic with its ``$vdp/<did>`` segment replaced by ``did``."""
+    current = topic_device_id(topic)
+    if topic and current and did and current != did:
+        return topic.replace(current, did)
+    return topic
+
+
 def _first_mapping(value: Any) -> Optional[Mapping[str, Any]]:
     if isinstance(value, Mapping):
         return value
@@ -270,6 +306,118 @@ def _config_sources(config: Any) -> list[Mapping[str, Any]]:
         if cluster is not None:
             sources.append(cluster)
     return sources
+
+
+def _function_nodes(value: Any) -> list[Mapping[str, Any]]:
+    """Collect the ``CarFuncBean``-like nodes of an arbitrary JSON structure."""
+    nodes: list[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        if any(
+            key in value
+            for key in ("commandCode", "propertyCode", "applicationFuncCode", "deviceId")
+        ):
+            nodes.append(value)
+        for child in value.values():
+            nodes.extend(_function_nodes(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            nodes.extend(_function_nodes(child))
+    return nodes
+
+
+def _is_condition_node(node: Mapping[str, Any]) -> bool:
+    text = " ".join(
+        str(node.get(key) or "")
+        for key in (
+            "commandCode",
+            "applicationFuncCode",
+            "propertyCode",
+            "commandName",
+            "propertyName",
+        )
+    ).lower()
+    return "carcondition" in text or "get_carcondition" in text
+
+
+def _unique_strings(values: Iterator[Any]) -> tuple[str, ...]:
+    unique: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in unique:
+            unique.append(text)
+    return tuple(unique)
+
+
+def sda_condition_plan(config: Any) -> SdaConditionPlan:
+    """Derive the SDA condition request plan from the CA function tree.
+
+    The app reads the per-function configuration (``carConfigJson`` inside the
+    connection config or the ``appGetCarConfFunc`` response) into
+    ``CarFuncBean`` entries and derives the MQTT device id and the condition
+    command from it. The tree shape is not fully recovered from the DEX, so the
+    walk is defensive: it accepts any nested JSON and only uses the fields it
+    recognises.
+    """
+    nodes: list[Mapping[str, Any]] = []
+    for source in [config, *_config_sources(config)]:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("carConfigJson", "carConfigFuncJson", "carConfigFunc"):
+            raw = source.get(key)
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    nodes.extend(_function_nodes(json.loads(raw)))
+                except ValueError:
+                    continue
+    if not nodes:
+        nodes = _function_nodes(config)
+
+    condition_nodes = [node for node in nodes if _is_condition_node(node)]
+    selected = condition_nodes[0] if condition_nodes else None
+    if selected is None:
+        device_did = next(
+            (str(node.get("deviceId")) for node in nodes if node.get("deviceId")),
+            None,
+        )
+        return SdaConditionPlan(device_did=device_did)
+
+    selected_id = str(selected.get("id") or "")
+    subtree = [selected]
+    if selected_id:
+        frontier = {selected_id}
+        while frontier:
+            children = [
+                node
+                for node in nodes
+                if str(node.get("parentId") or "") in frontier
+            ]
+            if not children:
+                break
+            subtree.extend(children)
+            frontier = {str(node.get("id") or "") for node in children}
+
+    def _candidate_codes() -> Iterator[str]:
+        for node in subtree:
+            code = node.get("propertyCode")
+            if not code:
+                application = node.get("applicationFuncCode")
+                code = str(application).lstrip("#") if application else None
+            if code:
+                yield code
+
+    return SdaConditionPlan(
+        device_did=next(
+            (str(node.get("deviceId")) for node in subtree if node.get("deviceId")),
+            None,
+        ),
+        service_code=str(selected.get("serviceCode") or SDA_CONDITION_SERVICE),
+        command_code=str(selected.get("commandCode") or SDA_CONDITION_COMMAND),
+        property_codes=_unique_strings(_candidate_codes()),
+        strategy_codes=_unique_strings(
+            node.get("strategyCode") for node in subtree
+        ),
+        strategy_ids=_unique_strings(node.get("strategyId") for node in subtree),
+    )
 
 
 def _first_string(source: Mapping[str, Any], keys: tuple[str, ...]) -> Optional[str]:
@@ -410,6 +558,45 @@ class MqttTopics:
     @property
     def did(self) -> Optional[str]:
         return self.device_did or self.login_did
+
+
+@dataclass(frozen=True)
+class SdaConditionPlan:
+    """SDA condition request plan derived from the CA function tree."""
+
+    device_did: Optional[str] = None
+    service_code: str = SDA_CONDITION_SERVICE
+    command_code: str = SDA_CONDITION_COMMAND
+    property_codes: tuple[str, ...] = ()
+    strategy_codes: tuple[str, ...] = ()
+    strategy_ids: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Serialize the plan for diagnostics."""
+        return {
+            "device_did": self.device_did,
+            "service_code": self.service_code,
+            "command_code": self.command_code,
+            "property_codes": list(self.property_codes),
+            "strategy_codes": list(self.strategy_codes),
+            "strategy_ids": list(self.strategy_ids),
+        }
+
+
+@dataclass(frozen=True)
+class MqttExchangeResult:
+    """Raw parameters of one MQTT condition exchange plus its provenance.
+
+    ``source`` names the condition service that produced the parameters
+    (``sda-mqtt``, ``sda-mqtt-signal-list``, ``legacy-mqtt`` or ``None``), and
+    ``variants`` keeps the raw parameters of every request variant that was
+    attempted, empty entries included, for diagnostics.
+    """
+
+    params: dict[str, Any]
+    source: Optional[str] = None
+    variants: dict[str, dict[str, Any]] = field(default_factory=dict)
+    plan: Optional[SdaConditionPlan] = None
 
 
 def _config_topic_entries(config: Any) -> list[tuple[str, Optional[str], Optional[str]]]:
@@ -691,6 +878,62 @@ def condition_request_payload(
         "dt": iso_now(),
         "b": _filter_basic_info(identifiers),
         "sers": aes_cbc_encrypt(services, secret_key, req_id),
+    }
+    _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
+    return payload
+
+
+def sda_condition_request_payload(
+    device_did: str,
+    login_did: str,
+    secret_key: str,
+    req_id: str,
+    basic_info: Optional[Mapping[str, Any]] = None,
+    *,
+    condition_query_type: int = 0,
+    signal_list: Optional[list[str]] = None,
+    service_code: str = SDA_CONDITION_SERVICE,
+    command_code: str = SDA_CONDITION_COMMAND,
+    strategy_code: Optional[str] = None,
+    strategy_id: Optional[str] = None,
+    rt: Optional[str] = "",
+    ms: Optional[int] = None,
+    st: Optional[int] = None,
+    time_type: Optional[int] = None,
+) -> dict[str, Any]:
+    """Build the MQTT ``properties/get/req`` message with the SDA condition service.
+
+    The 1.12.0 app builds the SDA request from the VOT service DTO
+    (``CarConditionCmdConstant``): ``service_code`` ``CarCondition``,
+    ``command_code`` ``Get_CarCondition`` and a ``params`` object with
+    ``ConditionQueryType`` plus an optional ``SignalList``. When the function
+    tree provides service/command/strategy values, they replace the defaults.
+    """
+    params: dict[str, Any] = {"ConditionQueryType": condition_query_type}
+    if signal_list:
+        params["SignalList"] = list(signal_list)
+    service: dict[str, Any] = {
+        "service_code": service_code,
+        "command_code": command_code,
+        "params": params,
+    }
+    if strategy_code:
+        service["strategy_code"] = strategy_code
+    if strategy_id:
+        service["strategy_id"] = strategy_id
+    identifiers = dict(basic_info or {})
+    identifiers.setdefault("ruid", login_did)
+    payload: dict[str, Any] = {
+        "did": device_did,
+        "r": req_id,
+        "v": "v1.0.0",
+        "mt": "properties",
+        "e": 1,
+        "z": "gzip",
+        "tf": 0,
+        "dt": iso_now(),
+        "b": _filter_basic_info(identifiers),
+        "sers": aes_cbc_encrypt([service], secret_key, req_id),
     }
     _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
     return payload
@@ -1038,3 +1281,145 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
 def unmapped_s05_keys(params: dict[str, Any]) -> set[str]:
     """Return the S05 parameter keys that no model field consumes."""
     return set(params) - MAPPED_S05_KEYS
+
+
+def _sda_value(params: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = params.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _sda_status(value: Any, closed_value: int) -> int:
+    """Map an SDA status signal to 1 (open/unlocked) or 0 (closed/locked)."""
+    parsed = _as_int(value)
+    if parsed is None:
+        return 0
+    return 0 if parsed == closed_value else 1
+
+
+def _sda_lock(value: Any) -> Optional[int]:
+    """Map an SDA lock signal to the REST convention (0 = locked).
+
+    The E07 reports ``2`` while the car is locked (same convention as the
+    ``2`` closed state), so only that value means locked; ``1`` is unlocked and
+    missing values stay unknown.
+    """
+    parsed = _as_int(value)
+    if parsed is None:
+        return None
+    return 0 if parsed == 2 else 1
+
+
+def _sda_tenths(value: Any) -> Optional[float]:
+    parsed = _as_float(value)
+    return parsed * 10 if parsed is not None else None
+
+
+def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """Map the flat SDA condition signals into the shared nested condition shape.
+
+    The SDA REST condition (``getCarConditionByCarId``) returns a flat object
+    with SDA-specific names (for example ``BcuSocDisp``, ``VcuResiMilg``,
+    ``CdcTotMilg``, ``DrvrDoorSts``). The mapping follows the values seen in
+    the official app trace for an E07: status ``2`` means closed, lock ``1``
+    means locked, window positions are percentages with ``0`` closed.
+    Unmapped keys stay in the raw payload for diagnostics.
+    """
+    soc = _as_int(_sda_value(params, "VIUSocDisp"))
+    if soc is None:
+        raw_soc = _as_float(_sda_value(params, "BcuSocDisp"))
+        soc = round(raw_soc) if raw_soc is not None else None
+
+    ac_connected = _as_int(_sda_value(params, "AcChrgCnctrSts"))
+    dc_connected = _as_int(_sda_value(params, "DcChrgCnctrSts"))
+    connected = (
+        1
+        if (ac_connected not in (None, 0) or dc_connected not in (None, 0))
+        else 0
+    )
+
+    return {
+        "vehicleStatus": {
+            "soc": soc,
+            "drvMileage": _as_int(_sda_value(params, "VcuResiMilg")),
+            "totalMileage": _as_float(_sda_value(params, "CdcTotMilg")),
+            "speed": _as_float(_sda_value(params, "EspVehSpd")),
+            "engineSts": _as_int(_sda_value(params, "VcuRdySts")),
+            "powerStatus": _as_int(_sda_value(params, "BcmPwrStsFb")),
+            "steeringWheelHeater": _as_int(_sda_value(params, "SteeringHeat")),
+        },
+        "charge": {
+            "chargeStatus": _as_int(_sda_value(params, "BcuChrgSts")),
+            "chargeConStatus": connected,
+            "dcChargeGunConnectStatus": dc_connected,
+            "chargeCurrent": _as_float(_sda_value(params, "BcuBattI")),
+            "acChargeCurrent": _as_float(_sda_value(params, "ObcChrgInpAcIL1")),
+            "dcChargeCurrent": _as_float(_sda_value(params, "ObcChrgDcI")),
+            "remainChargeTime": _as_charge_time(
+                _sda_value(params, "BcuChrgTiDisp")
+            ),
+            "maxSocPercent": _as_int(_sda_value(params, "TboxSocChrgTarSet")),
+        },
+        "door": {
+            "doors": [
+                _sda_status(_sda_value(params, "DrvrDoorSts"), 2),
+                _sda_status(_sda_value(params, "PassDoorSts"), 2),
+                _sda_status(_sda_value(params, "LeReDoorSts"), 2),
+                _sda_status(_sda_value(params, "RiReDoorSts"), 2),
+            ],
+            "trunk": _sda_status(_sda_value(params, "ObjStTypePLGDoorSt"), 2),
+            "hood": _sda_status(_sda_value(params, "FrtGateSts"), 2),
+            "driverLock": _sda_lock(_sda_value(params, "DrvrDoorLockLogicSts")),
+            "passengerLock": _sda_lock(
+                _sda_value(params, "PassDoorLockLogicSts")
+            ),
+        },
+        "window": {
+            "windows": [
+                _as_int(_sda_value(params, "DrvrWinPos")),
+                _as_int(_sda_value(params, "PassWinPos")),
+                _as_int(_sda_value(params, "LeReWinPos")),
+                _as_int(_sda_value(params, "RiReWinPos")),
+            ],
+        },
+        "hvac": {
+            "insideTemp": _sda_tenths(_sda_value(params, "ITMSAcIntT")),
+            "remoteTemp": _sda_tenths(_sda_value(params, "ITMSDrvrAutT")),
+            "acStatus": _as_int(_sda_value(params, "ITMSACOnOff")),
+            "insidePm25": _as_float(_sda_value(params, "ITMSPm25InCarDens")),
+            "insideAirQualityLevel": _as_int(
+                _sda_value(params, "ITMSAirQlyInCarLvl")
+            ),
+            "defrostStatus": _as_int(_sda_value(params, "ITMSFrntDefroster")),
+        },
+        "seat": {
+            "leftFront": {
+                "heatStatus": _as_int(_sda_value(params, "DrHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "DrVentGear")),
+            },
+            "rightFront": {
+                "heatStatus": _as_int(_sda_value(params, "PsgHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "PsgVentGear")),
+            },
+            "leftBack": {
+                "heatStatus": _as_int(_sda_value(params, "RearLeHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "RearLeVentGear")),
+            },
+            "rightBack": {
+                "heatStatus": _as_int(_sda_value(params, "RearRiHeatGear")),
+                "ventStatus": _as_int(_sda_value(params, "RearRiVentGear")),
+            },
+        },
+        "lamp": {
+            "highBeam": max(
+                _as_int(_sda_value(params, "HCM_LeHiBeSt")) or 0,
+                _as_int(_sda_value(params, "HCM_RiHiBeSt")) or 0,
+            ),
+            "lowBeam": max(
+                _as_int(_sda_value(params, "HCM_LeLoBeSt")) or 0,
+                _as_int(_sda_value(params, "HCM_RiLoBeSt")) or 0,
+            ),
+        },
+    }

@@ -79,6 +79,7 @@ COUNTRY_OPTIONS = {
     "CH": "Switzerland (+41)",
     "AT": "Austria (+43)",
     "IL": "Israel (+972)",
+    "AU": "Australia (+61)",
 }
 
 COUNTRY_DIAL_CODES = {
@@ -96,7 +97,21 @@ COUNTRY_DIAL_CODES = {
     "CH": "41",
     "AT": "43",
     "IL": "972",
+    "AU": "61",
 }
+
+
+def _environment_selector() -> selector.SelectSelector:
+    """Return the regional environment dropdown."""
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(value=environment.id, label=environment.label)
+                for environment in INTL_ENVIRONMENTS.values()
+            ],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
 
 
 def _login_error(err: DeepalError) -> str:
@@ -248,10 +263,17 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="intl_method", data_schema=schema)
 
-    def _intl_login_client(self, country: str) -> DeepalIntlClient:
+    def _intl_login_client(
+        self, country: str, environment: str | None = None
+    ) -> DeepalIntlClient:
         """Build a client reusing the reauth entry identity, when present."""
         return DeepalIntlClient(
             country=country,
+            environment=(
+                environment
+                or self._reauth_identity.get(CONF_ENVIRONMENT)
+                or DEFAULT_ENVIRONMENT
+            ),
             device_id=self._reauth_identity.get(CONF_DEVICE_ID),
             private_key_pem=self._reauth_identity.get(CONF_PRIVATE_KEY),
             public_key=self._reauth_identity.get(CONF_PUBLIC_KEY),
@@ -264,8 +286,9 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             country = user_input.get(CONF_COUNTRY, DEFAULT_COUNTRY)
+            environment = user_input.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT)
             email = str(user_input[CONF_EMAIL]).strip()
-            client = self._intl_login_client(country)
+            client = self._intl_login_client(country, environment)
             try:
                 await client.request_email_code(email)
             except DeepalError as err:
@@ -274,6 +297,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._pending_login = {
                     CONF_COUNTRY: country,
+                    CONF_ENVIRONMENT: environment,
                     CONF_EMAIL: email,
                     CONF_LOGIN_METHOD: LOGIN_METHOD_EMAIL,
                 }
@@ -286,6 +310,12 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): vol.In(
                     COUNTRY_OPTIONS
                 ),
+                vol.Optional(
+                    CONF_ENVIRONMENT,
+                    default=self._reauth_identity.get(
+                        CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                    ),
+                ): _environment_selector(),
                 vol.Required(CONF_EMAIL): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.EMAIL)
                 ),
@@ -302,7 +332,10 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             info = self._pending_login
-            client = self._intl_login_client(info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
+            client = self._intl_login_client(
+                info.get(CONF_COUNTRY, DEFAULT_COUNTRY),
+                info.get(CONF_ENVIRONMENT),
+            )
             try:
                 token = await client.login_with_email_code(
                     info[CONF_EMAIL],
@@ -333,9 +366,10 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             country = user_input.get(CONF_COUNTRY, DEFAULT_COUNTRY)
+            environment = user_input.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT)
             mobile = str(user_input[CONF_PHONE]).strip()
             dial_code = COUNTRY_DIAL_CODES[country]
-            client = self._intl_login_client(country)
+            client = self._intl_login_client(country, environment)
             try:
                 await client.request_sms_code(mobile, dial_code)
             except DeepalError as err:
@@ -344,6 +378,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._pending_login = {
                     CONF_COUNTRY: country,
+                    CONF_ENVIRONMENT: environment,
                     CONF_PHONE: mobile,
                     "dial_code": dial_code,
                     CONF_LOGIN_METHOD: LOGIN_METHOD_PHONE,
@@ -357,6 +392,12 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): vol.In(
                     COUNTRY_OPTIONS
                 ),
+                vol.Optional(
+                    CONF_ENVIRONMENT,
+                    default=self._reauth_identity.get(
+                        CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                    ),
+                ): _environment_selector(),
                 vol.Required(CONF_PHONE): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.TEL)
                 ),
@@ -373,7 +414,10 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             info = self._pending_login
-            client = self._intl_login_client(info.get(CONF_COUNTRY, DEFAULT_COUNTRY))
+            client = self._intl_login_client(
+                info.get(CONF_COUNTRY, DEFAULT_COUNTRY),
+                info.get(CONF_ENVIRONMENT),
+            )
             try:
                 token = await client.login_with_sms_code(
                     info[CONF_PHONE],
@@ -444,6 +488,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_DEVICE_ID: client.device_id,
             CONF_VEHICLE_ID: vehicle.car_id,
             CONF_COUNTRY: info.get(CONF_COUNTRY, DEFAULT_COUNTRY),
+            CONF_ENVIRONMENT: info.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),
             CONF_EMAIL: info.get(CONF_EMAIL, ""),
             CONF_PHONE: info.get(CONF_PHONE, ""),
         }
@@ -477,6 +522,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_ID: data_updates[CONF_DEVICE_ID],
                 CONF_VEHICLE_ID: data_updates[CONF_VEHICLE_ID],
                 CONF_COUNTRY: data_updates[CONF_COUNTRY],
+                CONF_ENVIRONMENT: data_updates[CONF_ENVIRONMENT],
                 CONF_EMAIL: data_updates[CONF_EMAIL],
                 CONF_PHONE: data_updates[CONF_PHONE],
                 CONF_CONTROL_PIN: "",
@@ -492,6 +538,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_ID: entry_data.get(CONF_DEVICE_ID),
                 CONF_PRIVATE_KEY: entry_data.get(CONF_PRIVATE_KEY),
                 CONF_PUBLIC_KEY: entry_data.get(CONF_PUBLIC_KEY),
+                CONF_ENVIRONMENT: entry_data.get(CONF_ENVIRONMENT),
             }
             return await self.async_step_intl_method()
         return await self.async_step_sda_reauth()
@@ -564,8 +611,7 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
             self.config_entry.runtime_data.coordinator.client,
         )
 
-    @staticmethod
-    def _options_schema(options: Any) -> vol.Schema:
+    def _options_schema(self, options: Any) -> vol.Schema:
         """Build the options schema with the stored values as defaults."""
         return vol.Schema(
             {
@@ -594,17 +640,12 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 ): bool,
                 vol.Optional(
                     CONF_ENVIRONMENT,
-                    default=options.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(
-                                value=environment.id, label=environment.label
-                            )
-                            for environment in INTL_ENVIRONMENTS.values()
-                        ],
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
+                    default=(
+                        options.get(CONF_ENVIRONMENT)
+                        or self.config_entry.data.get(
+                            CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                        )
+                    ),
+                ): _environment_selector(),
             }
         )

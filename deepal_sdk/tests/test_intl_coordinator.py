@@ -51,6 +51,10 @@ class _FakeIntlClient(DeepalIntlClient):
         self.refresh_calls = 0
         self.wake_calls = 0
         self.wake_error: Exception | None = None
+        self.mqtt_condition: VehicleCondition | None = None
+        self.mqtt_sda_flags: list[bool] = []
+        self.sda_rest_condition: VehicleCondition | None = None
+        self.sda_rest_calls = 0
 
     async def wake_vehicle(self, vehicle_id: str) -> None:
         self.events.append("wake")
@@ -59,10 +63,21 @@ class _FakeIntlClient(DeepalIntlClient):
             raise self.wake_error
 
     async def s05_mqtt_condition(
+        self, vehicle_id: str, vin: str | None = None, *, sda: bool = False
+    ) -> VehicleCondition:
+        self.mqtt_sda_flags.append(sda)
+        self.events.append("mqtt_condition")
+        if self.mqtt_condition is not None:
+            return self.mqtt_condition
+        return await self.get_vehicle_condition(vehicle_id, vin=vin)
+
+    async def get_sda_vehicle_condition(
         self, vehicle_id: str, vin: str | None = None
     ) -> VehicleCondition:
-        self.events.append("mqtt_condition")
-        return await self.get_vehicle_condition(vehicle_id, vin=vin)
+        self.sda_rest_calls += 1
+        if self.sda_rest_condition is None:
+            raise DeepalAPIError("SDA REST condition unavailable")
+        return self.sda_rest_condition
 
     async def refresh_tokens(self, force: bool = False) -> AuthToken:
         self.refresh_calls += 1
@@ -124,6 +139,7 @@ def _coordinator(
     coordinator._last_wake_at = {}
     coordinator._wake_poll_interval = 0.01
     coordinator._wake_report_timeout = 0.1
+    coordinator._mqtt_attempts = {}
     coordinator.entry = SimpleNamespace(
         data={
             CONF_ACCESS_TOKEN: "test_token_123",
@@ -949,6 +965,116 @@ async def test_app_comfort_overlay_uses_server_condition():
 
 
 @pytest.mark.asyncio
+async def test_condition_uses_sda_service_for_sda_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="sda-mqtt"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == [True]
+    assert condition.condition_source == "sda-mqtt"
+
+
+@pytest.mark.asyncio
+async def test_condition_uses_legacy_service_for_mqtt_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")]
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="legacy-mqtt"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == [False]
+    assert condition.condition_source == "legacy-mqtt"
+
+
+@pytest.mark.asyncio
+async def test_condition_marks_the_rest_source():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="REST")]
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.mqtt_sda_flags == []
+    assert condition.condition_source == "rest"
+
+
+@pytest.mark.asyncio
+async def test_condition_falls_back_to_sda_rest_for_sda_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        raise DeepalAPIError("MQTT unavailable")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = VehicleCondition(
+        car_id="car-1", vin="VIN", condition_source="sda-rest"
+    )
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.sda_rest_calls == 1
+    assert condition.condition_source == "sda-rest"
+
+
+@pytest.mark.asyncio
+async def test_condition_falls_back_to_intl_rest_when_sda_rest_fails():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        raise DeepalAPIError("MQTT unavailable")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = None
+    client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
+
+    condition = await coordinator._async_fetch_condition("car-1")
+
+    assert client.sda_rest_calls == 1
+    assert condition.condition_source == "rest"
+
+
+@pytest.mark.asyncio
+async def test_failed_mqtt_exchange_is_kept_for_diagnostics():
+    from deepal.mqtt import MqttExchangeResult, SdaConditionPlan
+
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [Vehicle(car_id="car-1", vin="VIN", protocol_type="SDA-MQTT")]
+
+    async def fail_mqtt(vehicle_id, vin=None, *, sda=False):
+        client.last_mqtt_exchange = MqttExchangeResult(
+            params={},
+            source=None,
+            variants={"sda-mqtt": {}, "sda-mqtt-sections": {}},
+            plan=SdaConditionPlan(device_did="plan-did"),
+        )
+        raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
+
+    client.s05_mqtt_condition = fail_mqtt
+    client.sda_rest_condition = None
+    client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
+
+    await coordinator._async_fetch_condition("car-1")
+
+    attempt = coordinator.mqtt_attempt("car-1")
+    assert attempt is not None
+    assert attempt["variants"] == {"sda-mqtt": {}, "sda-mqtt-sections": {}}
+    assert attempt["plan"]["device_did"] == "plan-did"
+
+
+@pytest.mark.asyncio
 async def test_merge_condition_retains_last_valid_seat_levels():
     client = _FakeIntlClient([])
     previous = VehicleCondition(car_id="car-1", vin="")
@@ -1143,6 +1269,26 @@ async def test_refresh_wakes_stale_mqtt_vehicle():
     assert client.events == ["wake", "mqtt_condition", "condition"]
     assert client.wake_calls == 1
     assert "car-1" in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_wake_sda_mqtt_vehicle():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle(protocol="SDA-MQTT")]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.wake_calls == 0
+    assert client.events == []
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,11 @@ def _build_client(entry: DeepalConfigEntry) -> DeepalClient | DeepalIntlClient:
     if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
         client = DeepalIntlClient(
             country=entry.data.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
-            environment=entry.options.get(CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT),
+            environment=(
+                entry.options.get(CONF_ENVIRONMENT)
+                or entry.data.get(CONF_ENVIRONMENT)
+                or DEFAULT_ENVIRONMENT
+            ),
             enable_api_logging=bool(
                 entry.options.get(CONF_ENABLE_API_LOGGING, False)
             ),
