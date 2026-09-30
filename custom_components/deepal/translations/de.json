@@ -115,14 +115,14 @@
         "data": {
           "scan_interval": "Abfrageintervall (Sekunden)",
           "control_pin": "Fernsteuerungs-PIN",
-          "enable_api_logging": "Redigierten API-Verkehr protokollieren",
+          "enable_api_logging": "API-Verkehr protokollieren",
           "environment": "Regionale Umgebung"
         },
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
         "data_description": {
           "scan_interval": "Wie oft Home Assistant das Fahrzeug abfragt, wenn keine MQTT-Telemetrie verfügbar ist, in Sekunden (30-3600).",
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
-          "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit redigierten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
+          "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit ausgeblendeten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
         }
       }

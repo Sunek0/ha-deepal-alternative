@@ -46,7 +46,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   fields.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
-- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity.
+- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - One Home Assistant device per vehicle, with translated entity names.
 
 ### Vehicle wake
