@@ -46,9 +46,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   fields.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
-- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity); the
-  entities are only created when the vehicle reports the fuel capability and its model is not a
-  BEV, so electric vehicles keep their current entity set.
+- Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity.
 - One Home Assistant device per vehicle, with translated entity names.
 
 ### Vehicle wake
@@ -68,7 +66,6 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - Every command-capable international vehicle, MQTT-backed S05 included, sends these commands
   through the same signed flow.
-- On the S05 the charge limit number is not created because the car does not support it.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
   integration options. The PIN is verified against the account when it is saved, so an invalid one,
