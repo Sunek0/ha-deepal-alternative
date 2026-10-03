@@ -27,7 +27,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | --- | --- |
 | S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
-| E07 | Only tested on SDA API. Telemetry and signed remote controls through the REST API. |
+| E07 | Only tested on SDA API. Telemetry through the REST API. Only supported in 1.4.0-beta releases |
 
 ## Supported features
 
