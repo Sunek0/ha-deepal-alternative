@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "Erneute Anmeldung für MQTT-Telemetrie erforderlich",
-      "description": "Die gespeicherte Sitzung für {name} enthält keine Konto-Benutzer-ID, daher ist die MQTT-Telemetrie deaktiviert und die Integration weicht auf den REST-Zustandsendpunkt mit veralteten Daten aus. Melde dich erneut an, um die MQTT-Telemetrie wiederherzustellen.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Erneut anmelden",
-            "description": "Startet den erneuten Anmeldevorgang für dieses Konto. Der Hinweis verschwindet, sobald die neue Sitzung die Benutzer-ID enthält."
+            "description": "Die gespeicherte Sitzung enthält keine Konto-Benutzer-ID, daher ist die MQTT-Telemetrie deaktiviert und die Integration weicht auf den REST-Zustandsendpunkt mit veralteten Daten aus. Starte den erneuten Anmeldevorgang für dieses Konto; der Hinweis verschwindet, sobald die neue Sitzung die Benutzer-ID enthält."
           }
         }
       }

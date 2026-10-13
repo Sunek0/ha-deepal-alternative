@@ -1383,6 +1383,27 @@ def test_sms_step_warns_about_the_delivery_failure() -> None:
     assert "email" in description
 
 
+def test_repair_issue_translations_are_fixable_or_described() -> None:
+    """An issue entry accepts a description or a fix_flow, never both.
+
+    hassfest builds two exclusive groups that share the "fixable" key, so the
+    three keys end up in one exclusion group: an issue carrying a description
+    and a fix_flow fails the translation check and hassfest rejects the file.
+    """
+    paths = [INTEGRATION_DIR / "strings.json"] + sorted(
+        (INTEGRATION_DIR / "translations").glob("*.json")
+    )
+
+    for path in paths:
+        issues = json.loads(path.read_text(encoding="utf-8")).get("issues", {})
+        for key, node in issues.items():
+            assert "title" in node, (path.name, key)
+            has_description = "description" in node
+            has_fix_flow = "fix_flow" in node
+            assert has_description or has_fix_flow, (path.name, key)
+            assert not (has_description and has_fix_flow), (path.name, key)
+
+
 def test_readme_documents_removal_and_automation_examples() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 

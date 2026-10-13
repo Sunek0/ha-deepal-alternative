@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "É necessário autenticar de novo para a telemetria MQTT",
-      "description": "A sessão guardada de {name} não tem o id de utilizador da conta, por isso a telemetria MQTT está desativada e a integração recorre ao endpoint REST com dados desatualizados. Autentica-te de novo para restaurar a telemetria MQTT.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Autenticar de novo",
-            "description": "Inicia o fluxo de autenticação desta conta. O aviso desaparece quando a nova sessão incluir o id de utilizador."
+            "description": "A sessão guardada não tem o id de utilizador da conta, por isso a telemetria MQTT está desativada e a integração recorre ao endpoint REST com dados desatualizados. Inicia o fluxo de autenticação desta conta; o aviso desaparece quando a nova sessão incluir o id de utilizador."
           }
         }
       }

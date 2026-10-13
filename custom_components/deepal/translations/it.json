@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "Autenticazione necessaria per la telemetria MQTT",
-      "description": "La sessione salvata per {name} non ha l'id utente dell'account, quindi la telemetria MQTT è disattivata e l'integrazione ripiega sull'endpoint REST con dati obsoleti. Autenticati di nuovo per ripristinare la telemetria MQTT.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Autenticati di nuovo",
-            "description": "Avvia il flusso di autenticazione per questo account. L'avviso scompare quando la nuova sessione fornisce l'id utente."
+            "description": "La sessione salvata non ha l'id utente dell'account, quindi la telemetria MQTT è disattivata e l'integrazione ripiega sull'endpoint REST con dati obsoleti. Avvia il flusso di autenticazione per questo account; l'avviso scompare quando la nuova sessione fornisce l'id utente."
           }
         }
       }

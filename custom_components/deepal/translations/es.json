@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "Se necesita volver a autenticar para la telemetría MQTT",
-      "description": "La sesión guardada de {name} no tiene el id de usuario de la cuenta, por lo que la telemetría MQTT está deshabilitada y la integración recurre al endpoint REST de condición con datos obsoletos. Vuelve a autenticarte para restaurar la telemetría MQTT.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Volver a autenticar",
-            "description": "Inicia el flujo de reautenticación de esta cuenta. El aviso desaparece cuando la nueva sesión incluye el id de usuario."
+            "description": "La sesión guardada no tiene el id de usuario de la cuenta, por lo que la telemetría MQTT está deshabilitada y la integración recurre al endpoint REST de condición con datos obsoletos. Inicia el flujo de reautenticación de esta cuenta; el aviso desaparece cuando la nueva sesión incluye el id de usuario."
           }
         }
       }

@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "Ré-authentification requise pour la télémétrie MQTT",
-      "description": "La session enregistrée pour {name} n'a pas d'identifiant utilisateur de compte ; la télémétrie MQTT est donc désactivée et l'intégration se rabat sur le point de terminaison REST avec des données obsolètes. Ré-authentifiez-vous pour restaurer la télémétrie MQTT.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Se ré-authentifier",
-            "description": "Démarre le flux de ré-authentification de ce compte. Le problème disparaît dès que la nouvelle session fournit l'identifiant utilisateur."
+            "description": "La session enregistrée n'a pas d'identifiant utilisateur de compte ; la télémétrie MQTT est donc désactivée et l'intégration se rabat sur le point de terminaison REST avec des données obsolètes. Démarre le flux de ré-authentification de ce compte ; le problème disparaît dès que la nouvelle session fournit l'identifiant utilisateur."
           }
         }
       }

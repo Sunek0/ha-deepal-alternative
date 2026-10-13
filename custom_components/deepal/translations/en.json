@@ -46,12 +46,11 @@
   "issues": {
     "mqtt_user_id_missing": {
       "title": "Re-authentication needed for MQTT telemetry",
-      "description": "The stored session for {name} has no account user id, so MQTT telemetry is disabled and the integration falls back to the REST condition endpoint with stale data. Re-authenticate to restore MQTT telemetry.",
       "fix_flow": {
         "step": {
           "init": {
             "title": "Re-authenticate",
-            "description": "Start the re-authentication flow for this account. The repair disappears once the new session provides the user id."
+            "description": "The stored session has no account user id, so MQTT telemetry is disabled and the integration falls back to the REST condition endpoint with stale data. Start the re-authentication flow for this account; the repair disappears once the new session provides the user id."
           }
         }
       }
