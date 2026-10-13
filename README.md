@@ -27,25 +27,32 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | --- | --- |
 | S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
-| E07 | Only tested on SDA API. Telemetry through the REST API. Only supported in 1.4.0-beta releases |
+| E07 | Only tested on SDA API. Telemetry through the REST API. Only supported in 1.4.0-beta releases. |
 
 ## Supported features
 
 ### Authentication and session
 
 - Email-code and SMS-code login on the international platform, with automatic token refresh and a
-  reauthentication flow.
+  reauthentication flow. If a verification code does not arrive, the login step can resend it or
+  correct the destination; Changan is currently not delivering SMS codes, so the email method is
+  recommended.
 - Integration options for the scan interval, API logging and the regional environment.
 
 ### Telemetry
 
 - REST telemetry: battery and range, charging state and currents, remaining charge time (numeric
   minutes and a `H:MM` sensor for dashboards), charge limit, charge schedule and plan, doors,
-  windows, climate, seats, tires and lamps.
+  windows, climate, seats, tires and lamps. The charging sensor also exposes the tracked
+  `current_charge` and `last_charge` sessions (start and end time, battery level and range).
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
-  fields.
+  fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
+  brakes, power steering, power limit, power system, traction battery low and coolant temperature),
+  the key fob battery, the air recirculation state and the rear fog lamp.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
+- Climate target temperature and fan level, the license plate and per-window opening-degree sensors
+  (the opening sensors ship disabled by default because the scale is not confirmed).
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - One Home Assistant device per vehicle, with translated entity names.
 
@@ -61,8 +68,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 ### Remote controls
 
-- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights
-  and horn.
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights,
+  horn and lights-and-horn together.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - Every command-capable international vehicle, MQTT-backed S05 included, sends these commands
   through the same signed flow.
@@ -72,9 +79,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   or one created with another account, is rejected instead of stored.
 - When the car is asleep, the PIN commands wake it first: the first attempt can take up to 20
   seconds while the vehicle wakes up and reports before the command is sent.
-- Flashing the lights and sounding the horn make the car run a physical cycle (about 30 s and 6 s);
-  repeating them sooner shows how many seconds to wait instead of sending the command and being
-  rejected by the vehicle. Climate, seat and steering wheel changes have no such wait.
+- Flashing the lights, sounding the horn and the combined lights-and-horn button make the car run a
+  physical cycle (about 30 s, 6 s and 30 s respectively); repeating them sooner shows how many
+  seconds to wait instead of sending the command and being rejected by the vehicle. Climate, seat
+  and steering wheel changes have no such wait.
 
 ### Vehicle image
 
@@ -85,7 +93,9 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 ### Diagnostics
 
 - Redacted diagnostics download with the mapped telemetry, the raw payloads, the unmapped MQTT
-  keys and the per-vehicle capability codes reported by the app backend.
+  keys and the per-vehicle capability codes reported by the app backend. Credentials, personal
+  identifiers, location values and the device id embedded in MQTT topics are redacted at any
+  nesting depth, without distinguishing letter case.
 
 ## Recommended setup: use a secondary account
 
@@ -141,7 +151,52 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
 - **Scan interval**, **API logging** and **regional environment**: polling cadence and
-  troubleshooting helpers. Leave the defaults unless you are debugging.
+  troubleshooting helpers. Leave the defaults unless you are debugging. Every cycle reads each
+  vehicle over MQTT plus the app condition, so an account with several cars can raise the interval
+  (for example to 5 minutes) to make fewer cloud requests.
+
+## Automation examples
+
+The examples below use entities the integration creates for every command-capable vehicle. Entity
+ids follow your vehicle name, so adjust them before copying (the ones below assume a vehicle named
+`Deepal S05`); the examples only call entities the integration provides.
+
+Notify when the car starts charging:
+
+```yaml
+automation:
+  - alias: "Deepal charging started"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.deepal_s05_charging
+        from: "off"
+        to: "on"
+    actions:
+      - action: notify.mobile_app_your_phone
+        data:
+          title: "Deepal"
+          message: "Charging started."
+```
+
+Lock the doors when the driver door stays unlocked for five minutes:
+
+```yaml
+automation:
+  - alias: "Deepal doors left unlocked"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.deepal_s05_driver_door_unlocked
+        to: "on"
+        for: "00:05:00"
+    actions:
+      - action: lock.lock
+        target:
+          entity_id: lock.deepal_s05_doors
+      - action: notify.mobile_app_your_phone
+        data:
+          title: "Deepal"
+          message: "The doors were unlocked; locking them now."
+```
 
 ## Troubleshooting
 
@@ -153,6 +208,9 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
   PIN (step 4 above) and save it again in the integration options.
 - **Home Assistant asks to reauthenticate**: the session was invalidated from the app or another
   device. Sign in again; using the secondary account avoids most of these.
+- **The login verification code does not arrive**: the login step offers resending the code and
+  correcting the email or mobile number without restarting. Changan is currently not delivering SMS
+  codes (verified against the official app with the same account), so use the email method.
 - **Values look stale**: the vehicle only reports telemetry while it is awake; use the refresh
   button to wake an MQTT-backed car (the first PIN command wakes it too), or the integration shows
   the last known snapshot until the car reports again.
@@ -161,6 +219,27 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
+- **SDA vehicle (E07) remote controls or MQTT telemetry misbehave**: remote controls are not
+  supported on the SDA platform yet. For telemetry or MQTT reports, the release ships a capture
+  helper in [`tools/sda-mqtt-capture`](tools/sda-mqtt-capture): it decodes the official app's MQTT
+  frames locally (secrets, plate and location are masked in the log it produces) and its README
+  explains what to send. It is not part of the HACS install and only runs on a computer.
+
+## Removal
+
+1. Open **Settings > Devices & services**, select **Deepal Alternative** and delete the integration
+   entry. This removes the vehicle devices and their entities and deletes the stored charging
+   sessions; for international entries the integration also asks the server to log the session out
+   (best effort: a failure never blocks the removal).
+2. Remove the files: with HACS, remove the **Deepal Alternative** repository from HACS; with a
+   manual install, delete the `custom_components/deepal` directory from your configuration.
+3. Restart Home Assistant.
+
+## Credits
+
+The charging-session tracking follows the approach of
+[DEC Deepal](https://github.com/manuelem1984/dec_deepal) (MIT), which documents the same session
+rules.
 
 ## Disclaimer
 

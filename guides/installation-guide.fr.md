@@ -38,8 +38,7 @@ principal continue ainsi de fonctionner normalement sur le téléphone.
 
 1. Ouvrez l'application **My Changan** et créez un nouveau compte avec une adresse e-mail ou un
    numéro de téléphone différent de celui de votre compte principal.
-2. Notez les identifiants (e-mail/téléphone et code d'accès) : ce sont ceux que vous utiliserez dans
-   Home Assistant.
+2. Notez les informations (e-mail/téléphone) : ce sont celles que vous utiliserez dans Home Assistant.
 
 ### 2. Partager le véhicule depuis le compte principal
 
@@ -106,7 +105,9 @@ installé, l'onglet **HACS** apparaît dans la barre latérale de Home Assistant
 5. Remplissez les champs du formulaire :
    - **Pays de vente** : le pays enregistré dans votre compte My Changan (par exemple, l'Espagne).
    - **E-mail** ou **Numéro de mobile** (sans indicatif) du compte **secondaire**.
-6. Attendez le code de vérification (e-mail ou SMS) et saisissez-le dans **Code de vérification**.
+6. Attendez le code de vérification (e-mail ou SMS) et saisissez-le dans **Code de vérification**. S'il
+   n'arrive pas, cette même étape permet de le renvoyer ou de corriger l'e-mail ou le mobile. Changan
+   ne distribue actuellement pas les SMS, la méthode par e-mail est donc préférable.
 7. L'intégration valide le compte et crée un appareil par véhicule. Terminé.
 
 ### 9. Enregistrer le code PIN de contrôle à distance

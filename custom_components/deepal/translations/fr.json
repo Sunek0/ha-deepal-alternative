@@ -1,4 +1,62 @@
 {
+  "exceptions": {
+    "command_failed": {
+      "message": "La commande Deepal a échoué : {error}"
+    },
+    "climate_command_failed": {
+      "message": "La commande de climatisation Deepal a échoué : {error}"
+    },
+    "refresh_command_failed": {
+      "message": "La commande d'actualisation Deepal a échoué : {error}"
+    },
+    "unsupported_hvac_mode": {
+      "message": "Mode de climatisation non pris en charge : {mode}"
+    },
+    "charge_schedule_unavailable": {
+      "message": "Le programme de charge Deepal n'est pas disponible"
+    },
+    "commands_require_international": {
+      "message": "Les commandes à distance nécessitent la plateforme internationale"
+    },
+    "wake_requires_international": {
+      "message": "Le réveil à distance nécessite la plateforme internationale"
+    },
+    "wake_no_fresh_report": {
+      "message": "Le véhicule n'a pas signalé de nouvelles données après la demande de réveil ; il est peut-être hors ligne ou en veille"
+    },
+    "command_still_running": {
+      "message": "Le véhicule termine encore la commande précédente ; attendez {seconds} s avant de la répéter"
+    },
+    "command_queue_busy": {
+      "message": "Une autre commande Deepal pour ce véhicule prend trop de temps ; réessayez dans quelques secondes"
+    },
+    "command_asleep": {
+      "message": "Le véhicule n'a pas accepté la commande ; il ne s'est peut-être pas réveillé ou il est hors ligne. Réessayez lorsqu'il est réveillé."
+    },
+    "command_result_failed": {
+      "message": "La commande Deepal a échoué avec le code de résultat {code} : {message}"
+    },
+    "command_result_failed_power_off": {
+      "message": "La commande Deepal a échoué avec le code de résultat {code} : {message} (le véhicule doit être éteint avant de pouvoir exécuter cette commande)"
+    },
+    "command_result_failed_unreachable": {
+      "message": "La commande Deepal a échoué avec le code de résultat {code} : {message} (le véhicule n'a pas accepté la commande ; il est peut-être hors ligne ou occupé, réessayez lorsqu'il est réveillé)"
+    }
+  },
+  "issues": {
+    "mqtt_user_id_missing": {
+      "title": "Ré-authentification requise pour la télémétrie MQTT",
+      "description": "La session enregistrée pour {name} n'a pas d'identifiant utilisateur de compte ; la télémétrie MQTT est donc désactivée et l'intégration se rabat sur le point de terminaison REST avec des données obsolètes. Ré-authentifiez-vous pour restaurer la télémétrie MQTT.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Se ré-authentifier",
+            "description": "Démarre le flux de ré-authentification de ce compte. Le problème disparaît dès que la nouvelle session fournit l'identifiant utilisateur."
+          }
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -61,7 +119,7 @@
       },
       "intl_phone": {
         "title": "Connexion par SMS",
-        "description": "Sélectionnez le pays de vente et le numéro de mobile national (sans l'indicatif du pays). Home Assistant demandera un code de vérification par SMS.",
+        "description": "Sélectionnez le pays de vente et le numéro de mobile national (sans l'indicatif du pays). Home Assistant demandera un code de vérification par SMS. Changan ne distribue actuellement pas les SMS ; si le SMS n'arrive pas, redemandez le code ou passez à la méthode par e-mail.",
         "data": {
           "country": "Pays de vente",
           "phone": "Numéro de mobile",
@@ -81,6 +139,17 @@
         },
         "data_description": {
           "auth_code": "Code numérique reçu par SMS. Il expire rapidement ; demandez-en un nouveau s'il est refusé."
+        }
+      },
+      "intl_code_menu": {
+        "title": "Code envoyé",
+        "description": "Home Assistant a demandé le code de vérification pour {destination}. Cela peut prendre quelques minutes ; vérifiez aussi les courriers indésirables. S'il n'arrive pas, renvoyez-le ou corrigez la destination.",
+        "menu_options": {
+          "intl_email_code": "Saisir le code reçu par e-mail",
+          "intl_sms_code": "Saisir le code reçu par SMS",
+          "intl_code_resend": "Renvoyer le code",
+          "intl_email_change": "Changer d'e-mail",
+          "intl_sms_change": "Changer de numéro de mobile"
         }
       },
       "sda_reauth": {
@@ -116,6 +185,7 @@
           "scan_interval": "Intervalle d'interrogation (secondes)",
           "control_pin": "Code PIN de contrôle à distance",
           "enable_api_logging": "Journaliser le trafic API",
+          "wake": "Réveiller le véhicule si nécessaire",
           "environment": "Environnement régional"
         },
         "description": "Réglez l'interrogation et les diagnostics. Le code PIN de contrôle active les commandes à distance signées ; les options de diagnostic changent la façon dont l'API voit le client et ne doivent être modifiées qu'en cas de dépannage.",
@@ -123,6 +193,7 @@
           "scan_interval": "Fréquence à laquelle Home Assistant interroge le véhicule lorsqu'aucune télémétrie MQTT n'est disponible, en secondes (30-3600).",
           "control_pin": "Code PIN de contrôle à distance de My Changan. Nécessaire pour verrouiller/déverrouiller, déplacer les vitres ou ouvrir le coffre ; il est échangé contre un jeton qui expire périodiquement et il est redemandé lorsque cela se produit.",
           "enable_api_logging": "Écrit chaque requête et réponse API dans le journal de Home Assistant, avec jetons, clés, VIN, e-mail, téléphone, PIN et numéro de série masqués. À activer uniquement en cas de dépannage.",
+          "wake": "Réveille un véhicule MQTT endormi avant une actualisation ou une commande avec code PIN. Activé par défaut ; désactivez-le pour préserver la batterie 12 V en cas d'actualisations très fréquentes.",
           "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut."
         }
       }
@@ -261,6 +332,27 @@
       },
       "remaining_charge_time_formatted": {
         "name": "Temps de charge restant (H:MM)"
+      },
+      "climate_target_temperature": {
+        "name": "Température cible de la climatisation"
+      },
+      "fan_level": {
+        "name": "Vitesse de ventilation"
+      },
+      "license_plate": {
+        "name": "Plaque d'immatriculation"
+      },
+      "window_opening_front_left": {
+        "name": "Ouverture vitre avant gauche"
+      },
+      "window_opening_front_right": {
+        "name": "Ouverture vitre avant droite"
+      },
+      "window_opening_rear_left": {
+        "name": "Ouverture vitre arrière gauche"
+      },
+      "window_opening_rear_right": {
+        "name": "Ouverture vitre arrière droite"
       }
     },
     "binary_sensor": {
@@ -299,9 +391,6 @@
       },
       "engine": {
         "name": "Moteur"
-      },
-      "defrost": {
-        "name": "Dégivrage avant"
       },
       "connected": {
         "name": "Connexion au cloud"
@@ -374,6 +463,48 @@
       },
       "front_right_seat_ventilation": {
         "name": "Ventilation du siège avant droit"
+      },
+      "key_battery_low": {
+        "name": "Pile de la clé faible"
+      },
+      "air_recirculation": {
+        "name": "Recirculation d'air"
+      },
+      "rear_fog_lamp": {
+        "name": "Feu de brouillard arrière"
+      },
+      "warning_12v_battery": {
+        "name": "Voyant batterie 12 V"
+      },
+      "warning_tpms": {
+        "name": "Voyant pression des pneus"
+      },
+      "warning_abs": {
+        "name": "Voyant ABS"
+      },
+      "warning_airbag": {
+        "name": "Voyant airbag"
+      },
+      "warning_brake_fluid": {
+        "name": "Voyant liquide de frein"
+      },
+      "warning_brake": {
+        "name": "Voyant freins"
+      },
+      "warning_eps": {
+        "name": "Voyant direction assistée"
+      },
+      "warning_power_limit": {
+        "name": "Voyant puissance limitée"
+      },
+      "warning_power_system": {
+        "name": "Voyant système de propulsion"
+      },
+      "warning_traction_battery_low": {
+        "name": "Voyant batterie de traction faible"
+      },
+      "warning_coolant_temperature": {
+        "name": "Voyant température du liquide de refroidissement"
       }
     },
     "button": {
@@ -385,6 +516,9 @@
       },
       "honk_horn": {
         "name": "Klaxonner"
+      },
+      "flash_and_honk": {
+        "name": "Phares et klaxon"
       }
     },
     "climate": {

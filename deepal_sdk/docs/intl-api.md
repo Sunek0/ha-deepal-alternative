@@ -313,6 +313,8 @@ Notes:
 
 - Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
   valid snapshot.
+- `hvac.insideHumidity` from the S05 arrives either as a percentage (`61`) or as tenths of a
+  percent (`453`); values above 100 are divided by ten and anything outside 0-100 becomes unknown.
 - Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.

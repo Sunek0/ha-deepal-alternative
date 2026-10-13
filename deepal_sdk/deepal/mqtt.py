@@ -989,6 +989,19 @@ def _as_int(value: Any) -> Optional[int]:
 # The app reports 8191 in chargDeltMins when it has no remaining-time estimate.
 CHARGE_TIME_SENTINEL = 8191
 
+# S05 charge-connection aliases: the app's AC gun name plus the DC gun names the
+# mapping still accepts (the app writes "dcDhargeGun..." with the typo).
+S05_CHARGE_GUN_KEYS = (
+    "acChargeGunConnectionState",
+    "dcDhargeGunConnectionState",
+    "dcChargeGunConnectionState",
+)
+# S05 DC-gun aliases (the AC gun key is not one of them).
+S05_DC_GUN_KEYS = (
+    "dcDhargeGunConnectionState",
+    "dcChargeGunConnectionState",
+)
+
 
 def _as_charge_time(value: Any) -> Optional[int]:
     """Return remaining charge minutes, mapping the app sentinel to unknown."""
@@ -1005,6 +1018,27 @@ def _as_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    """Return a boolean for zero/non-zero values, ``None`` when absent."""
+    number = _as_int(value)
+    return None if number is None else number != 0
+
+
+def _humidity_percent(value: Any) -> Optional[float]:
+    """Return the cabin humidity as a percentage.
+
+    The S05 reports ``innerHumidity`` either as a percentage (``61``) or as
+    tenths of a percent (``453``) depending on the moment, so a value above 100
+    is divided by ten. Values outside 0 to 100 after that are unknown.
+    """
+    humidity = _as_float(value)
+    if humidity is None:
+        return None
+    if humidity > 100:
+        humidity /= 10
+    return humidity if 0 <= humidity <= 100 else None
 
 
 def _first(params: dict[str, Any], *keys: str) -> Any:
@@ -1067,7 +1101,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
             if _as_float(params.get("vehicleTemperature")) is not None
             else None,
-            "insideHumidity": _as_float(params.get("innerHumidity")),
+            "insideHumidity": _humidity_percent(params.get("innerHumidity")),
             "remoteTemp": _as_float(params.get("airConditioningSetTemperature")) * 10
             if _as_float(params.get("airConditioningSetTemperature")) is not None
             else None,
@@ -1078,14 +1112,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         },
         "charge": {
             "chargeStatus": _as_int(params.get("ChrgSts")),
-            "chargeConStatus": _as_int(
-                _first(
-                    params,
-                    "acChargeGunConnectionState",
-                    "dcDhargeGunConnectionState",
-                    "dcChargeGunConnectionState",
-                )
-            ),
+            "chargeConStatus": _as_int(_first(params, *S05_CHARGE_GUN_KEYS)),
             "acChargeCurrent": _as_float(
                 _first(params, "BattACChrgInCurr", "battACChrgInCurr")
             ),
@@ -1096,13 +1123,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
                 _first(params, "BattACChrgInCurr", "BattDCChrgInCurr")
             ),
             "remainChargeTime": _as_charge_time(params.get("chargDeltMins")),
-            "dcChargeGunConnectStatus": _as_int(
-                _first(
-                    params,
-                    "dcDhargeGunConnectionState",
-                    "dcChargeGunConnectionState",
-                )
-            ),
+            "dcChargeGunConnectStatus": _as_int(_first(params, *S05_DC_GUN_KEYS)),
         },
         "fuel": {
             "leftPercent": _as_int(params.get("remainingFuel")),
@@ -1137,6 +1158,29 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "leftTurn": _as_int(params.get("turnLndicatorLeft")),
             "rightTurn": _as_int(params.get("turnLndicatorRight")),
         },
+        "warningLights": {
+            "battery12v": _as_bool(params.get("batt12VLightStatus")),
+            "tpms": _as_bool(params.get("tpmsLightStatus")),
+            "abs": _as_bool(params.get("absLightStatus")),
+            "airbag": _as_bool(params.get("airBagLightStatus")),
+            "brakeFluid": _as_bool(params.get("brakeFluidLightStatus")),
+            "brake": _as_bool(params.get("brakeLightStatus")),
+            "eps": _as_bool(params.get("epsLightStatus")),
+            "powerLimit": _as_bool(params.get("powerLimitLightStatus")),
+            "powerSystem": _as_bool(params.get("powerSystemLightStatus")),
+            "tractionBatteryLow": _as_bool(params.get("bcuBattSocLightStatus")),
+            "coolantTemperature": _as_bool(
+                params.get("coolanTemperatureLightStatus")
+            ),
+        },
+        "windowOpenings": {
+            "frontLeft": _as_int(params.get("leftAnteriorWindowDegree")),
+            "frontRight": _as_int(params.get("rightAnteriorWindowDegree")),
+            "rearLeft": _as_int(params.get("leftRearWindowDegree")),
+            "rearRight": _as_int(params.get("rightRearWindowDegree")),
+        },
+        "keyBatteryLow": _as_bool(params.get("keyLowPower")),
+        "airRecirculation": _as_bool(params.get("airRecycleStatus")),
         "tire": {
             "leftFront": {
                 "pressure": _as_float(params.get("lfTyrePressure")),
@@ -1252,6 +1296,26 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "rearFoglamp",
         "turnLndicatorLeft",
         "turnLndicatorRight",
+        # Dashboard warning lights and key fob battery
+        "batt12VLightStatus",
+        "tpmsLightStatus",
+        "absLightStatus",
+        "airBagLightStatus",
+        "brakeFluidLightStatus",
+        "brakeLightStatus",
+        "epsLightStatus",
+        "powerLimitLightStatus",
+        "powerSystemLightStatus",
+        "bcuBattSocLightStatus",
+        "coolanTemperatureLightStatus",
+        "keyLowPower",
+        # Air recirculation
+        "airRecycleStatus",
+        # Window opening degrees
+        "leftAnteriorWindowDegree",
+        "rightAnteriorWindowDegree",
+        "leftRearWindowDegree",
+        "rightRearWindowDegree",
         # Tires
         "lfTyrePressure",
         "leftFrontTireTemperature",

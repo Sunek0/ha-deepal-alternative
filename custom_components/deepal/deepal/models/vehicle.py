@@ -193,6 +193,29 @@ class ClimateCondition(BaseModel):
     driver_seat_heating_level: int = 0
 
 
+class WindowOpeningsCondition(BaseModel):
+    """Per-window opening degrees reported over MQTT (scale unconfirmed)."""
+    front_left: Optional[int] = None
+    front_right: Optional[int] = None
+    rear_left: Optional[int] = None
+    rear_right: Optional[int] = None
+
+
+class WarningLightsCondition(BaseModel):
+    """Dashboard warning lights; None when the vehicle did not report them."""
+    battery_12v: Optional[bool] = None
+    tpms: Optional[bool] = None
+    abs: Optional[bool] = None
+    airbag: Optional[bool] = None
+    brake_fluid: Optional[bool] = None
+    brake: Optional[bool] = None
+    eps: Optional[bool] = None
+    power_limit: Optional[bool] = None
+    power_system: Optional[bool] = None
+    traction_battery_low: Optional[bool] = None
+    coolant_temperature: Optional[bool] = None
+
+
 class LampsCondition(BaseModel):
     """Exterior lamp status."""
     high_beam: bool = False
@@ -230,6 +253,16 @@ class VehicleCondition(BaseModel):
     climate: ClimateCondition = Field(default_factory=ClimateCondition)
     tires: TiresCondition = Field(default_factory=TiresCondition)
     lamps: LampsCondition = Field(default_factory=LampsCondition)
+    warnings: WarningLightsCondition = Field(default_factory=WarningLightsCondition)
+    key_battery_low: Optional[bool] = Field(
+        default=None, description="Key fob battery low; None when not reported"
+    )
+    air_recirculation: Optional[bool] = Field(
+        default=None, description="AC air recirculation state; None when not reported"
+    )
+    window_openings: WindowOpeningsCondition = Field(
+        default_factory=WindowOpeningsCondition
+    )
     last_updated_timestamp: Optional[int] = Field(default=None, description="Unix timestamp of last report")
     raw_data: Optional[dict[str, Any]] = Field(default=None, description="Raw JSON telemetry response")
     mqtt_raw_data: Optional[dict[str, Any]] = Field(

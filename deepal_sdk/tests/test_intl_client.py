@@ -585,6 +585,24 @@ def test_public_key_body_from_private_matches_generate_login_keypair():
     assert derived == pub_body
 
 
+def test_public_key_body_keeps_base64_lines_containing_end():
+    pem = (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n"
+        "AAAAxBEGINqAAAA\n"
+        "BBBBxENDqBBBB==\n"
+        "-----END PUBLIC KEY-----\n"
+    )
+
+    body = DeepalIntlClient._strip_pem_armor(pem)
+
+    assert "AAAAxBEGINqAAAA" in body
+    assert "BBBBxENDqBBBB==" in body
+    assert "-----" not in body
+    assert body.endswith("\n")
+    assert not body.endswith("\n\n")
+
+
 def test_set_login_keypair_derives_public_key_when_missing():
     private_pem, pub_body = DeepalIntlClient.generate_login_keypair()
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -1824,6 +1842,139 @@ async def test_get_mqtt_token_without_user_id_raises():
     await client.close()
 
 
+def _mqtt_token_counter_handler(calls: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"authToken": "tok-1"}}
+        )
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_reuses_the_cached_token():
+    calls: list[str] = []
+    client = _client(_mqtt_token_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    first = await client.get_mqtt_token()
+    second = await client.get_mqtt_token()
+    await client.close()
+
+    assert first == second == "tok-1"
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_expired_window_refetches():
+    calls: list[str] = []
+    client = _client(_mqtt_token_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+    client.mqtt_token_ttl = 0.0
+
+    await client.get_mqtt_token()
+    await client.get_mqtt_token()
+    await client.close()
+
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_forced_fetch_bypasses_the_cache():
+    calls: list[str] = []
+    client = _client(_mqtt_token_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_token()
+    forced = await client.get_mqtt_token(force=True)
+    await client.close()
+
+    assert forced == "tok-1"
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_within_the_window_fetch_the_token_once(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    auth_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/getConnConf"):
+            return httpx.Response(
+                200,
+                json={"success": True, "code": "000000", "data": _mqtt_config()},
+            )
+        if path.endswith("/getAuthTokenByUserId"):
+            auth_calls.append(path)
+            return httpx.Response(
+                200,
+                json={"success": True, "code": "000000", "data": {"authToken": "tok-1"}},
+            )
+        return httpx.Response(
+            200, json={"success": True, "code": "000000", "data": {}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+
+    first = await client.s05_mqtt_condition("car-1")
+    second = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert first.battery.soc_percentage == 71
+    assert second.battery.soc_percentage == 71
+    assert len(auth_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_cache_clears_on_logout():
+    client = _client(_mqtt_token_counter_handler([]))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_token()
+    await client.logout()
+    await client.close()
+
+    assert client._mqtt_token is None
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_cache_clears_when_the_session_refreshes():
+    auth_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == INTL_REFRESH_TOKEN:
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"token": "new-access-token", "refreshToken": "r2"},
+                },
+            )
+        return _mqtt_token_counter_handler(auth_calls)(request)
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.refresh_token = "test_refresh_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_token()
+    await client.refresh_tokens(force=True)
+    await client.get_mqtt_token()
+    await client.close()
+
+    assert len(auth_calls) == 2
+
+
 @pytest.mark.asyncio
 async def test_ca_gateway_error_exposes_code():
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1872,7 +2023,7 @@ async def test_get_vehicle_capabilities_maps_max_codes():
     capabilities = await client.get_vehicle_capabilities("car-1")
     await client.close()
 
-    assert captured == [{"carId": "car-1"}]
+    assert captured == [{"vehicleId": "car-1"}]
     assert capabilities is not None
     assert capabilities.trim_hint == "max"
     assert capabilities.seats["front_left"].ventilation is True
@@ -1911,10 +2062,10 @@ async def test_get_vehicle_capabilities_tries_next_body_candidate():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         captured.append(body)
-        if "carId" in body:
+        if "vehicleId" in body:
             return httpx.Response(
                 200,
-                json={"success": False, "code": "SYS_1_1_01_002", "msg": "bad carId"},
+                json={"success": False, "code": "SYS_1_1_01_002", "msg": "bad vehicleId"},
             )
         return httpx.Response(
             200, json={"success": True, "data": {"confList": ["#ota"]}}
@@ -1925,7 +2076,7 @@ async def test_get_vehicle_capabilities_tries_next_body_candidate():
     capabilities = await client.get_vehicle_capabilities("car-1")
     await client.close()
 
-    assert captured == [{"carId": "car-1"}, {"vehicleId": "car-1"}]
+    assert captured == [{"vehicleId": "car-1"}, {"carId": "car-1"}]
     assert capabilities is not None
     assert capabilities.trim_hint == "pro"
 
@@ -2075,7 +2226,7 @@ async def test_s05_mqtt_condition_normalizes_connection_eof():
 
 @pytest.mark.asyncio
 async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
-    params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3, "keyLowPower": 0}
+    params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3, "mysterySignal": 7}
     broker = _FakeMqttBroker(params)
     _install_fake_broker(monkeypatch, broker)
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -2088,7 +2239,7 @@ async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
     assert result.params["soc"] == 71
     assert "S05 MQTT unmapped parameters" in caplog.text
     assert "chargeCoverStatus" in caplog.text
-    assert "keyLowPower" in caplog.text
+    assert "mysterySignal" in caplog.text
     assert '"soc"' not in caplog.text
 
 
@@ -2260,11 +2411,56 @@ async def test_wake_vehicle_raises_on_rejected_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mqtt_sessions_are_serialized():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    active = 0
+    peak = 0
+
+    async def fake_open(config, token, *, sda=False):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            raise DeepalAPIError("session closed for the test")
+        finally:
+            active -= 1
+
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._open_s05_mqtt = fake_open
+
+    async def read():
+        with pytest.raises(DeepalAPIError):
+            await client.s05_mqtt_condition("car-1")
+
+    async def wake():
+        with pytest.raises(DeepalAPIError):
+            await client.wake_vehicle("car-1")
+
+    await asyncio.gather(read(), read(), wake())
+    await client.close()
+
+    assert peak == 1
+
+
+@pytest.mark.asyncio
 async def test_read_s05_params_rejects_connack_reason_code(monkeypatch):
     broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_reason_code=0x86)
     _install_fake_broker(monkeypatch, broker)
     client = _client(lambda request: httpx.Response(200, json={}))
     client.user_id = "test-user-1"
+    client._mqtt_token = "stale-token"
+    client._mqtt_token_expires_at = time.monotonic() + 60.0
 
     with pytest.raises(DeepalAPIError) as err:
         await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
@@ -2273,6 +2469,7 @@ async def test_read_s05_params_rejects_connack_reason_code(monkeypatch):
     assert "134" in str(err.value)
     assert "bad user name or password" in str(err.value)
     assert broker.close_count == 1
+    assert client._mqtt_token is None
 
 
 @pytest.mark.asyncio
@@ -3097,6 +3294,47 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.low_beam is False
     assert condition.lamps.front_fog is False
     assert condition.lamps.rear_fog is False
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ({"powerStatus": 2, "engineSts": 0}, True),
+        ({"powerStatus": 0, "engineSts": 1}, False),
+        ({"engineSts": 1}, True),
+        ({"engineSts": 0}, False),
+        ({}, False),
+    ],
+)
+def test_parse_condition_ignition_prefers_power_status(status, expected):
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition({"vehicleStatus": status}, "car-1")
+
+    assert condition.engine_on is expected
+
+
+def test_parse_condition_maps_warnings_and_window_openings():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition(
+        {
+            "warningLights": {"tpms": True, "battery12v": False},
+            "windowOpenings": {"frontLeft": 20, "rearRight": 92},
+            "keyBatteryLow": True,
+            "airRecirculation": False,
+        },
+        "car-1",
+    )
+
+    assert condition.warnings.tpms is True
+    assert condition.warnings.battery_12v is False
+    assert condition.warnings.abs is None
+    assert condition.key_battery_low is True
+    assert condition.air_recirculation is False
+    assert condition.window_openings.front_left == 20
+    assert condition.window_openings.rear_right == 92
+    assert condition.window_openings.front_right is None
 
 
 @pytest.mark.asyncio
@@ -4365,6 +4603,38 @@ async def test_mqtt_fallbacks_skip_rate_limit():
 
 
 @pytest.mark.asyncio
+async def test_http_429_is_a_rate_limit_with_retry_after():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "120"}, text="<html>")
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    with pytest.raises(DeepalRateLimitError) as err:
+        await client.get_vehicles()
+    await client.close()
+
+    assert err.value.status_code == 429
+    assert err.value.retry_after == 120
+
+
+@pytest.mark.asyncio
+async def test_http_429_without_valid_retry_after():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "soon"}, json={})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    with pytest.raises(DeepalRateLimitError) as err:
+        await client.get_vehicles()
+    await client.close()
+
+    assert err.value.status_code == 429
+    assert err.value.retry_after is None
+
+
+@pytest.mark.asyncio
 async def test_mqtt_fallbacks_skip_auth_errors():
     paths = []
 
@@ -4623,3 +4893,31 @@ async def test_control_code_state_codes_map_to_command_auth(code):
             await client.check_control_code("1234")
     finally:
         await client.close()
+
+
+class _RecordingHttpxClient:
+    """HTTP client double capturing the request arguments."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def request(self, **kwargs) -> httpx.Response:
+        self.calls.append(kwargs)
+        return httpx.Response(200, json={"success": True, "code": "0", "data": []})
+
+
+@pytest.mark.asyncio
+async def test_requests_pass_the_client_timeout():
+    http_client = _RecordingHttpxClient()
+    client = DeepalIntlClient(
+        country="GB", device_id="test-device-id", httpx_client=http_client
+    )
+    client.access_token = "test_token_123"
+
+    try:
+        await client.get_vehicles()
+    finally:
+        await client.close()
+
+    assert http_client.calls
+    assert http_client.calls[0]["timeout"] == client.timeout

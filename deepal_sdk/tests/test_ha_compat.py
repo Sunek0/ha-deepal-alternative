@@ -7,6 +7,7 @@ duplicate-vehicle guard without starting a Home Assistant runtime.
 import json
 import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,13 +18,14 @@ pytest.importorskip("homeassistant")
 
 from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    PERCENTAGE,
+    UnitOfRatio,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import custom_components.deepal as deepal_integration
 from custom_components.deepal import (
     binary_sensor,
     button,
@@ -35,14 +37,18 @@ from custom_components.deepal import (
     image,
     lock,
     number,
+    repairs,
     sensor,
     switch,
 )
+from custom_components.deepal import async_remove_config_entry_device
 from custom_components.deepal import time as time_platform
+from custom_components.deepal.charging import ChargingSessionManager
 from custom_components.deepal.const import CONF_CONTROL_PIN
 from custom_components.deepal.deepal import (
     DeepalAPIError,
     DeepalAuthError,
+    DeepalError,
     DeepalIntlClient,
     DeepalRateLimitError,
     VehicleCapabilities,
@@ -51,6 +57,8 @@ from custom_components.deepal.vehicle_model import is_bev, is_s05, supports_fuel
 from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.httpx_client import DATA_ASYNC_CLIENT
 from homeassistant.util.ssl import SSL_ALPN_HTTP11
 
@@ -109,6 +117,7 @@ def _fake_vehicle() -> SimpleNamespace:
         car_name=None,
         model_name=None,
         thumbnail_url=None,
+        license_plate=None,
     )
 
 
@@ -152,6 +161,7 @@ def _entities_by_platform() -> dict[str, list]:
             button.DeepalRefreshButton(coordinator, vehicle),
             button.DeepalFlashLightsButton(coordinator, vehicle),
             button.DeepalHonkHornButton(coordinator, vehicle),
+            button.DeepalFlashAndHonkButton(coordinator, vehicle),
         ],
         "lock": [lock.DeepalDoorsLock(coordinator, vehicle)],
         "cover": [
@@ -209,10 +219,209 @@ def test_hacs_metadata_declares_supported_baseline() -> None:
     }
 
 
+def test_manifest_metadata_follows_ha_conventions() -> None:
+    manifest = json.loads(
+        (INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["domain"] == "deepal"
+    assert manifest["integration_type"] == "hub"
+    assert manifest["loggers"] == ["deepal_sdk"]
+    assert manifest["version"]
+    assert manifest["requirements"] == ["pydantic>=2.0.0"]
+
+
 def test_country_options_have_dial_codes() -> None:
     assert set(config_flow.COUNTRY_OPTIONS) == set(config_flow.COUNTRY_DIAL_CODES)
     assert config_flow.COUNTRY_OPTIONS["GR"] == "Greece (+30)"
     assert config_flow.COUNTRY_DIAL_CODES["GR"] == "30"
+
+
+def test_build_client_injects_the_shared_httpx_client(monkeypatch) -> None:
+    shared = object()
+    monkeypatch.setattr(deepal_integration, "get_async_client", lambda hass: shared)
+    hass = SimpleNamespace()
+
+    intl_entry = SimpleNamespace(
+        data={"platform": "intl", "access_token": "test_token_123"},
+        options={},
+    )
+    intl_client = deepal_integration._build_client(hass, intl_entry)
+    assert intl_client._client is shared
+    assert intl_client._external_client is True
+
+    sda_entry = SimpleNamespace(
+        data={"platform": "sda", "access_token": "test_token_123"},
+        options={},
+    )
+    sda_client = deepal_integration._build_client(hass, sda_entry)
+    assert sda_client._client is shared
+    assert sda_client._external_client is True
+
+
+def _patch_issue_registry(monkeypatch) -> tuple[list[dict], list[str]]:
+    created: list[dict] = []
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        deepal_integration.ir,
+        "async_create_issue",
+        lambda hass, domain, issue_id, **kwargs: created.append(
+            {"domain": domain, "issue_id": issue_id, **kwargs}
+        ),
+    )
+    monkeypatch.setattr(
+        deepal_integration.ir,
+        "async_delete_issue",
+        lambda hass, domain, issue_id: deleted.append(issue_id),
+    )
+    return created, deleted
+
+
+def test_mqtt_reauth_issue_is_created_without_a_user_id(monkeypatch) -> None:
+    created, deleted = _patch_issue_registry(monkeypatch)
+    client = object.__new__(DeepalIntlClient)
+    client.user_id = None
+    coordinator = SimpleNamespace(
+        client=client, vehicles=[SimpleNamespace(protocol_type="MQTT")]
+    )
+    entry = SimpleNamespace(entry_id="entry-1", title="Deepal S05")
+
+    deepal_integration._sync_mqtt_reauth_issue(SimpleNamespace(), entry, coordinator)
+
+    assert deleted == []
+    assert created == [
+        {
+            "domain": "deepal",
+            "issue_id": "mqtt_user_id_missing_entry-1",
+            "data": {"entry_id": "entry-1"},
+            "is_fixable": True,
+            "severity": deepal_integration.ir.IssueSeverity.WARNING,
+            "translation_key": "mqtt_user_id_missing",
+            "translation_placeholders": {"name": "Deepal S05"},
+        }
+    ]
+
+
+def test_mqtt_reauth_issue_is_cleared_with_a_user_id(monkeypatch) -> None:
+    created, deleted = _patch_issue_registry(monkeypatch)
+    client = object.__new__(DeepalIntlClient)
+    client.user_id = "user-1"
+    coordinator = SimpleNamespace(
+        client=client, vehicles=[SimpleNamespace(protocol_type="MQTT")]
+    )
+    entry = SimpleNamespace(entry_id="entry-1", title="Deepal S05")
+
+    deepal_integration._sync_mqtt_reauth_issue(SimpleNamespace(), entry, coordinator)
+
+    assert created == []
+    assert deleted == ["mqtt_user_id_missing_entry-1"]
+
+
+def test_mqtt_reauth_issue_is_not_created_for_sda_entries(monkeypatch) -> None:
+    created, deleted = _patch_issue_registry(monkeypatch)
+    client = object.__new__(deepal_integration.DeepalClient)
+    coordinator = SimpleNamespace(
+        client=client, vehicles=[SimpleNamespace(protocol_type="MQTT")]
+    )
+    entry = SimpleNamespace(entry_id="entry-1", title="Deepal S05")
+
+    deepal_integration._sync_mqtt_reauth_issue(SimpleNamespace(), entry, coordinator)
+
+    assert created == []
+    assert deleted == ["mqtt_user_id_missing_entry-1"]
+
+
+def test_mqtt_reauth_issue_is_not_created_without_mqtt_vehicles(monkeypatch) -> None:
+    created, deleted = _patch_issue_registry(monkeypatch)
+    client = object.__new__(DeepalIntlClient)
+    client.user_id = None
+    coordinator = SimpleNamespace(
+        client=client, vehicles=[SimpleNamespace(protocol_type=None)]
+    )
+    entry = SimpleNamespace(entry_id="entry-1", title="Deepal S05")
+
+    deepal_integration._sync_mqtt_reauth_issue(SimpleNamespace(), entry, coordinator)
+
+    assert created == []
+    assert deleted == ["mqtt_user_id_missing_entry-1"]
+
+
+@pytest.mark.asyncio
+async def test_mqtt_repair_flow_starts_the_reauth_flow() -> None:
+    started: list[str] = []
+
+    class FakeEntry:
+        entry_id = "entry-1"
+
+        def async_start_reauth(self, hass) -> None:
+            started.append(self.entry_id)
+
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_get_entry=lambda entry_id: FakeEntry())
+    )
+    flow = repairs.MqttReauthRepairFlow()
+    flow.hass = hass
+    flow.data = {"entry_id": "entry-1"}
+    flow.flow_id = "test-flow"
+    flow.handler = "deepal"
+
+    result = await flow.async_step_init({})
+
+    assert started == ["entry-1"]
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+def _removal_entry(car_ids: list[str]):
+    vehicles = [SimpleNamespace(car_id=car_id) for car_id in car_ids]
+    return SimpleNamespace(
+        runtime_data=SimpleNamespace(
+            coordinator=SimpleNamespace(vehicles=vehicles)
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_remove_device_allows_stale_vehicles() -> None:
+    entry = _removal_entry([])
+
+    assert (
+        await async_remove_config_entry_device(
+            object(), entry, SimpleNamespace(identifiers={("deepal", "car-1")})
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_remove_device_rejects_active_vehicles() -> None:
+    entry = _removal_entry(["car-1", "car-2"])
+
+    assert (
+        await async_remove_config_entry_device(
+            object(), entry, SimpleNamespace(identifiers={("deepal", "car-1")})
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_remove_device_allows_devices_without_a_deepal_identifier() -> None:
+    entry = _removal_entry(["car-1"])
+    device = SimpleNamespace(identifiers={("other_domain", "thing")})
+
+    assert await async_remove_config_entry_device(object(), entry, device) is True
+
+
+@pytest.mark.asyncio
+async def test_remove_device_allows_entries_without_runtime_data() -> None:
+    entry = SimpleNamespace()
+
+    assert (
+        await async_remove_config_entry_device(
+            object(), entry, SimpleNamespace(identifiers={("deepal", "car-1")})
+        )
+        is True
+    )
 
 
 def test_percentage_entities_use_ratio_enumerator() -> None:
@@ -222,16 +431,34 @@ def test_percentage_entities_use_ratio_enumerator() -> None:
     charge_limit = number.DeepalChargeLimitNumber(coordinator, vehicle)
     descriptions = {description.key: description for description in sensor.SENSORS}
 
-    assert battery._attr_native_unit_of_measurement is PERCENTAGE
-    assert charge_limit._attr_native_unit_of_measurement is PERCENTAGE
+    assert battery._attr_native_unit_of_measurement is UnitOfRatio.PERCENTAGE
+    assert charge_limit._attr_native_unit_of_measurement is UnitOfRatio.PERCENTAGE
     assert (
         descriptions["cabin_humidity"].native_unit_of_measurement
-        is PERCENTAGE
+        is UnitOfRatio.PERCENTAGE
     )
     assert (
         descriptions["charge_limit"].native_unit_of_measurement
-        is PERCENTAGE
+        is UnitOfRatio.PERCENTAGE
     )
+
+
+def test_platforms_declare_no_parallel_update_limit() -> None:
+    platforms = (
+        binary_sensor,
+        button,
+        climate,
+        cover,
+        image,
+        lock,
+        number,
+        sensor,
+        switch,
+        time_platform,
+    )
+
+    for platform in platforms:
+        assert platform.PARALLEL_UPDATES == 0, platform.__name__
 
 
 def test_density_entity_uses_density_enumerator() -> None:
@@ -240,6 +467,104 @@ def test_density_entity_uses_density_enumerator() -> None:
         descriptions["inside_pm25"].native_unit_of_measurement
         is CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
     )
+
+
+def test_setup_reconciliation_removes_stale_entities_and_devices(monkeypatch) -> None:
+    removed_entities: list[str] = []
+    removed_devices: list[str] = []
+
+    class FakeEntityRegistry:
+        def async_remove(self, entity_id):
+            removed_entities.append(entity_id)
+
+    class FakeDeviceRegistry:
+        def async_remove_device(self, device_id):
+            removed_devices.append(device_id)
+
+    monkeypatch.setattr(
+        deepal_integration.er, "async_get", lambda hass: FakeEntityRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.er,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(
+                unique_id="deepal_car-1_battery_soc", entity_id="sensor.keep"
+            ),
+            SimpleNamespace(
+                unique_id="deepal_car-9_battery_soc", entity_id="sensor.stale"
+            ),
+            SimpleNamespace(unique_id="other_unique_id", entity_id="sensor.foreign"),
+        ],
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr, "async_get", lambda hass: FakeDeviceRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(id="dev-keep", identifiers={("deepal", "car-1")}),
+            SimpleNamespace(id="dev-stale", identifiers={("deepal", "car-9")}),
+            SimpleNamespace(id="dev-foreign", identifiers={("other", "thing")}),
+        ],
+    )
+
+    coordinator = SimpleNamespace(vehicles=[SimpleNamespace(car_id="car-1")])
+    entry = SimpleNamespace(entry_id="entry-1")
+
+    deepal_integration._remove_stale_vehicle_registry(
+        SimpleNamespace(), entry, coordinator
+    )
+
+    assert removed_entities == ["sensor.stale"]
+    assert removed_devices == ["dev-stale"]
+
+
+def test_setup_reconciliation_keeps_current_entities_and_devices(monkeypatch) -> None:
+    removed_entities: list[str] = []
+    removed_devices: list[str] = []
+
+    class FakeEntityRegistry:
+        def async_remove(self, entity_id):
+            removed_entities.append(entity_id)
+
+    class FakeDeviceRegistry:
+        def async_remove_device(self, device_id):
+            removed_devices.append(device_id)
+
+    monkeypatch.setattr(
+        deepal_integration.er, "async_get", lambda hass: FakeEntityRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.er,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(
+                unique_id="deepal_car-1_battery_soc", entity_id="sensor.keep"
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr, "async_get", lambda hass: FakeDeviceRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(id="dev-keep", identifiers={("deepal", "car-1")}),
+        ],
+    )
+
+    coordinator = SimpleNamespace(vehicles=[SimpleNamespace(car_id="car-1")])
+    entry = SimpleNamespace(entry_id="entry-1")
+
+    deepal_integration._remove_stale_vehicle_registry(
+        SimpleNamespace(), entry, coordinator
+    )
+
+    assert removed_entities == []
+    assert removed_devices == []
 
 
 def test_entities_only_expose_allowed_device_info_fields() -> None:
@@ -261,10 +586,12 @@ def test_duplicate_vehicle_guard_returns_owning_entry(monkeypatch) -> None:
     owner_entry = SimpleNamespace(entry_id="entry-1")
 
     class FakeDevice:
-        primary_config_entry = "entry-1"
+        # Deliberately no primary_config_entry: the modern lookup must not read
+        # the deprecated compatibility property.
+        config_entry_id = "entry-1"
 
     class FakeRegistry:
-        def async_get_devices(self, identifiers):
+        def async_get_devices(self, *, identifiers):
             if identifiers == {("deepal", "car-1")}:
                 return [FakeDevice()]
             return []
@@ -290,30 +617,6 @@ def test_duplicate_vehicle_guard_supports_the_2026_3_registry(monkeypatch) -> No
         primary_config_entry = "entry-1"
 
     class FakeRegistry:
-        def async_get_device(self, identifiers):
-            if identifiers == {("deepal", "car-1")}:
-                return FakeDevice()
-            return None
-
-    class FakeConfigEntries:
-        def async_get_entry(self, entry_id):
-            assert entry_id == "entry-1"
-            return owner_entry
-
-    monkeypatch.setattr(config_flow.dr, "async_get", lambda hass: FakeRegistry())
-    hass = SimpleNamespace(config_entries=FakeConfigEntries())
-
-    assert config_flow._vehicle_device_entry(hass, "car-1") is owner_entry
-    assert config_flow._vehicle_device_entry(hass, "car-unknown") is None
-
-
-def test_duplicate_vehicle_guard_supports_the_2026_3_registry(monkeypatch) -> None:
-    owner_entry = SimpleNamespace(entry_id="entry-1")
-
-    class FakeDevice:
-        primary_config_entry = "entry-1"
-
-    class FakeRegistry:
         def async_get_device(self, *, identifiers):
             if identifiers == {("deepal", "car-1")}:
                 return FakeDevice()
@@ -329,6 +632,32 @@ def test_duplicate_vehicle_guard_supports_the_2026_3_registry(monkeypatch) -> No
 
     assert config_flow._vehicle_device_entry(hass, "car-1") is owner_entry
     assert config_flow._vehicle_device_entry(hass, "car-unknown") is None
+
+
+def test_sda_unique_id_prefers_the_digit_only_phone() -> None:
+    vehicles = [SimpleNamespace(vin="VIN-1")]
+
+    unique_id = config_flow._sda_unique_id(
+        " +34 600-000-000 ", vehicles, "tok123456789"
+    )
+
+    assert unique_id == "sda_phone_34600000000"
+
+
+def test_sda_unique_id_falls_back_to_a_vin() -> None:
+    vehicles = [SimpleNamespace(vin=""), SimpleNamespace(vin="VIN-2")]
+
+    assert config_flow._sda_unique_id("", vehicles, "tok123456789") == "sda_vin_VIN-2"
+    assert (
+        config_flow._sda_unique_id("not-a-number", vehicles, "tok123456789")
+        == "sda_vin_VIN-2"
+    )
+
+
+def test_sda_unique_id_falls_back_to_the_token_fragment() -> None:
+    token = "tok123456789"
+
+    assert config_flow._sda_unique_id("", [], token) == token[:10]
 
 
 def test_odometer_and_mileage_sensor_names() -> None:
@@ -365,6 +694,38 @@ def test_entity_description_cached_properties_resolve() -> None:
     assert sensor_entity.force_update is False
     assert binary_entity.entity_registry_enabled_default is True
     assert binary_entity.entity_registry_visible_default is True
+
+
+def test_charging_binary_sensor_exposes_the_session_attributes() -> None:
+    class _Store:
+        async def async_load(self):
+            return None
+
+        def async_delay_save(self, data, delay):
+            pass
+
+        async def async_remove(self):
+            pass
+
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    manager = ChargingSessionManager(_Store())
+    coordinator.charging = manager
+    manager.apply("car-1", True, 40, 210, datetime(2026, 10, 13, 12, 0, tzinfo=UTC))
+
+    descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
+    charging = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["charging"]
+    )
+
+    assert charging._attr_unique_id == "deepal_car-1_charging"
+    assert charging.device_class is binary_sensor.BinarySensorDeviceClass.BATTERY_CHARGING
+    assert charging.extra_state_attributes["current_charge"]["start_level"] == 40
+
+    other = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["front_left_seat_heating"]
+    )
+    assert other.extra_state_attributes is None
 
 
 def test_seat_and_steering_entity_contract() -> None:
@@ -421,6 +782,95 @@ def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
     assert passenger_wind.native_value is None
     assert heating_binary.is_on is None
     assert ventilation_binary.is_on is None
+
+
+def test_defrost_entity_is_retired() -> None:
+    keys = {description.key for description in binary_sensor.BINARY_SENSORS}
+    assert "defrost" not in keys
+
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            assert (platform, domain) == ("binary_sensor", "deepal")
+            assert unique_id == "deepal_car-1_defrost"
+            return "binary_sensor.deepal_defrost"
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    binary_sensor._remove_retired_entities(
+        _Registry(), SimpleNamespace(car_id="car-1")
+    )
+
+    assert removed == ["binary_sensor.deepal_defrost"]
+
+
+def test_new_telemetry_entities_are_created() -> None:
+    sensor_keys = {description.key for description in sensor.SENSORS}
+    assert {
+        "climate_target_temperature",
+        "fan_level",
+        "license_plate",
+        "window_opening_front_left",
+        "window_opening_front_right",
+        "window_opening_rear_left",
+        "window_opening_rear_right",
+    } <= sensor_keys
+
+    binary_keys = {description.key for description in binary_sensor.BINARY_SENSORS}
+    assert {
+        "key_battery_low",
+        "air_recirculation",
+        "rear_fog_lamp",
+        "warning_12v_battery",
+        "warning_tpms",
+        "warning_abs",
+        "warning_airbag",
+        "warning_brake_fluid",
+        "warning_brake",
+        "warning_eps",
+        "warning_power_limit",
+        "warning_power_system",
+        "warning_traction_battery_low",
+        "warning_coolant_temperature",
+    } <= binary_keys
+
+
+def test_window_opening_sensors_are_disabled_by_default() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    descriptions = {description.key: description for description in sensor.SENSORS}
+
+    opening = sensor.DeepalSensor(
+        coordinator, vehicle, descriptions["window_opening_front_left"]
+    )
+    target = sensor.DeepalSensor(
+        coordinator, vehicle, descriptions["climate_target_temperature"]
+    )
+
+    assert opening.entity_registry_enabled_default is False
+    assert opening.unique_id == "deepal_car-1_window_opening_front_left"
+    assert target.entity_registry_enabled_default is True
+    assert target.unique_id == "deepal_car-1_climate_target_temperature"
+
+
+def test_warning_entities_stay_unknown_when_not_reported() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator.data["car-1"] = condition
+    vehicle = _fake_vehicle()
+    descriptions = {description.key: description for description in binary_sensor.BINARY_SENSORS}
+
+    warning = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["warning_tpms"]
+    )
+    key_battery = binary_sensor.DeepalBinarySensor(
+        coordinator, vehicle, descriptions["key_battery_low"]
+    )
+
+    assert warning.is_on is None
+    assert key_battery.is_on is None
 
 
 def _model_vehicle(car_id: str, **fields) -> SimpleNamespace:
@@ -697,6 +1147,24 @@ class _FakeCommandCoordinator(FakeCoordinator):
 
 
 @pytest.mark.asyncio
+async def test_entity_command_failures_are_translated() -> None:
+    class FailingCoordinator(_FakeCommandCoordinator):
+        async def async_execute_command(self, *args, **kwargs):
+            raise DeepalError("boom")
+
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator = FailingCoordinator(condition)
+    doors = lock.DeepalDoorsLock(coordinator, _fake_vehicle())
+
+    with pytest.raises(HomeAssistantError) as err:
+        await doors.async_lock()
+
+    assert err.value.translation_domain == "deepal"
+    assert err.value.translation_key == "command_failed"
+    assert err.value.translation_placeholders == {"error": "boom"}
+
+
+@pytest.mark.asyncio
 async def test_seat_and_steering_controls_send_app_payloads() -> None:
     condition = VehicleCondition(car_id="car-1", vin="test-vin")
     coordinator = _FakeCommandCoordinator(condition)
@@ -755,20 +1223,24 @@ async def test_pin_entities_request_a_wake_before_the_command() -> None:
     ]
 
 
-def test_entity_icons() -> None:
-    coordinator = FakeCoordinator()
-    vehicle = _fake_vehicle()
-    charge_limit = number.DeepalChargeLimitNumber(coordinator, vehicle)
-    tire = sensor.DeepalTirePressureSensor(coordinator, vehicle, "front_left")
-    alarm = binary_sensor.DeepalTireAlarmBinarySensor(
-        coordinator, vehicle, "front_left"
-    )
-    descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
+def test_icons_are_translated() -> None:
+    icons = json.loads(
+        (INTEGRATION_DIR / "icons.json").read_text(encoding="utf-8")
+    )["entity"]
 
-    assert descriptions["trunk"].icon == "mdi:car-select"
-    assert charge_limit._attr_icon == "mdi:battery-heart"
-    assert tire._attr_icon == "mdi:tire"
-    assert alarm._attr_icon == "mdi:car-tire-alert"
+    assert icons["binary_sensor"]["trunk"]["default"] == "mdi:car-select"
+    assert icons["number"]["charge_limit"]["default"] == "mdi:battery-heart"
+    assert icons["sensor"]["tire_pressure_front_left"]["default"] == "mdi:tire"
+    assert (
+        icons["binary_sensor"]["tire_alarm_front_left"]["default"]
+        == "mdi:car-tire-alert"
+    )
+
+
+def test_entities_have_no_hardcoded_icons() -> None:
+    for platform, entities in _entities_by_platform().items():
+        for entity in entities:
+            assert entity.icon is None, f"{platform}:{entity.translation_key}"
 
 
 def test_mileage_sensors_are_gated_on_mqtt_vehicles() -> None:
@@ -794,6 +1266,25 @@ def test_translation_files_share_the_same_key_tree() -> None:
     ]
     for tree in trees[1:]:
         assert tree == trees[0]
+
+
+def test_exception_translations_are_complete() -> None:
+    languages = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in TRANSLATION_FILES
+    }
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(INTEGRATION_DIR.rglob("*.py"))
+    )
+    keys = set(re.findall(r'translation_key="(\w+)"', source))
+
+    assert keys
+    for name, data in languages.items():
+        exceptions = data.get("exceptions", {})
+        for key in keys:
+            message = exceptions.get(key, {}).get("message")
+            assert message, f"{name}:exceptions.{key}"
 
 
 def test_spanish_entity_names_are_corrected() -> None:
@@ -865,13 +1356,48 @@ def test_flow_messages_are_translated() -> None:
         assert abort_keys <= set(data["config"]["abort"]), path.name
 
 
+def test_intl_code_menu_options_are_implemented() -> None:
+    data = json.loads((INTEGRATION_DIR / "strings.json").read_text(encoding="utf-8"))
+    menu = data["config"]["step"]["intl_code_menu"]
+    options = menu["menu_options"]
+
+    assert set(options) == {
+        "intl_email_code",
+        "intl_sms_code",
+        "intl_code_resend",
+        "intl_email_change",
+        "intl_sms_change",
+    }
+    for option in options:
+        assert hasattr(
+            config_flow.DeepalConfigFlow, f"async_step_{option}"
+        ), option
+    assert "{destination}" in menu["description"]
+
+
+def test_sms_step_warns_about_the_delivery_failure() -> None:
+    data = json.loads((INTEGRATION_DIR / "strings.json").read_text(encoding="utf-8"))
+    description = data["config"]["step"]["intl_phone"]["description"]
+
+    assert "not delivering SMS" in description
+    assert "email" in description
+
+
+def test_readme_documents_removal_and_automation_examples() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "## Automation examples" in readme
+    assert "## Removal" in readme
+    for language in ("en", "es", "de", "fr", "it", "pt"):
+        assert f"guides/installation-guide.{language}.md" in readme
+
+
 def test_integration_has_no_removed_api_references() -> None:
     source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted(INTEGRATION_DIR.rglob("*.py"))
     )
     assert "hass.data[DOMAIN]" not in source
-    assert "UnitOfRatio" not in source
 
 
 class _DiagnosticsCoordinator:
@@ -973,10 +1499,10 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
         "sda-mqtt": {"soc": 71},
         "sda-mqtt-sections": {},
     }
-    assert report["sda_plans"]["car-1"]["device_did"] == "plan-did"
+    assert report["sda_plans"]["car-1"]["device_did"] == REDACTED
     assert report["sda_plans"]["car-1"]["property_codes"] == ["carCondition"]
     assert report["mqtt_attempts"]["car-1"]["variants"]["sda-mqtt"] == {}
-    assert report["mqtt_attempts"]["car-1"]["plan"] == {"device_did": "plan-did"}
+    assert report["mqtt_attempts"]["car-1"]["plan"] == {"device_did": REDACTED}
     assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
     assert "sda_plan" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [
@@ -1013,6 +1539,56 @@ async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
     assert report["config_entry_data"]["access_token"] == REDACTED
     assert report["raw_mqtt"]["car-1"]["latitude"] == REDACTED
     assert report["capabilities"]["car-1"] is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_redacts_case_insensitively_and_masks_topics() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN-REAL-1")
+    condition = _mqtt_condition()
+    condition.raw_data = {
+        "vehicleStatus": {
+            "soc": 55,
+            "Lat": 12.3456,
+            "Lng": -98.7654,
+            "nested": [{"plateNumber": "0000-ZZZ", "totalOdometer": 4321}],
+        }
+    }
+    condition.mqtt_raw_data = {"soc": 55, "Lat": 12.3456}
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle],
+        {"car-1": condition},
+        {},
+        {
+            "car-1": {
+                "source": None,
+                "variants": {"sda-mqtt": {"reqTopic": "$vdp/did-abc123/server/event"}},
+                "plan": {"device_did": "did-abc123"},
+            }
+        },
+    )
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+    serialized = json.dumps(report)
+
+    assert report["raw_rest"]["car-1"]["vehicleStatus"]["Lat"] == REDACTED
+    assert report["raw_rest"]["car-1"]["vehicleStatus"]["Lng"] == REDACTED
+    assert (
+        report["raw_rest"]["car-1"]["vehicleStatus"]["nested"][0]["plateNumber"]
+        == REDACTED
+    )
+    assert report["mqtt_attempts"]["car-1"]["plan"]["device_did"] == REDACTED
+    assert "0000-ZZZ" not in serialized
+    assert "12.3456" not in serialized
+    assert "did-abc123" not in serialized
+    assert "$vdp/**REDACTED**/server/event" in serialized
+    # The report must keep being usable: structure and innocent values survive.
+    assert (
+        report["raw_rest"]["car-1"]["vehicleStatus"]["nested"][0]["totalOdometer"]
+        == 4321
+    )
+    assert isinstance(report["unmapped_mqtt_keys"]["car-1"], list)
 
 
 @pytest.mark.asyncio
@@ -1079,6 +1655,22 @@ def test_options_flow_lists_the_supported_environments() -> None:
 
     labels = [environment.label for environment in INTL_ENVIRONMENTS.values()]
     assert labels == ["Europe", "Latin America", "ASEAN", "ASEAN CONNECT"]
+
+
+def test_options_schema_exposes_the_wake_toggle() -> None:
+    from custom_components.deepal.const import (
+        CONF_ENVIRONMENT,
+        CONF_WAKE,
+        DEFAULT_WAKE,
+    )
+
+    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
+
+    wake_keys = [key for key in schema.schema if key.schema == CONF_WAKE]
+    assert len(wake_keys) == 1
+    assert wake_keys[0].default() == DEFAULT_WAKE
+    assert schema({CONF_WAKE: False})[CONF_WAKE] is False
 
 
 def test_config_flow_defaults_to_the_international_platform() -> None:

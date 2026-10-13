@@ -38,8 +38,7 @@ funcionar normalmente no telemóvel.
 
 1. Abre a app **My Changan** e cria uma conta nova com um email ou um número de telemóvel diferente
    do da tua conta principal.
-2. Anota as credenciais (email/telemóvel e código de acesso): serão as que vais usar no Home
-   Assistant.
+2. Anota a informação (email/telemóvel): serão as que vais usar no Home Assistant.
 
 ### 2. Partilhar o veículo a partir da conta principal
 
@@ -102,7 +101,9 @@ separador **HACS** na barra lateral do Home Assistant.
 5. Preenche os campos do formulário:
    - **País de venda**: o país registado na tua conta My Changan (por exemplo, Espanha).
    - **Email** ou **Número de telemóvel** (sem indicativo) da conta **secundária**.
-6. Espera pelo código de verificação (email ou SMS) e introduz-o em **Código de verificação**.
+6. Espera pelo código de verificação (email ou SMS) e introduz-o em **Código de verificação**. Se não
+   chegar, este mesmo passo permite reenviá-lo ou corrigir o email ou o telemóvel. Neste momento a
+   Changan não está a entregar os SMS, por isso é preferível o método por email.
 7. A integração valida a conta e cria um dispositivo por veículo. Pronto.
 
 ### 9. Guardar o PIN de controlo remoto

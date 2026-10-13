@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 
+from .charging import ChargingSessionManager
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalClient, DeepalIntlClient
 
@@ -14,6 +15,7 @@ class DeepalRuntimeData:
 
     client: DeepalClient | DeepalIntlClient
     coordinator: DeepalDataUpdateCoordinator
+    charging: ChargingSessionManager | None = None
 
 
 type DeepalConfigEntry = ConfigEntry[DeepalRuntimeData]

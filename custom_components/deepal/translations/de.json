@@ -1,4 +1,62 @@
 {
+  "exceptions": {
+    "command_failed": {
+      "message": "Der Deepal-Befehl ist fehlgeschlagen: {error}"
+    },
+    "climate_command_failed": {
+      "message": "Der Deepal-Klimabefehl ist fehlgeschlagen: {error}"
+    },
+    "refresh_command_failed": {
+      "message": "Der Deepal-Aktualisierungsbefehl ist fehlgeschlagen: {error}"
+    },
+    "unsupported_hvac_mode": {
+      "message": "Nicht unterstützter Klimamodus: {mode}"
+    },
+    "charge_schedule_unavailable": {
+      "message": "Der Deepal-Ladezeitplan ist nicht verfügbar"
+    },
+    "commands_require_international": {
+      "message": "Fernbefehle erfordern die internationale Plattform"
+    },
+    "wake_requires_international": {
+      "message": "Das Fernwecken erfordert die internationale Plattform"
+    },
+    "wake_no_fresh_report": {
+      "message": "Das Fahrzeug hat nach der Weckanfrage keine neuen Daten gemeldet; es ist möglicherweise offline oder im Schlafmodus"
+    },
+    "command_still_running": {
+      "message": "Das Fahrzeug führt den vorherigen Befehl noch aus; warte {seconds} s, bevor du ihn wiederholst"
+    },
+    "command_queue_busy": {
+      "message": "Ein weiterer Deepal-Befehl für dieses Fahrzeug dauert zu lange; versuche es in einigen Sekunden erneut"
+    },
+    "command_asleep": {
+      "message": "Das Fahrzeug hat den Befehl nicht angenommen; es ist möglicherweise nicht aufgewacht oder offline. Versuche es erneut, wenn es wach ist."
+    },
+    "command_result_failed": {
+      "message": "Deepal-Befehl mit Ergebniscode {code} fehlgeschlagen: {message}"
+    },
+    "command_result_failed_power_off": {
+      "message": "Deepal-Befehl mit Ergebniscode {code} fehlgeschlagen: {message} (das Fahrzeug muss ausgeschaltet sein, bevor dieser Befehl ausgeführt werden kann)"
+    },
+    "command_result_failed_unreachable": {
+      "message": "Deepal-Befehl mit Ergebniscode {code} fehlgeschlagen: {message} (das Fahrzeug hat den Befehl nicht angenommen; es ist möglicherweise offline oder beschäftigt, versuche es erneut, wenn es wach ist)"
+    }
+  },
+  "issues": {
+    "mqtt_user_id_missing": {
+      "title": "Erneute Anmeldung für MQTT-Telemetrie erforderlich",
+      "description": "Die gespeicherte Sitzung für {name} enthält keine Konto-Benutzer-ID, daher ist die MQTT-Telemetrie deaktiviert und die Integration weicht auf den REST-Zustandsendpunkt mit veralteten Daten aus. Melde dich erneut an, um die MQTT-Telemetrie wiederherzustellen.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Erneut anmelden",
+            "description": "Startet den erneuten Anmeldevorgang für dieses Konto. Der Hinweis verschwindet, sobald die neue Sitzung die Benutzer-ID enthält."
+          }
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -61,7 +119,7 @@
       },
       "intl_phone": {
         "title": "Anmeldung per SMS",
-        "description": "Wähle das Verkaufsland und die nationale Mobilnummer (ohne Ländervorwahl). Home Assistant fordert einen Bestätigungscode per SMS an.",
+        "description": "Wähle das Verkaufsland und die nationale Mobilnummer (ohne Ländervorwahl). Home Assistant fordert einen Bestätigungscode per SMS an. Changan stellt derzeit keine SMS-Codes zu; wenn die SMS nicht ankommt, fordere den Code erneut an oder wechsle zur E-Mail-Methode.",
         "data": {
           "country": "Verkaufsland",
           "phone": "Mobilnummer",
@@ -81,6 +139,17 @@
         },
         "data_description": {
           "auth_code": "Numerischer Code aus der SMS. Er läuft schnell ab; fordere einen neuen an, wenn er abgelehnt wird."
+        }
+      },
+      "intl_code_menu": {
+        "title": "Code gesendet",
+        "description": "Home Assistant hat den Bestätigungscode für {destination} angefordert. Es kann ein paar Minuten dauern; prüfe auch den Spam-Ordner. Wenn er nicht ankommt, fordere ihn erneut an oder korrigiere das Ziel.",
+        "menu_options": {
+          "intl_email_code": "E-Mail-Code eingeben",
+          "intl_sms_code": "SMS-Code eingeben",
+          "intl_code_resend": "Code erneut senden",
+          "intl_email_change": "E-Mail ändern",
+          "intl_sms_change": "Mobilnummer ändern"
         }
       },
       "sda_reauth": {
@@ -116,6 +185,7 @@
           "scan_interval": "Abfrageintervall (Sekunden)",
           "control_pin": "Fernsteuerungs-PIN",
           "enable_api_logging": "API-Verkehr protokollieren",
+          "wake": "Fahrzeug bei Bedarf aufwecken",
           "environment": "Regionale Umgebung"
         },
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
@@ -123,6 +193,7 @@
           "scan_interval": "Wie oft Home Assistant das Fahrzeug abfragt, wenn keine MQTT-Telemetrie verfügbar ist, in Sekunden (30-3600).",
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit ausgeblendeten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
+          "wake": "Weckt ein schlafendes MQTT-Fahrzeug vor dem Aktualisieren oder vor PIN-Befehlen. Standardmäßig aktiviert; deaktivieren, um die 12-V-Batterie zu schonen, wenn sehr häufig aktualisiert wird.",
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
         }
       }
@@ -261,6 +332,27 @@
       },
       "remaining_charge_time_formatted": {
         "name": "Restladezeit (H:MM)"
+      },
+      "climate_target_temperature": {
+        "name": "Klima-Zieltemperatur"
+      },
+      "fan_level": {
+        "name": "Klima-Lüfterstufe"
+      },
+      "license_plate": {
+        "name": "Kennzeichen"
+      },
+      "window_opening_front_left": {
+        "name": "Fensteröffnung vorne links"
+      },
+      "window_opening_front_right": {
+        "name": "Fensteröffnung vorne rechts"
+      },
+      "window_opening_rear_left": {
+        "name": "Fensteröffnung hinten links"
+      },
+      "window_opening_rear_right": {
+        "name": "Fensteröffnung hinten rechts"
       }
     },
     "binary_sensor": {
@@ -299,9 +391,6 @@
       },
       "engine": {
         "name": "Motor"
-      },
-      "defrost": {
-        "name": "Frontscheibenenteisung"
       },
       "connected": {
         "name": "Cloud-Verbindung"
@@ -374,6 +463,48 @@
       },
       "front_right_seat_ventilation": {
         "name": "Sitzbelüftung vorne rechts"
+      },
+      "key_battery_low": {
+        "name": "Schlüsselbatterie schwach"
+      },
+      "air_recirculation": {
+        "name": "Umluft"
+      },
+      "rear_fog_lamp": {
+        "name": "Nebelschlussleuchte"
+      },
+      "warning_12v_battery": {
+        "name": "Warnleuchte 12-V-Batterie"
+      },
+      "warning_tpms": {
+        "name": "Warnleuchte Reifendruck"
+      },
+      "warning_abs": {
+        "name": "Warnleuchte ABS"
+      },
+      "warning_airbag": {
+        "name": "Warnleuchte Airbag"
+      },
+      "warning_brake_fluid": {
+        "name": "Warnleuchte Bremsflüssigkeit"
+      },
+      "warning_brake": {
+        "name": "Warnleuchte Bremse"
+      },
+      "warning_eps": {
+        "name": "Warnleuchte Servolenkung"
+      },
+      "warning_power_limit": {
+        "name": "Warnleuchte Leistungsbegrenzung"
+      },
+      "warning_power_system": {
+        "name": "Warnleuchte Antriebssystem"
+      },
+      "warning_traction_battery_low": {
+        "name": "Warnleuchte Antriebsbatterie schwach"
+      },
+      "warning_coolant_temperature": {
+        "name": "Warnleuchte Kühlmitteltemperatur"
       }
     },
     "button": {
@@ -385,6 +516,9 @@
       },
       "honk_horn": {
         "name": "Hupen"
+      },
+      "flash_and_honk": {
+        "name": "Licht und Hupe"
       }
     },
     "climate": {

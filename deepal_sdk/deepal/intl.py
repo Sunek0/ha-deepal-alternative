@@ -72,6 +72,7 @@ from deepal.exceptions import (
     DeepalConnectionError,
     DeepalError,
     DeepalRateLimitError,
+    parse_retry_after,
 )
 from deepal.redact import redact_for_log, safe_headers
 from deepal.models import (
@@ -91,6 +92,8 @@ from deepal.models import (
     VehicleAuthorizations,
     VehicleCapabilities,
     VehicleCondition,
+    WarningLightsCondition,
+    WindowOpeningsCondition,
     WindowsCondition,
 )
 from deepal.mqtt import (
@@ -173,6 +176,11 @@ _AUTH_ERROR_CODES = {
 # module the SDK does not model yet; it is recorded for the planned
 # remote-command change.
 INTL_REFRESH_THROTTLE_SECONDS = 1800.0
+
+#: MQTT auth tokens are account level; one is reused within this window so a
+#: refresh cycle with several vehicles asks the CA gateway once instead of once
+#: per MQTT session.
+INTL_MQTT_TOKEN_TTL_SECONDS = 60.0
 CAR_CONTROL_REFRESH_THROTTLE_SECONDS = 3300.0
 
 
@@ -232,6 +240,12 @@ def _as_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    """Return a boolean for zero/non-zero values, ``None`` when absent."""
+    number = _as_int(value)
+    return None if number is None else number != 0
 
 
 def _fuel_range_km(fuel: dict[str, Any]) -> Optional[int]:
@@ -311,6 +325,7 @@ class DeepalIntlClient:
         mqtt_tls_insecure: bool = False,
         mqtt_sda_probe_grace: float = MQTT_SDA_PROBE_GRACE,
         mqtt_exchange_timeout: Optional[float] = None,
+        mqtt_token_ttl: float = INTL_MQTT_TOKEN_TTL_SECONDS,
         device_id: Optional[str] = None,
         private_key_pem: Optional[str] = None,
         public_key: Optional[str] = None,
@@ -347,6 +362,9 @@ class DeepalIntlClient:
         self.mqtt_tls_insecure = mqtt_tls_insecure
         self.mqtt_sda_probe_grace = mqtt_sda_probe_grace
         self.mqtt_exchange_timeout = mqtt_exchange_timeout
+        self.mqtt_token_ttl = mqtt_token_ttl
+        self._mqtt_token: Optional[str] = None
+        self._mqtt_token_expires_at = 0.0
         self.last_mqtt_exchange: Optional[MqttExchangeResult] = None
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
@@ -372,6 +390,7 @@ class DeepalIntlClient:
         self._client: Optional[httpx.AsyncClient] = httpx_client
         self._client_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
+        self._mqtt_lock = asyncio.Lock()
         self._last_refresh_attempt_at: Optional[float] = None
         self._refresh_attempt_sequence = 0
         self._refresh_attempt_error: Optional[BaseException] = None
@@ -401,17 +420,25 @@ class DeepalIntlClient:
         await self.close()
 
     @staticmethod
+    def _strip_pem_armor(pem: str) -> str:
+        """Return a PEM body without its armor marker lines.
+
+        Only lines that start with the ``-----`` marker are removed. Filtering
+        by substring would drop random base64 body lines that contain
+        ``BEGIN``/``END`` and register a broken login key.
+        """
+        return "\n".join(
+            line for line in pem.splitlines() if not line.startswith("-----")
+        ) + "\n"
+
+    @staticmethod
     def _public_body(public_key: rsa.RSAPublicKey) -> str:
         """Render an RSA public key as the app ``pubKey`` body."""
         public_pem = public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode()
-        return "\n".join(
-            line
-            for line in public_pem.splitlines()
-            if "BEGIN" not in line and "END" not in line
-        ) + "\n"
+        return DeepalIntlClient._strip_pem_armor(public_pem)
 
     @staticmethod
     def generate_login_keypair() -> tuple[str, str]:
@@ -536,6 +563,7 @@ class DeepalIntlClient:
                     url=url,
                     params=query,
                     headers=headers,
+                    timeout=self.timeout,
                 )
             else:
                 response = await http_client.request(
@@ -543,10 +571,18 @@ class DeepalIntlClient:
                     url=url,
                     content=body,
                     headers=headers,
+                    timeout=self.timeout,
                 )
         except httpx.RequestError as exc:
             logger.error("Network error requesting %s: %s", url, exc)
             raise DeepalConnectionError(f"Failed to connect to Deepal API: {exc}") from exc
+
+        if response.status_code == 429:
+            raise DeepalRateLimitError(
+                "Deepal rate limit: HTTP 429.",
+                status_code=429,
+                retry_after=parse_retry_after(response.headers.get("Retry-After")),
+            )
 
         if response.status_code in (401, 403):
             raise DeepalAuthError(
@@ -837,6 +873,7 @@ class DeepalIntlClient:
             self.cac_token = None
             self.rc_token = None
             self.access_token_expires_at = None
+            self._invalidate_mqtt_token()
 
     @staticmethod
     def _jwt_expiry(token: Optional[str]) -> Optional[int]:
@@ -921,6 +958,7 @@ class DeepalIntlClient:
             self.ca_user_id = data.get("caUserId") or self.ca_user_id
             self.cac_user_id = data.get("cacUserId") or self.cac_user_id
             self._log_session_fields()
+            self._invalidate_mqtt_token()
 
             rotated = self.access_token != previous_access_token
             self._last_refresh_kept_token = not rotated
@@ -987,8 +1025,10 @@ class DeepalIntlClient:
         back to their generic behavior.
         """
         candidates: list[dict[str, Any]] = [
-            {"carId": vehicle_id},
+            # The Spanish backend answers this body; "carId" is rejected, so
+            # it is only a fallback (verified by upstream dec_deepal 2.0.0b3).
             {"vehicleId": vehicle_id},
+            {"carId": vehicle_id},
         ]
         if vin:
             candidates.append({"vin": vin})
@@ -1187,6 +1227,8 @@ class DeepalIntlClient:
         seat = raw.get("seat") or {}
         window = raw.get("window") or {}
         lamp = raw.get("lamp") or {}
+        warnings = raw.get("warningLights") or {}
+        window_openings = raw.get("windowOpenings") or {}
         charge_plan = _path_value(charge, ("chargePlanList", 0)) or {}
 
         def _tenths(value: Any) -> Optional[float]:
@@ -1381,6 +1423,17 @@ class DeepalIntlClient:
             else status.get("lastUpdatedAt")
         )
 
+        power_status = _as_int(status.get("powerStatus"))
+        engine_status = _as_int(status.get("engineSts"))
+        # An electric vehicle reports engineSts 0 while driving, so the
+        # ignition state comes from the power status when it is reported
+        # (0 = off, anything else = on) and falls back to engineSts otherwise.
+        engine_on = (
+            power_status not in (None, 0)
+            if power_status is not None
+            else engine_status not in (None, 0)
+        )
+
         return VehicleCondition(
             car_id=vehicle_id,
             vin=raw.get("vin") or vin or "",
@@ -1394,9 +1447,9 @@ class DeepalIntlClient:
                 else None
             ),
             epb_status=_as_int(status.get("epbSts")),
-            power_status=_as_int(status.get("powerStatus")),
+            power_status=power_status,
             vehicle_status=_as_int(status.get("status")),
-            engine_on=_as_int(status.get("engineSts")) not in (None, 0),
+            engine_on=engine_on,
             connected=(
                 status.get("connectStatus") == 1
                 if status.get("connectStatus") is not None
@@ -1410,6 +1463,31 @@ class DeepalIntlClient:
             climate=climate,
             tires=tires_condition,
             lamps=lamps,
+            warnings=WarningLightsCondition(
+                battery_12v=_as_bool(warnings.get("battery12v")),
+                tpms=_as_bool(warnings.get("tpms")),
+                abs=_as_bool(warnings.get("abs")),
+                airbag=_as_bool(warnings.get("airbag")),
+                brake_fluid=_as_bool(warnings.get("brakeFluid")),
+                brake=_as_bool(warnings.get("brake")),
+                eps=_as_bool(warnings.get("eps")),
+                power_limit=_as_bool(warnings.get("powerLimit")),
+                power_system=_as_bool(warnings.get("powerSystem")),
+                traction_battery_low=_as_bool(
+                    warnings.get("tractionBatteryLow")
+                ),
+                coolant_temperature=_as_bool(
+                    warnings.get("coolantTemperature")
+                ),
+            ),
+            key_battery_low=_as_bool(raw.get("keyBatteryLow")),
+            air_recirculation=_as_bool(raw.get("airRecirculation")),
+            window_openings=WindowOpeningsCondition(
+                front_left=_as_int(window_openings.get("frontLeft")),
+                front_right=_as_int(window_openings.get("frontRight")),
+                rear_left=_as_int(window_openings.get("rearLeft")),
+                rear_right=_as_int(window_openings.get("rearRight")),
+            ),
             last_updated_timestamp=last_updated // 1000 if last_updated is not None else None,
             raw_data=raw,
         )
@@ -1465,12 +1543,31 @@ class DeepalIntlClient:
             raise DeepalAPIError("Unexpected S05 MQTT configuration response.")
         return data
 
-    async def get_mqtt_token(self) -> str:
-        """Exchange the account user id for an MQTT auth token."""
+    def _invalidate_mqtt_token(self) -> None:
+        """Drop the cached MQTT auth token (rejected, or the session changed)."""
+        self._mqtt_token = None
+        self._mqtt_token_expires_at = 0.0
+
+    async def get_mqtt_token(self, force: bool = False) -> str:
+        """Exchange the account user id for an MQTT auth token.
+
+        The token is account level and is reused within ``mqtt_token_ttl`` (one
+        minute by default), so a refresh cycle with several vehicles asks the CA
+        gateway once instead of once per MQTT session. ``force`` bypasses the
+        cache after a rejection, and a failed fetch never leaves a stale value
+        behind.
+        """
         if not self.user_id:
             raise DeepalAPIError(
                 "S05 MQTT telemetry requires the account user id; log in again."
             )
+        if (
+            not force
+            and self._mqtt_token is not None
+            and time.monotonic() < self._mqtt_token_expires_at
+        ):
+            return self._mqtt_token
+        self._invalidate_mqtt_token()
         try:
             data = await self._request(
                 INTL_CA_GET_AUTH_TOKEN,
@@ -1495,7 +1592,10 @@ class DeepalIntlClient:
             )
         if not isinstance(data, dict) or not data.get("authToken"):
             raise DeepalAPIError("S05 MQTT auth response did not include authToken.")
-        return str(data["authToken"])
+        token = str(data["authToken"])
+        self._mqtt_token = token
+        self._mqtt_token_expires_at = time.monotonic() + self.mqtt_token_ttl
+        return token
 
     async def s05_mqtt_condition(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
@@ -1504,8 +1604,18 @@ class DeepalIntlClient:
 
         ``sda`` selects the SDA/VOT condition service (``Get_CarCondition``)
         used by ``SDA-MQTT`` vehicles; the legacy ``car_condition`` request
-        remains the default and the last fallback probe.
+        remains the default and the last fallback probe. Sessions are
+        serialized per client because all vehicles of an account share the
+        broker client identity.
         """
+        async with self._mqtt_lock:
+            return await self._s05_mqtt_condition_locked(
+                vehicle_id, vin=vin, sda=sda
+            )
+
+    async def _s05_mqtt_condition_locked(
+        self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
+    ) -> VehicleCondition:
         config = await self.get_mqtt_config(vehicle_id)
         if sda:
             plan = sda_condition_plan(config)
@@ -1790,6 +1900,9 @@ class DeepalIntlClient:
             _session_present, reason_code = parse_connack(first, body)
             if reason_code != 0:
                 reason = MQTT_CONNACK_REASONS.get(reason_code, "unknown reason code")
+                # A rejected token must not survive the reuse window; force a
+                # fresh fetch on the next attempt.
+                self._invalidate_mqtt_token()
                 raise DeepalAPIError(
                     "S05 MQTT broker rejected connection: "
                     f"reason code {reason_code} ({reason})"
@@ -2039,8 +2152,14 @@ class DeepalIntlClient:
         Publishes the app's ``TxWakeup``/``Cnr_ReWakeup`` service on the
         ``properties/set/req`` topic and returns once the gateway acknowledges
         it with ``000000``. The vehicle then reports within a few seconds; the
-        caller polls the condition for the fresh snapshot.
+        caller polls the condition for the fresh snapshot. Sessions are
+        serialized per client because all vehicles of an account share the
+        broker client identity.
         """
+        async with self._mqtt_lock:
+            await self._wake_vehicle_locked(vehicle_id)
+
+    async def _wake_vehicle_locked(self, vehicle_id: str) -> None:
         config = await self.get_mqtt_config(vehicle_id)
         token = await self.get_mqtt_token()
         try:

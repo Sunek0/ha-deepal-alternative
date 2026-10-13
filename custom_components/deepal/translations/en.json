@@ -1,4 +1,62 @@
 {
+  "exceptions": {
+    "command_failed": {
+      "message": "The Deepal command failed: {error}"
+    },
+    "climate_command_failed": {
+      "message": "The Deepal climate command failed: {error}"
+    },
+    "refresh_command_failed": {
+      "message": "The Deepal refresh command failed: {error}"
+    },
+    "unsupported_hvac_mode": {
+      "message": "Unsupported HVAC mode: {mode}"
+    },
+    "charge_schedule_unavailable": {
+      "message": "The Deepal charge schedule plan is not available"
+    },
+    "commands_require_international": {
+      "message": "Remote commands require the international platform"
+    },
+    "wake_requires_international": {
+      "message": "Remote wake requires the international platform"
+    },
+    "wake_no_fresh_report": {
+      "message": "The vehicle did not report fresh data after the wake request; it may be offline or asleep"
+    },
+    "command_still_running": {
+      "message": "The vehicle is still completing the previous command; wait {seconds} s before repeating it"
+    },
+    "command_queue_busy": {
+      "message": "Another Deepal command for this vehicle is taking too long; try again in a few seconds"
+    },
+    "command_asleep": {
+      "message": "The vehicle did not accept the command; it may not have woken up or be offline. Try again once it is awake."
+    },
+    "command_result_failed": {
+      "message": "Deepal command failed with result code {code}: {message}"
+    },
+    "command_result_failed_power_off": {
+      "message": "Deepal command failed with result code {code}: {message} (the vehicle must be powered off before this command can run)"
+    },
+    "command_result_failed_unreachable": {
+      "message": "Deepal command failed with result code {code}: {message} (the vehicle did not accept the command; it may be offline or busy, try again when it is awake)"
+    }
+  },
+  "issues": {
+    "mqtt_user_id_missing": {
+      "title": "Re-authentication needed for MQTT telemetry",
+      "description": "The stored session for {name} has no account user id, so MQTT telemetry is disabled and the integration falls back to the REST condition endpoint with stale data. Re-authenticate to restore MQTT telemetry.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Re-authenticate",
+            "description": "Start the re-authentication flow for this account. The repair disappears once the new session provides the user id."
+          }
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -61,7 +119,7 @@
       },
       "intl_phone": {
         "title": "SMS login",
-        "description": "Select the sales country and the national mobile number (without the country prefix). Home Assistant will request a verification code by SMS.",
+        "description": "Select the sales country and the national mobile number (without the country prefix). Home Assistant will request a verification code by SMS. Changan is currently not delivering SMS codes; if the SMS does not arrive, request the code again or switch to the email method.",
         "data": {
           "country": "Sales country",
           "phone": "Mobile number",
@@ -81,6 +139,17 @@
         },
         "data_description": {
           "auth_code": "Numeric code from the SMS. It expires quickly; request a new one if it is rejected."
+        }
+      },
+      "intl_code_menu": {
+        "title": "Code sent",
+        "description": "Home Assistant has requested the verification code for {destination}. It can take a couple of minutes; check the spam folder too. If it does not arrive, resend it or correct the destination.",
+        "menu_options": {
+          "intl_email_code": "Enter the email code",
+          "intl_sms_code": "Enter the SMS code",
+          "intl_code_resend": "Resend the code",
+          "intl_email_change": "Change email",
+          "intl_sms_change": "Change mobile number"
         }
       },
       "sda_reauth": {
@@ -116,6 +185,7 @@
           "scan_interval": "Scan interval (seconds)",
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log API traffic",
+          "wake": "Wake the vehicle when needed",
           "environment": "Regional environment"
         },
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
@@ -123,6 +193,7 @@
           "scan_interval": "How often Home Assistant polls the vehicle when no MQTT telemetry is available, in seconds (30-3600).",
           "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk.",
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number hidden. Enable only while troubleshooting.",
+          "wake": "Wake a sleeping MQTT vehicle before refreshing or sending a PIN command. Enabled by default; disable it to protect the 12 V battery if you refresh very often.",
           "environment": "Regional gateway set used for the international API. Europe by default."
         }
       }
@@ -261,6 +332,27 @@
       },
       "remaining_charge_time_formatted": {
         "name": "Remaining charge time (H:MM)"
+      },
+      "climate_target_temperature": {
+        "name": "Climate target temperature"
+      },
+      "fan_level": {
+        "name": "Climate fan level"
+      },
+      "license_plate": {
+        "name": "License plate"
+      },
+      "window_opening_front_left": {
+        "name": "Front left window opening"
+      },
+      "window_opening_front_right": {
+        "name": "Front right window opening"
+      },
+      "window_opening_rear_left": {
+        "name": "Rear left window opening"
+      },
+      "window_opening_rear_right": {
+        "name": "Rear right window opening"
       }
     },
     "binary_sensor": {
@@ -299,9 +391,6 @@
       },
       "engine": {
         "name": "Engine"
-      },
-      "defrost": {
-        "name": "Front defrost"
       },
       "connected": {
         "name": "Cloud connection"
@@ -374,6 +463,48 @@
       },
       "front_right_seat_ventilation": {
         "name": "Front right seat ventilation"
+      },
+      "key_battery_low": {
+        "name": "Key fob battery low"
+      },
+      "air_recirculation": {
+        "name": "Air recirculation"
+      },
+      "rear_fog_lamp": {
+        "name": "Rear fog lamp"
+      },
+      "warning_12v_battery": {
+        "name": "12 V battery warning"
+      },
+      "warning_tpms": {
+        "name": "Tire pressure warning"
+      },
+      "warning_abs": {
+        "name": "ABS warning"
+      },
+      "warning_airbag": {
+        "name": "Airbag warning"
+      },
+      "warning_brake_fluid": {
+        "name": "Brake fluid warning"
+      },
+      "warning_brake": {
+        "name": "Brake warning"
+      },
+      "warning_eps": {
+        "name": "Power steering warning"
+      },
+      "warning_power_limit": {
+        "name": "Power limit warning"
+      },
+      "warning_power_system": {
+        "name": "Power system warning"
+      },
+      "warning_traction_battery_low": {
+        "name": "Traction battery low warning"
+      },
+      "warning_coolant_temperature": {
+        "name": "Coolant temperature warning"
       }
     },
     "button": {
@@ -385,6 +516,9 @@
       },
       "honk_horn": {
         "name": "Honk horn"
+      },
+      "flash_and_honk": {
+        "name": "Flash lights and honk"
       }
     },
     "climate": {

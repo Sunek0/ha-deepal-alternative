@@ -5,9 +5,8 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.config_entries import OptionsFlowWithReload
+from homeassistant.config_entries import ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 
@@ -42,9 +41,11 @@ from .const import (
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
+    CONF_WAKE,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
+    DEFAULT_WAKE,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
 
@@ -128,6 +129,20 @@ def _login_error(err: DeepalError) -> str:
     return "cannot_connect"
 
 
+def _mask(value: str) -> str:
+    """Mask an email address or phone number for display in the flow."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if "@" in text:
+        local, _, domain = text.partition("@")
+        visible = local[:2]
+        return f"{visible}{'*' * max(len(local) - len(visible), 0)}@{domain}"
+    if len(text) <= 3:
+        return "*" * len(text)
+    return f"{'*' * (len(text) - 3)}{text[-3:]}"
+
+
 async def _control_pin_validation_error(
     stored_pin: str, user_input: dict[str, Any], client: Any
 ) -> dict[str, str]:
@@ -162,15 +177,36 @@ def _vehicle_device_entry(
     # plural lookup when the running Home Assistant provides it.
     async_get_devices = getattr(registry, "async_get_devices", None)
     if async_get_devices is not None:
-        devices = async_get_devices(identifiers={(DOMAIN, car_id)})
-    else:
-        device = registry.async_get_device(identifiers={(DOMAIN, car_id)})
-        devices = [] if device is None else [device]
+        # 2026.8 and newer: a device belongs to a single config entry,
+        # available as config_entry_id. primary_config_entry is reported as
+        # deprecated from 2026.10 and removed in 2027.10.
+        for device in async_get_devices(identifiers={(DOMAIN, car_id)}):
+            if device.config_entry_id is not None:
+                return hass.config_entries.async_get_entry(device.config_entry_id)
+        return None
 
-    for device in devices:
-        if device.primary_config_entry is not None:
-            return hass.config_entries.async_get_entry(device.primary_config_entry)
+    # 2026.3-2026.7: identifiers are globally unique and the device carries its
+    # primary config entry, which is not deprecated on those versions.
+    device = registry.async_get_device(identifiers={(DOMAIN, car_id)})
+    if device is not None and device.primary_config_entry is not None:
+        return hass.config_entries.async_get_entry(device.primary_config_entry)
     return None
+
+
+def _sda_unique_id(phone: str, vehicles: list[Vehicle], token: str) -> str:
+    """Return the stable unique id for an SDA entry.
+
+    The account phone (digits only) is the preferred identifier, followed by a
+    vehicle VIN. The access-token fragment is the last resort for accounts
+    with neither, preserving the historical behavior.
+    """
+    digits = "".join(character for character in phone if character.isdigit())
+    if digits:
+        return f"sda_phone_{digits}"
+    vin = next((vehicle.vin for vehicle in vehicles if vehicle.vin), "")
+    if vin:
+        return f"sda_vin_{vin}"
+    return token[:10]
 
 
 class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -186,7 +222,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------ user
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step (platform selection)."""
         if user_input is not None:
             if user_input[CONF_PLATFORM] == PLATFORM_INTL:
@@ -205,7 +241,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------- SDA
     async def async_step_sda(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Configure an SDA entry with a pasted access token."""
         errors: dict[str, str] = {}
 
@@ -214,7 +250,9 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             client = DeepalClient(access_token=token)
             try:
                 vehicles = await client.get_vehicles()
-                await self.async_set_unique_id(token[:10])
+                await self.async_set_unique_id(
+                    _sda_unique_id(user_input.get(CONF_PHONE, ""), vehicles, token)
+                )
                 self._abort_if_unique_id_configured()
                 for vehicle in vehicles:
                     if _vehicle_device_entry(self.hass, vehicle.car_id) is not None:
@@ -247,7 +285,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ----------------------------------------------------------- international
     async def async_step_intl_method(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Choose the international login method."""
         if user_input is not None:
             if user_input[CONF_LOGIN_METHOD] == LOGIN_METHOD_EMAIL:
@@ -281,7 +319,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_intl_email(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Request an email verification code."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -301,33 +339,44 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_EMAIL: email,
                     CONF_LOGIN_METHOD: LOGIN_METHOD_EMAIL,
                 }
-                return await self.async_step_intl_email_code()
+                return await self.async_step_intl_code_menu()
             finally:
                 await client.close()
 
+        return self._intl_email_form(errors)
+
+    def _intl_email_form(self, errors: dict[str, str] | None = None) -> ConfigFlowResult:
+        """Render the email destination form with the pending values."""
         schema = vol.Schema(
             {
-                vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): vol.In(
-                    COUNTRY_OPTIONS
-                ),
+                vol.Required(
+                    CONF_COUNTRY,
+                    default=self._pending_login.get(CONF_COUNTRY, DEFAULT_COUNTRY),
+                ): vol.In(COUNTRY_OPTIONS),
                 vol.Optional(
                     CONF_ENVIRONMENT,
-                    default=self._reauth_identity.get(
-                        CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                    default=(
+                        self._pending_login.get(CONF_ENVIRONMENT)
+                        or self._reauth_identity.get(
+                            CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                        )
                     ),
                 ): _environment_selector(),
-                vol.Required(CONF_EMAIL): selector.TextSelector(
+                vol.Required(
+                    CONF_EMAIL,
+                    default=self._pending_login.get(CONF_EMAIL, ""),
+                ): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.EMAIL)
                 ),
             }
         )
         return self.async_show_form(
-            step_id="intl_email", data_schema=schema, errors=errors
+            step_id="intl_email", data_schema=schema, errors=errors or {}
         )
 
     async def async_step_intl_email_code(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Complete the email login with the verification code."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -361,7 +410,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_intl_phone(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Request an SMS verification code."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -383,33 +432,111 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "dial_code": dial_code,
                     CONF_LOGIN_METHOD: LOGIN_METHOD_PHONE,
                 }
-                return await self.async_step_intl_sms_code()
+                return await self.async_step_intl_code_menu()
             finally:
                 await client.close()
 
+        return self._intl_phone_form(errors)
+
+    def _intl_phone_form(self, errors: dict[str, str] | None = None) -> ConfigFlowResult:
+        """Render the phone destination form with the pending values."""
         schema = vol.Schema(
             {
-                vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): vol.In(
-                    COUNTRY_OPTIONS
-                ),
+                vol.Required(
+                    CONF_COUNTRY,
+                    default=self._pending_login.get(CONF_COUNTRY, DEFAULT_COUNTRY),
+                ): vol.In(COUNTRY_OPTIONS),
                 vol.Optional(
                     CONF_ENVIRONMENT,
-                    default=self._reauth_identity.get(
-                        CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                    default=(
+                        self._pending_login.get(CONF_ENVIRONMENT)
+                        or self._reauth_identity.get(
+                            CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                        )
                     ),
                 ): _environment_selector(),
-                vol.Required(CONF_PHONE): selector.TextSelector(
+                vol.Required(
+                    CONF_PHONE,
+                    default=self._pending_login.get(CONF_PHONE, ""),
+                ): selector.TextSelector(
                     selector.TextSelectorConfig(type=selector.TextSelectorType.TEL)
                 ),
             }
         )
         return self.async_show_form(
-            step_id="intl_phone", data_schema=schema, errors=errors
+            step_id="intl_phone", data_schema=schema, errors=errors or {}
         )
+
+    def _intl_login_method(self) -> str:
+        """Return the pending international login method."""
+        return self._pending_login.get(CONF_LOGIN_METHOD, LOGIN_METHOD_EMAIL)
+
+    def _intl_code_menu_options(self) -> list[str]:
+        """Return the code menu options for the pending login method."""
+        if self._intl_login_method() == LOGIN_METHOD_PHONE:
+            return ["intl_sms_code", "intl_code_resend", "intl_sms_change"]
+        return ["intl_email_code", "intl_code_resend", "intl_email_change"]
+
+    def _intl_destination(self) -> str:
+        """Return the pending destination (email or mobile) for display."""
+        if self._intl_login_method() == LOGIN_METHOD_PHONE:
+            return self._pending_login.get(CONF_PHONE, "")
+        return self._pending_login.get(CONF_EMAIL, "")
+
+    def _intl_code_menu(self) -> ConfigFlowResult:
+        """Show the post-request menu: enter, resend or correct the destination."""
+        return self.async_show_menu(
+            step_id="intl_code_menu",
+            menu_options=self._intl_code_menu_options(),
+            description_placeholders={"destination": _mask(self._intl_destination())},
+        )
+
+    async def async_step_intl_code_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer entering the code, resending it or changing the destination."""
+        return self._intl_code_menu()
+
+    async def async_step_intl_code_resend(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Resend the verification code to the pending destination."""
+        info = self._pending_login
+        country = info.get(CONF_COUNTRY, DEFAULT_COUNTRY)
+        client = self._intl_login_client(country, info.get(CONF_ENVIRONMENT))
+        errors: dict[str, str] = {}
+        try:
+            if self._intl_login_method() == LOGIN_METHOD_PHONE:
+                dial_code = info.get("dial_code") or COUNTRY_DIAL_CODES.get(country, "")
+                await client.request_sms_code(info.get(CONF_PHONE, ""), dial_code)
+            else:
+                await client.request_email_code(info.get(CONF_EMAIL, ""))
+        except DeepalError as err:
+            _LOGGER.warning("Deepal code resend failed: %s", err)
+            errors["base"] = _login_error(err)
+        finally:
+            await client.close()
+        if errors:
+            if self._intl_login_method() == LOGIN_METHOD_PHONE:
+                return self._intl_phone_form(errors)
+            return self._intl_email_form(errors)
+        return await self.async_step_intl_code_menu()
+
+    async def async_step_intl_email_change(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reopen the email form to correct the address."""
+        return await self.async_step_intl_email()
+
+    async def async_step_intl_sms_change(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reopen the phone form to correct the mobile number."""
+        return await self.async_step_intl_phone()
 
     async def async_step_intl_sms_code(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Complete the SMS login with the verification code."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -450,7 +577,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         *,
         step_id: str,
         errors: dict[str, str],
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Validate the account and create or reauthenticate the entry."""
         try:
             vehicles = await client.get_vehicles()
@@ -530,7 +657,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     # ------------------------------------------------------------- reauth
-    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Start the reauthentication flow."""
         entry = self._get_reauth_entry()
         if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
@@ -545,7 +672,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_sda_reauth(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Reauthenticate an SDA entry with a new access token."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -587,7 +714,7 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Manage integration options."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -637,6 +764,10 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 vol.Optional(
                     CONF_ENABLE_API_LOGGING,
                     default=options.get(CONF_ENABLE_API_LOGGING, False),
+                ): bool,
+                vol.Optional(
+                    CONF_WAKE,
+                    default=options.get(CONF_WAKE, DEFAULT_WAKE),
                 ): bool,
                 vol.Optional(
                     CONF_ENVIRONMENT,

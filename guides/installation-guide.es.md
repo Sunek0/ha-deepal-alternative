@@ -101,7 +101,9 @@ aparecerá la pestaña **HACS** en la barra lateral de Home Assistant.
 5. Rellena los datos del formulario:
    - **País de venta**: el país registrado en tu cuenta de My Changan (por ejemplo, España).
    - **Email** o **Número de móvil** (sin prefijo) de la cuenta **secundaria**.
-6. Espera el código de verificación (email o SMS) e introdúcelo en **Código de verificación**.
+6. Espera el código de verificación (email o SMS) e introdúcelo en **Código de verificación**. Si no
+   llega, ese mismo paso te permite reenviarlo o corregir el email o el móvil. Ahora mismo Changan no
+   está entregando los SMS, así que es preferible el método por email.
 7. La integración valida la cuenta y crea un dispositivo por vehículo. Listo.
 
 ### 9. Guardar el PIN de control remoto

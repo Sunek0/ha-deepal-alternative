@@ -40,7 +40,7 @@ normal.
 
 1. Öffne die **My Changan** App und erstelle ein neues Konto mit einer anderen E-Mail-Adresse oder
    Telefonnummer als bei deinem Hauptkonto.
-2. Notiere die Zugangsdaten (E-Mail/Telefon und Zugangscode): Diese verwendest du in Home Assistant.
+2. Notiere die Angaben (E-Mail/Telefon): Diese verwendest du in Home Assistant.
 
 ### 2. Das Fahrzeug vom Hauptkonto teilen
 
@@ -103,7 +103,10 @@ der Seitenleiste von Home Assistant.
 5. Fülle die Formularfelder aus:
    - **Verkaufsland**: das in deinem My Changan Konto registrierte Land (zum Beispiel Spanien).
    - **E-Mail** oder **Mobilnummer** (ohne Ländervorwahl) des **Zweitkontos**.
-6. Warte auf den Bestätigungscode (E-Mail oder SMS) und gib ihn unter **Bestätigungscode** ein.
+6. Warte auf den Bestätigungscode (E-Mail oder SMS) und gib ihn unter **Bestätigungscode** ein. Wenn
+   er nicht ankommt, kannst du ihn in diesem Schritt erneut anfordern oder die E-Mail-Adresse bzw.
+   Mobilnummer korrigieren. Changan stellt derzeit keine SMS-Codes zu, daher ist die E-Mail-Methode
+   zu bevorzugen.
 7. Die Integration prüft das Konto und erstellt ein Gerät pro Fahrzeug. Fertig.
 
 ### 9. Die Fernsteuerungs-PIN speichern

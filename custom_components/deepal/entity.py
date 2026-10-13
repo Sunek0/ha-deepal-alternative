@@ -72,7 +72,12 @@ class DeepalEntity(CoordinatorEntity[DeepalDataUpdateCoordinator]):
                 wake_first=wake_first,
             )
         except DeepalError as err:
-            raise HomeAssistantError(f"Deepal command failed: {err}") from err
+            raise HomeAssistantError(
+                f"Deepal command failed: {err}",
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
 
 
 def async_setup_control_entities(

@@ -7,9 +7,18 @@ try:  # Home Assistant 2026.4 and later expose the density unit enum.
         UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
     )
 except ImportError:  # Home Assistant 2026.3 only ships the legacy constant.
-    from homeassistant.const import (
-        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER as DENSITY_MICROGRAMS_PER_CUBIC_METER,
-    )
+    from homeassistant.const import CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+
+    DENSITY_MICROGRAMS_PER_CUBIC_METER = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+
+try:  # Home Assistant 2026.7 and later expose the ratio unit enum.
+    from homeassistant.const import UnitOfRatio
+
+    PERCENTAGE_UNIT = UnitOfRatio.PERCENTAGE
+except ImportError:  # Home Assistant 2026.3-2026.6 only ship the string.
+    from homeassistant.const import PERCENTAGE
+
+    PERCENTAGE_UNIT = PERCENTAGE
 
 DOMAIN = "deepal"
 
@@ -33,11 +42,13 @@ CONF_DEVICE_ID = "device_id"
 CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
+CONF_WAKE = "wake"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
+DEFAULT_WAKE = True
 
 # Vehicle wake (MQTT): an explicit refresh wakes a stale car, throttled so
 # repeated refreshes cannot drain the 12 V battery.

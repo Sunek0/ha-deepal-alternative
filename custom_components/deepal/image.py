@@ -26,6 +26,9 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity
 from .runtime_data import DeepalConfigEntry
 
+# Coordinator is used to centralize the data updates
+PARALLEL_UPDATES = 0
+
 _LOGGER = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).parent / "assets"

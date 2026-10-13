@@ -83,14 +83,39 @@ def test_safe_headers_keeps_region_only():
     }
 
 
+def test_vin_variants_redacted_but_innocent_keys_visible():
+    payload = {
+        "vin": "LS5AXXXXX123456",
+        "vinCode": "LS5AXXXXX123456",
+        "vehicle_vin": "LS5AXXXXX123456",
+        "unlockKeyDrivingStatus": 1,
+        "drivingMode": "eco",
+        "latestDate": "2026-09-30T10:00:00Z",
+    }
+
+    out = redact_for_log(payload)
+
+    assert out["vin"] == "[redacted]"
+    assert out["vinCode"] == "[redacted]"
+    assert out["vehicle_vin"] == "[redacted]"
+    assert out["unlockKeyDrivingStatus"] == 1
+    assert out["drivingMode"] == "eco"
+    assert out["latestDate"] == "2026-09-30T10:00:00Z"
+
+
 def test_is_sensitive_key():
     assert is_sensitive_key("X-Tsp-User-Token")
     assert is_sensitive_key("seriralNo")
     assert is_sensitive_key("plateNumber")
     assert is_sensitive_key("Lat")
     assert is_sensitive_key("carLatitude")
+    assert is_sensitive_key("vin")
+    assert is_sensitive_key("vinCode")
+    assert is_sensitive_key("vehicle_vin")
+    assert is_sensitive_key("pubKey")
     assert not is_sensitive_key("soc")
     assert not is_sensitive_key("latestDate")
+    assert not is_sensitive_key("unlockKeyDrivingStatus")
 
 
 @pytest.mark.asyncio

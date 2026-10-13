@@ -11,8 +11,6 @@ from .endpoints import (
     OAUTH_TOKEN_BIND,
     GET_MY_CARS,
     GET_CAR_FULL_CONDITION,
-    GET_CAR_STATUS,
-    GET_HOME_CHARGER_STATUS,
     REMOTE_CLIMATE_CONTROL,
     REMOTE_DOOR_LOCK,
 )
@@ -20,6 +18,8 @@ from .exceptions import (
     DeepalAPIError,
     DeepalAuthError,
     DeepalConnectionError,
+    DeepalRateLimitError,
+    parse_retry_after,
 )
 from .models import (
     AuthToken,
@@ -94,10 +94,18 @@ class DeepalClient:
                 params=params,
                 json=json_data,
                 headers=headers,
+                timeout=self.timeout,
             )
         except httpx.RequestError as exc:
             logger.error("Network error requesting %s: %s", url, exc)
             raise DeepalConnectionError(f"Failed to connect to Deepal API: {exc}") from exc
+
+        if response.status_code == 429:
+            raise DeepalRateLimitError(
+                "Deepal rate limit: HTTP 429.",
+                status_code=429,
+                retry_after=parse_retry_after(response.headers.get("Retry-After")),
+            )
 
         if response.status_code in (401, 403):
             raise DeepalAuthError("Authentication token expired or invalid.")

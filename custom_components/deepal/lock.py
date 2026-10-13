@@ -10,6 +10,9 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
 
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
+
 
 def _set_locked(condition: Any, locked: bool) -> Any:
     condition.doors.locked = locked
@@ -34,7 +37,6 @@ async def async_setup_entry(
 class DeepalDoorsLock(DeepalEntity, LockEntity):
     """Vehicle door lock."""
 
-    _attr_icon = "mdi:car-door-lock"
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any

@@ -36,6 +36,8 @@ from deepal.models import (
     DoorsCondition,
     ClimateCondition,
     TiresCondition,
+    WarningLightsCondition,
+    WindowOpeningsCondition,
 )
 
 __version__ = "0.1.0"
@@ -72,4 +74,6 @@ __all__ = [
     "DoorsCondition",
     "ClimateCondition",
     "TiresCondition",
+    "WarningLightsCondition",
+    "WindowOpeningsCondition",
 ]

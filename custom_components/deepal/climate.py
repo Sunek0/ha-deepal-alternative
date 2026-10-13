@@ -19,6 +19,9 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalError, DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
 
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -51,7 +54,6 @@ class DeepalCabinClimateEntity(
     _attr_target_temperature_step = 0.5
     _attr_min_temp = 16
     _attr_max_temp = 30
-    _attr_icon = "mdi:air-conditioner"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         """Initialize the climate entity."""
@@ -97,7 +99,12 @@ class DeepalCabinClimateEntity(
         if hvac_mode == HVACMode.HEAT_COOL:
             await self.async_turn_on()
             return
-        raise HomeAssistantError(f"Unsupported HVAC mode: {hvac_mode}")
+        raise HomeAssistantError(
+            f"Unsupported HVAC mode: {hvac_mode}",
+            translation_domain=DOMAIN,
+            translation_key="unsupported_hvac_mode",
+            translation_placeholders={"mode": str(hvac_mode)},
+        )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set the target temperature."""
@@ -132,4 +139,9 @@ class DeepalCabinClimateEntity(
         except HomeAssistantError:
             raise
         except DeepalError as err:
-            raise HomeAssistantError(f"Deepal climate command failed: {err}") from err
+            raise HomeAssistantError(
+                f"Deepal climate command failed: {err}",
+                translation_domain=DOMAIN,
+                translation_key="climate_command_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err

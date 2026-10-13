@@ -3,20 +3,23 @@
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import PERCENTAGE_UNIT
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
 from .vehicle_model import is_s05
 
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
+
 
 SEAT_LABELS = {"front_left": "Front Left", "front_right": "Front Right"}
 SEAT_FUNCTIONS = {
-    "heating": ("control_seats_heat", "heating_level", "mdi:car-seat-heater"),
-    "ventilation": ("control_seats_wind", "ventilation_level", "mdi:car-seat-cooler"),
+    "heating": ("control_seats_heat", "heating_level"),
+    "ventilation": ("control_seats_wind", "ventilation_level"),
 }
 
 
@@ -69,9 +72,8 @@ class DeepalChargeLimitNumber(DeepalEntity, NumberEntity):
     _attr_native_min_value = 60
     _attr_native_max_value = 100
     _attr_native_step = 1
-    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_native_unit_of_measurement = PERCENTAGE_UNIT
     _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-heart"
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
@@ -119,7 +121,6 @@ class DeepalSeatLevelNumber(DeepalEntity, NumberEntity):
             f"deepal_{vehicle.car_id}_seat_{seat}_{function}_control"
         )
         self._attr_translation_key = f"seat_{function}_level_{seat}"
-        self._attr_icon = SEAT_FUNCTIONS[function][2]
 
     @property
     def native_value(self) -> int | None:

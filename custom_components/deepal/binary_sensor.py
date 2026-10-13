@@ -10,15 +10,21 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
+from .charging import charging_flag
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
 from .vehicle_model import is_s05
+
+# Coordinator is used to centralize the data updates
+PARALLEL_UPDATES = 0
 
 # The S05 has no rear seat heating hardware (the app disables those controls).
 S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
@@ -27,6 +33,11 @@ S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
         "rear_right_seat_heating",
     }
 )
+
+# Keys retired from the platform. Their entity-registry entries are removed on
+# setup so they do not linger as orphaned entities: the reference S05 does not
+# support the front defrost signal, so the entity was removed.
+REMOVED_BINARY_SENSOR_KEYS = frozenset({"defrost"})
 
 
 def build_binary_sensors(
@@ -63,6 +74,16 @@ def build_binary_sensors(
     return entities
 
 
+def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
+    """Remove entity-registry entries for keys retired from this platform."""
+    for key in REMOVED_BINARY_SENSOR_KEYS:
+        unique_id = f"deepal_{vehicle.car_id}_{key}"
+        if entity_id := registry.async_get_entity_id(
+            "binary_sensor", DOMAIN, unique_id
+        ):
+            registry.async_remove(entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DeepalConfigEntry,
@@ -70,10 +91,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up Deepal binary sensors based on a config entry."""
     coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
 
     entities: list[BinarySensorEntity] = []
 
     for vehicle in coordinator.vehicles:
+        _remove_retired_entities(registry, vehicle)
         entities.extend(build_binary_sensors(coordinator, vehicle))
 
     async_add_entities(entities)
@@ -104,7 +127,6 @@ class DeepalChargerPluggedBinarySensor(DeepalBaseBinarySensor):
     """Charging cable plugged in binary sensor."""
 
     _attr_device_class = BinarySensorDeviceClass.PLUG
-    _attr_icon = "mdi:ev-plug-ccs2"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -122,7 +144,6 @@ class DeepalDoorsLockedBinarySensor(DeepalBaseBinarySensor):
     """Doors lock binary sensor."""
 
     _attr_device_class = BinarySensorDeviceClass.LOCK
-    _attr_icon = "mdi:car-door-lock"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -140,7 +161,6 @@ class DeepalTireAlarmBinarySensor(DeepalBaseBinarySensor):
     """Tire pressure alarm binary sensor for international vehicles."""
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    _attr_icon = "mdi:car-tire-alert"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
@@ -161,7 +181,6 @@ class DeepalWindowBinarySensor(DeepalBaseBinarySensor):
     """Window open binary sensor for international vehicles."""
 
     _attr_device_class = BinarySensorDeviceClass.WINDOW
-    _attr_icon = "mdi:window-closed-variant"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
@@ -182,7 +201,6 @@ class DeepalSteeringWheelHeaterBinarySensor(DeepalBaseBinarySensor):
     """Steering wheel heater binary sensor for international vehicles."""
 
     _attr_device_class = BinarySensorDeviceClass.HEAT
-    _attr_icon = "mdi:steering"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -201,6 +219,7 @@ class DeepalBinarySensorDescription(BinarySensorEntityDescription):
     """Description of an extended international binary sensor."""
 
     value_fn: Callable[[Any, Any], bool | None]
+    enabled_default: bool = True
 
 
 def _seat_level_on(position: str, field: str) -> Callable[[Any, Any], bool | None]:
@@ -216,10 +235,7 @@ def _seat_level_on(position: str, field: str) -> Callable[[Any, Any], bool | Non
 
 
 def _charging(condition: Any, vehicle: Any) -> bool | None:
-    status = condition.battery.charging_status
-    if status is None:
-        return None
-    return str(status) not in ("0", "None")
+    return charging_flag(condition)
 
 
 def _not_locked(value: bool | None) -> bool | None:
@@ -232,56 +248,42 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         name="Engine",
         value_fn=lambda cond, vehicle: cond.engine_on,
         device_class=BinarySensorDeviceClass.RUNNING,
-        icon="mdi:engine",
-    ),
-    DeepalBinarySensorDescription(
-        key="defrost",
-        name="Front Defrost",
-        value_fn=lambda cond, vehicle: cond.climate.defrost_on,
-        device_class=None,
-        icon="mdi:car-defrost-front",
     ),
     DeepalBinarySensorDescription(
         key="connected",
         name="Cloud Connection",
         value_fn=lambda cond, vehicle: cond.connected,
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
-        icon="mdi:cloud-check",
     ),
     DeepalBinarySensorDescription(
         key="high_beam",
         name="High Beam",
         value_fn=lambda cond, vehicle: cond.lamps.high_beam,
         device_class=BinarySensorDeviceClass.LIGHT,
-        icon="mdi:car-high-beam",
     ),
     DeepalBinarySensorDescription(
         key="low_beam",
         name="Low Beam",
         value_fn=lambda cond, vehicle: cond.lamps.low_beam,
         device_class=BinarySensorDeviceClass.LIGHT,
-        icon="mdi:car-low-beam",
     ),
     DeepalBinarySensorDescription(
         key="position_lamp",
         name="Position Lamp",
         value_fn=lambda cond, vehicle: cond.lamps.position_lamp,
         device_class=BinarySensorDeviceClass.LIGHT,
-        icon="mdi:car-parking-lights",
     ),
     DeepalBinarySensorDescription(
         key="left_turn_signal",
         name="Left Turn Signal",
         value_fn=lambda cond, vehicle: cond.lamps.left_turn,
         device_class=BinarySensorDeviceClass.LIGHT,
-        icon="mdi:arrow-left",
     ),
     DeepalBinarySensorDescription(
         key="right_turn_signal",
         name="Right Turn Signal",
         value_fn=lambda cond, vehicle: cond.lamps.right_turn,
         device_class=BinarySensorDeviceClass.LIGHT,
-        icon="mdi:arrow-right",
     ),
     DeepalBinarySensorDescription(
         key="any_door_open",
@@ -296,126 +298,206 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
             )
         ),
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
         key="door_front_left",
         name="Front Left Door",
         value_fn=lambda cond, vehicle: cond.doors.driver_door_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
         key="door_front_right",
         name="Front Right Door",
         value_fn=lambda cond, vehicle: cond.doors.passenger_door_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
         key="door_rear_left",
         name="Rear Left Door",
         value_fn=lambda cond, vehicle: cond.doors.rear_left_door_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
         key="door_rear_right",
         name="Rear Right Door",
         value_fn=lambda cond, vehicle: cond.doors.rear_right_door_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-door",
     ),
     DeepalBinarySensorDescription(
         key="trunk",
         name="Trunk",
         value_fn=lambda cond, vehicle: cond.doors.trunk_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-select",
     ),
     DeepalBinarySensorDescription(
         key="hood",
         name="Hood",
         value_fn=lambda cond, vehicle: cond.doors.hood_open,
         device_class=BinarySensorDeviceClass.DOOR,
-        icon="mdi:car-cowl",
     ),
     DeepalBinarySensorDescription(
         key="driver_door_unlocked",
         name="Driver Door Unlocked",
         value_fn=lambda cond, vehicle: _not_locked(cond.doors.driver_locked),
         device_class=BinarySensorDeviceClass.LOCK,
-        icon="mdi:car-door-lock",
     ),
     DeepalBinarySensorDescription(
         key="passenger_door_unlocked",
         name="Passenger Door Unlocked",
         value_fn=lambda cond, vehicle: _not_locked(cond.doors.passenger_locked),
         device_class=BinarySensorDeviceClass.LOCK,
-        icon="mdi:car-door-lock",
     ),
     DeepalBinarySensorDescription(
         key="dc_gun_connected",
         name="DC Gun Connected",
         value_fn=lambda cond, vehicle: cond.battery.dc_gun_connected,
         device_class=BinarySensorDeviceClass.PLUG,
-        icon="mdi:ev-plug-ccs2",
     ),
     DeepalBinarySensorDescription(
         key="charging",
         name="Charging",
         value_fn=_charging,
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
-        icon="mdi:battery-charging",
     ),
     DeepalBinarySensorDescription(
         key="charge_schedule_enabled",
         name="Charge Schedule Enabled",
         value_fn=lambda cond, vehicle: cond.battery.charge_schedule_enabled,
         device_class=None,
-        icon="mdi:calendar-clock",
     ),
     DeepalBinarySensorDescription(
         key="front_left_seat_heating",
         name="Front Left Seat Heating",
         value_fn=_seat_level_on("front_left", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
-        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_heating",
         name="Front Right Seat Heating",
         value_fn=_seat_level_on("front_right", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
-        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="rear_left_seat_heating",
         name="Rear Left Seat Heating",
         value_fn=_seat_level_on("rear_left", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
-        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="rear_right_seat_heating",
         name="Rear Right Seat Heating",
         value_fn=_seat_level_on("rear_right", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
-        icon="mdi:car-seat-heater",
     ),
     DeepalBinarySensorDescription(
         key="front_left_seat_ventilation",
         name="Front Left Seat Ventilation",
         value_fn=_seat_level_on("front_left", "ventilation_level"),
         device_class=None,
-        icon="mdi:car-seat-cooler",
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_ventilation",
         name="Front Right Seat Ventilation",
         value_fn=_seat_level_on("front_right", "ventilation_level"),
         device_class=None,
-        icon="mdi:car-seat-cooler",
+    ),
+    DeepalBinarySensorDescription(
+        key="key_battery_low",
+        name="Key Fob Battery Low",
+        value_fn=lambda cond, vehicle: cond.key_battery_low,
+        device_class=BinarySensorDeviceClass.BATTERY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="air_recirculation",
+        name="Air Recirculation",
+        value_fn=lambda cond, vehicle: cond.air_recirculation,
+        device_class=None,
+    ),
+    DeepalBinarySensorDescription(
+        key="rear_fog_lamp",
+        name="Rear Fog Lamp",
+        value_fn=lambda cond, vehicle: cond.lamps.rear_fog,
+        device_class=BinarySensorDeviceClass.LIGHT,
+    ),
+    # Dashboard warning lights. They stay unknown when the vehicle does not
+    # report them, so an absent signal is never exposed as healthy.
+    DeepalBinarySensorDescription(
+        key="warning_12v_battery",
+        name="12 V Battery Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.battery_12v,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_tpms",
+        name="Tire Pressure Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.tpms,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_abs",
+        name="ABS Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.abs,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_airbag",
+        name="Airbag Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.airbag,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_brake_fluid",
+        name="Brake Fluid Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.brake_fluid,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_brake",
+        name="Brake Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.brake,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_eps",
+        name="Power Steering Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.eps,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_power_limit",
+        name="Power Limit Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.power_limit,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_power_system",
+        name="Power System Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.power_system,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_traction_battery_low",
+        name="Traction Battery Low Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.traction_battery_low,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_coolant_temperature",
+        name="Coolant Temperature Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.coolant_temperature,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
 
@@ -435,10 +517,9 @@ class DeepalBinarySensor(DeepalBaseBinarySensor):
         self.entity_description = description
         self._attr_unique_id = f"deepal_{vehicle.car_id}_{description.key}"
         self._attr_translation_key = description.key
+        self._attr_entity_registry_enabled_default = description.enabled_default
         if description.device_class is not None:
             self._attr_device_class = description.device_class
-        if description.icon is not None:
-            self._attr_icon = description.icon
 
     @property
     def is_on(self) -> bool | None:
@@ -447,3 +528,13 @@ class DeepalBinarySensor(DeepalBaseBinarySensor):
         if not cond:
             return None
         return self.entity_description.value_fn(cond, self.vehicle)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose the tracked charging sessions on the charging sensor."""
+        if self.entity_description.key != "charging":
+            return None
+        manager = getattr(self.coordinator, "charging", None)
+        if manager is None:
+            return None
+        return manager.attributes(self._car_id) or None

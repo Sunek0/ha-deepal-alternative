@@ -1,7 +1,8 @@
 """Unit tests for Deepal Client and models."""
 
+import httpx
 import pytest
-from deepal import DeepalClient
+from deepal import DeepalClient, DeepalRateLimitError
 from deepal.models import VehicleCondition, Vehicle
 
 
@@ -48,3 +49,50 @@ def test_vehicle_condition_parsing():
     assert cond.battery.remaining_range_km == 410
     assert cond.doors.locked is True
     assert cond.climate.power_on is False
+
+
+def test_rate_limit_error_carries_retry_after():
+    assert DeepalRateLimitError("limit").retry_after is None
+    assert DeepalRateLimitError("limit", retry_after=30).retry_after == 30
+
+
+@pytest.mark.asyncio
+async def test_http_429_is_a_rate_limit_with_retry_after():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "30"}, text="<html>")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalClient(access_token="test_token_123", httpx_client=http_client)
+    try:
+        with pytest.raises(DeepalRateLimitError) as err:
+            await client.get_vehicles()
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert err.value.status_code == 429
+    assert err.value.retry_after == 30
+
+
+class _RecordingHttpxClient:
+    """HTTP client double capturing the request arguments."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def request(self, **kwargs) -> httpx.Response:
+        self.calls.append(kwargs)
+        return httpx.Response(200, json={"code": 200, "data": []})
+
+
+@pytest.mark.asyncio
+async def test_requests_pass_the_client_timeout():
+    http_client = _RecordingHttpxClient()
+    client = DeepalClient(access_token="test_token_123", httpx_client=http_client)
+    try:
+        await client.get_vehicles()
+    finally:
+        await client.close()
+
+    assert http_client.calls
+    assert http_client.calls[0]["timeout"] == client.timeout

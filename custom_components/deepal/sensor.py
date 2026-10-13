@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import (
-    PERCENTAGE,
+    EntityCategory,
     UnitOfElectricCurrent,
     UnitOfLength,
     UnitOfSpeed,
@@ -21,7 +21,7 @@ from homeassistant.const import (
     UnitOfVolume,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -30,11 +30,15 @@ from .const import (
     DENSITY_MICROGRAMS_PER_CUBIC_METER,
     DOMAIN,
     MANUFACTURER,
+    PERCENTAGE_UNIT,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
 from .vehicle_model import is_s05, supports_fuel
+
+# Coordinator is used to centralize the data updates
+PARALLEL_UPDATES = 0
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
 # payload has no speed, gear, outside temperature, PM2.5, air quality, charge
@@ -165,8 +169,7 @@ class DeepalBatterySocSensor(DeepalBaseSensor):
 
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_icon = "mdi:car-battery"
+    _attr_native_unit_of_measurement = PERCENTAGE_UNIT
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -186,7 +189,6 @@ class DeepalRemainingRangeSensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.DISTANCE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-    _attr_icon = "mdi:gauge"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -206,7 +208,6 @@ class DeepalOdometerSensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.DISTANCE
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-    _attr_icon = "mdi:counter"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -226,7 +227,6 @@ class DeepalMileageYesterdaySensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.DISTANCE
     _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-    _attr_icon = "mdi:calendar-clock"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -246,7 +246,6 @@ class DeepalTripMileageSensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.DISTANCE
     _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-    _attr_icon = "mdi:map-marker-path"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -266,7 +265,6 @@ class DeepalTirePressureSensor(DeepalBaseSensor):
     _attr_device_class = SensorDeviceClass.PRESSURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "bar"
-    _attr_icon = "mdi:tire"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
@@ -287,7 +285,6 @@ class DeepalSeatLevelSensor(DeepalBaseSensor):
     """Seat heating or ventilation level sensor for international vehicles."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:car-seat"
 
     def __init__(
         self,
@@ -315,7 +312,6 @@ class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
     """Steering wheel heater level sensor for international vehicles."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:steering"
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -334,6 +330,7 @@ class DeepalSensorDescription(SensorEntityDescription):
     """Description of an extended international sensor."""
 
     value_fn: Callable[[Any, Any], Any]
+    enabled_default: bool = True
 
 
 SENSORS: tuple[DeepalSensorDescription, ...] = (
@@ -344,7 +341,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.SPEED,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfSpeed.KILOMETERS_PER_HOUR,
-        icon="mdi:speedometer",
     ),
     DeepalSensorDescription(
         key="inside_temperature",
@@ -353,7 +349,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        icon="mdi:thermometer",
     ),
     DeepalSensorDescription(
         key="outside_temperature",
@@ -362,7 +357,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-        icon="mdi:thermometer-lines",
     ),
     DeepalSensorDescription(
         key="cabin_humidity",
@@ -370,8 +364,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.climate.humidity,
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=PERCENTAGE,
-        icon="mdi:water-percent",
+        native_unit_of_measurement=PERCENTAGE_UNIT,
     ),
     DeepalSensorDescription(
         key="inside_pm25",
@@ -380,7 +373,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=DENSITY_MICROGRAMS_PER_CUBIC_METER,
-        icon="mdi:blur",
     ),
     DeepalSensorDescription(
         key="air_quality_level",
@@ -389,7 +381,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:air-filter",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -399,7 +390,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:battery-charging",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -409,7 +399,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
     ),
     DeepalSensorDescription(
         key="ac_charge_current",
@@ -418,7 +407,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-ac",
     ),
     DeepalSensorDescription(
         key="dc_charge_current",
@@ -427,7 +415,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
-        icon="mdi:current-dc",
     ),
     DeepalSensorDescription(
         key="remaining_charge_time",
@@ -436,7 +423,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.MINUTES,
-        icon="mdi:timer-sand",
     ),
     DeepalSensorDescription(
         key="remaining_charge_time_formatted",
@@ -447,7 +433,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:timer-sand",
     ),
     DeepalSensorDescription(
         key="charge_limit",
@@ -455,8 +440,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.battery.charge_limit_percent,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=PERCENTAGE,
-        icon="mdi:battery-lock",
+        native_unit_of_measurement=PERCENTAGE_UNIT,
     ),
     DeepalSensorDescription(
         key="charge_schedule_start",
@@ -465,7 +449,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:clock-start",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -475,7 +458,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:clock-end",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -484,8 +466,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.fuel.level_percent,
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=PERCENTAGE,
-        icon="mdi:gas-station",
+        native_unit_of_measurement=PERCENTAGE_UNIT,
     ),
     DeepalSensorDescription(
         key="fuel_range",
@@ -494,7 +475,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
-        icon="mdi:gas-station-outline",
     ),
     DeepalSensorDescription(
         key="fuel_tank_capacity",
@@ -503,7 +483,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.VOLUME,
         state_class=None,
         native_unit_of_measurement=UnitOfVolume.LITERS,
-        icon="mdi:fuel",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -513,7 +492,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:car-info",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -523,7 +501,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:power",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -533,7 +510,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:car-shift-pattern",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -543,7 +519,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:car-brake-parking",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalSensorDescription(
@@ -557,8 +532,70 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.TIMESTAMP,
         state_class=None,
         native_unit_of_measurement=None,
-        icon="mdi:clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalSensorDescription(
+        key="climate_target_temperature",
+        name="Climate Target Temperature",
+        value_fn=lambda cond, vehicle: cond.climate.target_temperature_c,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    DeepalSensorDescription(
+        key="fan_level",
+        name="Climate Fan Level",
+        value_fn=lambda cond, vehicle: cond.climate.fan_level,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=None,
+    ),
+    DeepalSensorDescription(
+        key="license_plate",
+        name="License Plate",
+        value_fn=lambda cond, vehicle: vehicle.license_plate,
+        device_class=None,
+        state_class=None,
+        native_unit_of_measurement=None,
+    ),
+    # Window opening degrees. The scale is not confirmed on a real car yet
+    # (ventilation around 20, half open around 92), so they ship disabled by
+    # default and only pass the reported number through.
+    DeepalSensorDescription(
+        key="window_opening_front_left",
+        name="Front Left Window Opening",
+        value_fn=lambda cond, vehicle: cond.window_openings.front_left,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE_UNIT,
+        enabled_default=False,
+    ),
+    DeepalSensorDescription(
+        key="window_opening_front_right",
+        name="Front Right Window Opening",
+        value_fn=lambda cond, vehicle: cond.window_openings.front_right,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE_UNIT,
+        enabled_default=False,
+    ),
+    DeepalSensorDescription(
+        key="window_opening_rear_left",
+        name="Rear Left Window Opening",
+        value_fn=lambda cond, vehicle: cond.window_openings.rear_left,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE_UNIT,
+        enabled_default=False,
+    ),
+    DeepalSensorDescription(
+        key="window_opening_rear_right",
+        name="Rear Right Window Opening",
+        value_fn=lambda cond, vehicle: cond.window_openings.rear_right,
+        device_class=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE_UNIT,
+        enabled_default=False,
     ),
 )
 
@@ -578,6 +615,7 @@ class DeepalSensor(DeepalBaseSensor):
         self.entity_description = description
         self._attr_unique_id = f"deepal_{vehicle.car_id}_{description.key}"
         self._attr_translation_key = description.key
+        self._attr_entity_registry_enabled_default = description.enabled_default
         if description.device_class is not None:
             self._attr_device_class = description.device_class
         if description.state_class is not None:
@@ -586,8 +624,6 @@ class DeepalSensor(DeepalBaseSensor):
             self._attr_native_unit_of_measurement = (
                 description.native_unit_of_measurement
             )
-        if description.icon is not None:
-            self._attr_icon = description.icon
         if description.entity_category is not None:
             self._attr_entity_category = description.entity_category
 

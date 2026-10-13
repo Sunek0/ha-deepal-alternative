@@ -7,9 +7,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import DOMAIN
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
+
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
 
 
 def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
@@ -42,7 +46,6 @@ async def async_setup_entry(
 class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
     """Enable or disable the charging schedule."""
 
-    _attr_icon = "mdi:calendar-clock"
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
@@ -69,7 +72,11 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
     async def _async_update(self, *, enabled: bool) -> None:
         cond = self.condition
         if not cond or not cond.battery.charge_plan_id:
-            raise HomeAssistantError("Deepal charge schedule plan is not available")
+            raise HomeAssistantError(
+                "Deepal charge schedule plan is not available",
+                translation_domain=DOMAIN,
+                translation_key="charge_schedule_unavailable",
+            )
         await self.async_send_command(
             lambda: self.client.control_charge_schedule(
                 self._car_id,
@@ -88,7 +95,6 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
 class DeepalSteeringWheelHeatSwitch(DeepalEntity, SwitchEntity):
     """Turn the steering wheel heating on or off."""
 
-    _attr_icon = "mdi:steering"
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any

@@ -5,14 +5,15 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, NoReturn
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .charging import ChargingSessionManager, charging_flag
 from .deepal import (
     CommandResult,
     CommandResultStatus,
@@ -21,10 +22,12 @@ from .deepal import (
     DeepalClient,
     DeepalError,
     DeepalIntlClient,
+    DeepalRateLimitError,
     Vehicle,
     VehicleCapabilities,
     VehicleCondition,
 )
+from .deepal.mqtt import S05_CHARGE_GUN_KEYS, S05_DC_GUN_KEYS
 from .const import (
     DOMAIN,
     DEFAULT_SCAN_INTERVAL,
@@ -45,6 +48,7 @@ _STATELESS_COMMAND_TIMEOUT = 15.0
 _OPTIMISTIC_CONFIRM_TIMEOUT = 15.0
 _CONDITION_FETCH_INTERVAL = 5.0
 _WAKE_POLL_INTERVAL = 5.0
+_VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 
@@ -54,6 +58,7 @@ _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 # the command queue without a minimum wait.
 _COMMAND_COOLDOWN_SECONDS: dict[str, float] = {
     "flash_lights": 30.0,
+    "flash_and_honk": 30.0,
     "honk_horn": 6.0,
 }
 
@@ -66,6 +71,13 @@ _ASLEEP_COMMAND_MESSAGE = (
     "offline. Try again once it is awake."
 )
 
+# Result code returned when a command is rejected because the vehicle is
+# powered on (observed with the windows; upstream dec_deepal v2.0.0rc2).
+_POWER_NOT_OFF_RESULT_CODE = 1032
+_POWER_NOT_OFF_HINT = (
+    " (the vehicle must be powered off before this command can run)"
+)
+
 
 def _command_failure_message(result: CommandResult) -> str:
     """Build the error message for a failed command result."""
@@ -73,12 +85,33 @@ def _command_failure_message(result: CommandResult) -> str:
         f"Deepal command failed with result code {result.code}: "
         f"{result.error_message}"
     )
-    if "TBOX_" in (result.error_message or ""):
+    if result.code == _POWER_NOT_OFF_RESULT_CODE:
+        message += _POWER_NOT_OFF_HINT
+    elif "TBOX_" in (result.error_message or ""):
         message += (
             " (the vehicle did not accept the command; it may be "
             "offline or busy, try again when it is awake)"
         )
     return message
+
+
+def _command_failure_error(result: CommandResult) -> HomeAssistantError:
+    """Build the translated error for a failed command result."""
+    if result.code == _POWER_NOT_OFF_RESULT_CODE:
+        key = "command_result_failed_power_off"
+    elif "TBOX_" in (result.error_message or ""):
+        key = "command_result_failed_unreachable"
+    else:
+        key = "command_result_failed"
+    return HomeAssistantError(
+        _command_failure_message(result),
+        translation_domain=DOMAIN,
+        translation_key=key,
+        translation_placeholders={
+            "code": str(result.code),
+            "message": result.error_message or "",
+        },
+    )
 
 
 def _diff_paths(before: Any, after: Any, prefix: str = "") -> dict[str, Any]:
@@ -149,6 +182,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         entry: ConfigEntry,
         client: DeepalClient | DeepalIntlClient,
         update_interval: timedelta = timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+        wake_enabled: bool = True,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -159,26 +193,66 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         self.entry = entry
         self.client = client
+        self.wake_enabled = wake_enabled
         self.vehicles: list[Vehicle] = []
+        self._last_vehicle_refresh: float = 0.0
         self._command_locks: dict[str, asyncio.Lock] = {}
         self._command_cooldowns: dict[tuple[str, str], float] = {}
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
-        self._background_tasks: set[asyncio.Task] = set()
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
         self._last_wake_at: dict[str, float] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
         self._wake_report_timeout = WAKE_REPORT_TIMEOUT
         self._mqtt_attempts: dict[str, dict[str, Any]] = {}
+        self.charging: ChargingSessionManager | None = None
 
     def mqtt_attempt(self, vehicle_id: str) -> dict[str, Any] | None:
         """Return the last failed MQTT exchange details for diagnostics."""
         return self._mqtt_attempts.get(vehicle_id)
 
+    async def _async_maybe_refresh_vehicles(self) -> None:
+        """Refresh the account vehicle list and reload when it changed.
+
+        The list changes rarely and the account is rate limited, so it is
+        re-checked at most every ten minutes. A failed or empty refresh keeps
+        the current list; a different vehicle set triggers a config entry
+        reload so the platforms are rebuilt for the new set.
+        """
+        now = time.monotonic()
+        first_fetch = not self.vehicles
+        if (
+            not first_fetch
+            and now - self._last_vehicle_refresh < _VEHICLE_REFRESH_INTERVAL
+        ):
+            return
+        self._last_vehicle_refresh = now
+        try:
+            vehicles = await self.client.get_vehicles()
+        except DeepalError as err:
+            if first_fetch:
+                raise
+            _LOGGER.debug("Deepal vehicle list refresh failed: %s", err)
+            return
+        if not vehicles:
+            if first_fetch:
+                self.vehicles = []
+            else:
+                _LOGGER.warning(
+                    "Deepal account reported no vehicles; keeping the current list"
+                )
+            return
+        current = {vehicle.car_id for vehicle in self.vehicles}
+        if first_fetch or {vehicle.car_id for vehicle in vehicles} == current:
+            self.vehicles = vehicles
+            return
+        _LOGGER.info("Deepal vehicle list changed; reloading the config entry")
+        self.vehicles = vehicles
+        self.hass.config_entries.async_schedule_reload(self.entry.entry_id)
+
     async def _async_fetch(self) -> dict[str, VehicleCondition]:
         """Fetch vehicles and their conditions."""
-        if not self.vehicles:
-            self.vehicles = await self.client.get_vehicles()
+        await self._async_maybe_refresh_vehicles()
 
         data: dict[str, VehicleCondition] = {}
         for vehicle in self.vehicles:
@@ -220,12 +294,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def _overlay_app_comfort(
         self, vehicle: Vehicle, condition: VehicleCondition
     ) -> VehicleCondition:
-        """Overlay the app's seat and steering state onto an MQTT snapshot.
+        """Overlay the app's seat, steering and charge state onto an MQTT snapshot.
 
         The S05 seat modules report sentinel values over MQTT while they are
         asleep, and the MQTT ``steeringWheelHeating`` field does not follow the
         switch the app shows. The server condition endpoint returns the same
-        report already normalized the way the app displays it.
+        report already normalized the way the app displays it. It is also the
+        fallback for the charge connection flags: cars that omit the gun fields
+        over MQTT (a second vehicle of the account does) get the server values
+        for the cable connection and the DC gun.
         """
         if not self._uses_mqtt(vehicle):
             return condition
@@ -254,6 +331,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
         if (raw.get("hvac") or {}).get("defrostStatus") is not None:
             condition.climate.defrost_on = app_condition.climate.defrost_on
+        app_charge = raw.get("charge") or {}
+        mqtt_raw = condition.mqtt_raw_data or {}
+        if (
+            not any(key in mqtt_raw for key in S05_CHARGE_GUN_KEYS)
+            and condition.battery.charging_status in (None, "0")
+            and app_charge.get("chargeConStatus") is not None
+        ):
+            condition.battery.charger_connected = (
+                app_condition.battery.charger_connected
+            )
+        if (
+            not any(key in mqtt_raw for key in S05_DC_GUN_KEYS)
+            and app_charge.get("dcChargeGunConnectStatus") is not None
+        ):
+            condition.battery.dc_gun_connected = app_condition.battery.dc_gun_connected
         if raw.get("fuel") and all(
             value is None for value in condition.fuel.model_dump().values()
         ):
@@ -519,7 +611,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def async_condition_inquiry(self, vehicle_id: str) -> None:
         """Ask the vehicle for fresh data, recovering an expired session."""
         if not isinstance(self.client, DeepalIntlClient):
-            raise HomeAssistantError("Remote commands require the international platform")
+            raise HomeAssistantError(
+                "Remote commands require the international platform",
+                translation_domain=DOMAIN,
+                translation_key="commands_require_international",
+            )
         await self._async_with_session_retry(
             lambda: self.client.control_condition_inquiry(vehicle_id)
         )
@@ -536,6 +632,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         Waking the car drains the 12 V battery, so it is throttled per vehicle
         and only happens when the last report is older than the stale threshold.
         """
+        if not self.wake_enabled:
+            return False
         last_wake = self._last_wake_at.get(vehicle_id)
         if last_wake is not None and time.monotonic() - last_wake < WAKE_COOLDOWN:
             return False
@@ -546,7 +644,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def async_wake_vehicle(self, vehicle_id: str) -> None:
         """Wake an MQTT vehicle, recovering an expired session."""
         if not isinstance(self.client, DeepalIntlClient):
-            raise HomeAssistantError("Remote wake requires the international platform")
+            raise HomeAssistantError(
+                "Remote wake requires the international platform",
+                translation_domain=DOMAIN,
+                translation_key="wake_requires_international",
+            )
         await self._async_with_session_retry(
             lambda: self.client.wake_vehicle(vehicle_id)
         )
@@ -651,7 +753,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             ) is False:
                 raise HomeAssistantError(
                     "The vehicle did not report fresh data after the wake "
-                    "request; it may be offline or asleep"
+                    "request; it may be offline or asleep",
+                    translation_domain=DOMAIN,
+                    translation_key="wake_no_fresh_report",
                 )
         else:
             await self.async_condition_inquiry(vehicle_id)
@@ -661,11 +765,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         The request forces the car to report, but awaiting it (up to the 15 s
         HTTP timeout) would delay the result polling on a busy vehicle. It is
-        best-effort, so it runs as a tracked background task.
+        best-effort, so it runs as a background task tied to the entry, which
+        Home Assistant cancels on unload.
         """
-        task = asyncio.create_task(self._async_nudge_condition(vehicle_id))
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self.entry.async_create_background_task(
+            self.hass,
+            self._async_nudge_condition(vehicle_id),
+            "deepal condition nudge",
+        )
 
     async def _async_nudge_condition(self, vehicle_id: str) -> None:
         """Run the best-effort condition inquiry and never raise."""
@@ -678,22 +785,68 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         except Exception:  # noqa: BLE001 - background task must not raise
             _LOGGER.exception("Deepal condition inquiry failed unexpectedly")
 
+    def _raise_rate_limited(self, err: DeepalRateLimitError) -> NoReturn:
+        """Raise UpdateFailed, deferring the next refresh past the normal cadence.
+
+        The gateway value wins when it asks for a longer wait; the configured
+        scan interval and the default interval are the floor, so a rate-limited
+        entry is never polled sooner than its normal cadence.
+        """
+        interval = (
+            self.update_interval.total_seconds()
+            if self.update_interval is not None
+            else float(DEFAULT_SCAN_INTERVAL)
+        )
+        retry_after = max(
+            err.retry_after or 0.0,
+            interval,
+            float(DEFAULT_SCAN_INTERVAL),
+        )
+        _LOGGER.warning(
+            "Deepal rate limited; deferring the next update by %.0f s: %s",
+            retry_after,
+            err,
+        )
+        raise UpdateFailed(
+            f"Deepal rate limited: {err}", retry_after=retry_after
+        ) from err
+
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
         await self._async_maybe_refresh_tokens()
         try:
-            return await self._async_fetch()
+            data = await self._async_fetch()
         except DeepalAuthError as err:
             _LOGGER.warning("Deepal authentication failed, attempting token refresh")
-            if await self._async_refresh_tokens(force=True):
-                try:
-                    return await self._async_fetch()
-                except DeepalError as retry_err:
-                    raise ConfigEntryAuthFailed("Authentication token expired") from retry_err
-            raise ConfigEntryAuthFailed("Authentication token expired") from err
+            if not await self._async_refresh_tokens(force=True):
+                raise ConfigEntryAuthFailed("Authentication token expired") from err
+            try:
+                data = await self._async_fetch()
+            except DeepalRateLimitError as retry_err:
+                self._raise_rate_limited(retry_err)
+            except DeepalError as retry_err:
+                raise ConfigEntryAuthFailed("Authentication token expired") from retry_err
+        except DeepalRateLimitError as err:
+            self._raise_rate_limited(err)
         except DeepalError as err:
             _LOGGER.error("Error communicating with Deepal API: %s", err)
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
+        self._track_charging(data)
+        return data
+
+    def _track_charging(self, data: dict[str, VehicleCondition]) -> None:
+        """Feed one telemetry snapshot into the charging-session tracker."""
+        if self.charging is None:
+            return
+        now = datetime.now(UTC)
+        for car_id, condition in data.items():
+            self.charging.apply(
+                car_id,
+                charging_flag(condition),
+                condition.battery.soc_percentage,
+                condition.battery.remaining_range_km,
+                now,
+            )
 
     def _vehicle_command_lock(self, vehicle_id: str) -> asyncio.Lock:
         """Return the per-vehicle command lock, creating it on first use."""
@@ -722,9 +875,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return
         remaining = deadline - time.monotonic()
         if remaining > 0:
+            seconds = math.ceil(remaining)
             raise HomeAssistantError(
                 "The vehicle is still completing the previous command; wait "
-                f"{math.ceil(remaining)} s before repeating it"
+                f"{seconds} s before repeating it",
+                translation_domain=DOMAIN,
+                translation_key="command_still_running",
+                translation_placeholders={"seconds": str(seconds)},
             )
 
     def _record_command_cooldown(
@@ -765,7 +922,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         command.
         """
         if not isinstance(self.client, DeepalIntlClient):
-            raise HomeAssistantError("Remote commands require the international platform")
+            raise HomeAssistantError(
+                "Remote commands require the international platform",
+                translation_domain=DOMAIN,
+                translation_key="commands_require_international",
+            )
 
         if cooldown_key is not None:
             self._check_command_cooldown(vehicle_id, cooldown_key)
@@ -795,7 +956,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         except TimeoutError as error:
             raise HomeAssistantError(
                 "Another Deepal command for this vehicle is taking too long; "
-                "try again in a few seconds"
+                "try again in a few seconds",
+                translation_domain=DOMAIN,
+                translation_key="command_queue_busy",
             ) from error
 
         try:
@@ -829,7 +992,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             command_id = await self._async_with_session_retry(send_command)
         except DeepalAPIError as err:
             if str(getattr(err, "code", None)) == _ASLEEP_COMMAND_ERROR_CODE:
-                raise HomeAssistantError(_ASLEEP_COMMAND_MESSAGE) from err
+                raise HomeAssistantError(
+                    _ASLEEP_COMMAND_MESSAGE,
+                    translation_domain=DOMAIN,
+                    translation_key="command_asleep",
+                ) from err
             raise
 
         if optimistic_update is None and is_done is None:
@@ -895,7 +1062,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
 
             if result.status is CommandResultStatus.FAILED:
-                raise HomeAssistantError(_command_failure_message(result))
+                raise _command_failure_error(result)
 
             if result.status in (
                 CommandResultStatus.SUCCESS,
@@ -976,7 +1143,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 lambda: self.client.control_result_status(vehicle_id, command_id)
             )
             if result.status is CommandResultStatus.FAILED:
-                raise HomeAssistantError(_command_failure_message(result))
+                raise _command_failure_error(result)
 
             now = loop.time()
             if now >= next_condition_at:

@@ -43,14 +43,18 @@ _SENSITIVE_EXACT_KEYS = {
     "token",
     "userid",
     "vehicleid",
+    "vehiclevin",
     "vin",
+    "vincode",
 }
 
 _SENSITIVE_KEY_PARTS = (
     "authorization",
     "bearer",
     "email",
-    "key",
+    # "key" tampoco: "unlockKeyDrivingStatus" lo contiene. Las claves que lo
+    # llevan quedan cubiertas por nombre exacto ("pubkey") o por otras partes
+    # ("secret" en secretKey).
     "latitude",
     "longitude",
     "mobile",
@@ -64,7 +68,8 @@ _SENSITIVE_KEY_PARTS = (
     "sms",
     "token",
     "vehicleid",
-    "vin",
+    # "vin" NO va aquí: "driving" lo contiene y ocultaba claves inocentes como
+    # "unlockKeyDrivingStatus". El VIN se oculta por nombre exacto (EXACT_KEYS).
 )
 
 

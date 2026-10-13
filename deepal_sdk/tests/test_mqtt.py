@@ -651,12 +651,82 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["lamp"]["lowBeam"] == 0
 
 
+def test_normalize_s05_params_maps_warnings_and_window_openings():
+    params = {
+        "batt12VLightStatus": 0,
+        "tpmsLightStatus": 1,
+        "absLightStatus": 0,
+        "airBagLightStatus": 0,
+        "brakeFluidLightStatus": 0,
+        "brakeLightStatus": 0,
+        "epsLightStatus": 0,
+        "powerLimitLightStatus": 0,
+        "powerSystemLightStatus": 0,
+        "bcuBattSocLightStatus": 0,
+        "coolanTemperatureLightStatus": 0,
+        "keyLowPower": 1,
+        "airRecycleStatus": 1,
+        "leftAnteriorWindowDegree": 20,
+        "rightAnteriorWindowDegree": 0,
+        "leftRearWindowDegree": 97,
+        "rightRearWindowDegree": 92,
+    }
+
+    normalized = normalize_s05_params(params)
+
+    assert normalized["warningLights"]["tpms"] is True
+    assert normalized["warningLights"]["battery12v"] is False
+    assert normalized["warningLights"]["coolantTemperature"] is False
+    assert normalized["keyBatteryLow"] is True
+    assert normalized["airRecirculation"] is True
+    assert normalized["windowOpenings"] == {
+        "frontLeft": 20,
+        "frontRight": 0,
+        "rearLeft": 97,
+        "rearRight": 92,
+    }
+
+    empty = normalize_s05_params({})
+
+    assert set(empty["warningLights"]) == {
+        "battery12v",
+        "tpms",
+        "abs",
+        "airbag",
+        "brakeFluid",
+        "brake",
+        "eps",
+        "powerLimit",
+        "powerSystem",
+        "tractionBatteryLow",
+        "coolantTemperature",
+    }
+    assert empty["warningLights"]["tpms"] is None
+    assert empty["keyBatteryLow"] is None
+    assert empty["airRecirculation"] is None
+    assert empty["windowOpenings"]["frontLeft"] is None
+
+
 def test_normalize_s05_params_maps_remain_charge_time_sentinel():
     sentinel = normalize_s05_params({"chargDeltMins": 8191})
     normal = normalize_s05_params({"chargDeltMins": 120})
 
     assert sentinel["charge"]["remainChargeTime"] is None
     assert normal["charge"]["remainChargeTime"] == 120
+
+
+def test_normalize_s05_params_normalizes_the_inner_humidity_scale():
+    percent = normalize_s05_params({"innerHumidity": 61})
+    tenths = normalize_s05_params({"innerHumidity": 453})
+    boundary = normalize_s05_params({"innerHumidity": 100})
+    out_of_range = normalize_s05_params({"innerHumidity": 1200})
+    absent = normalize_s05_params({})
+
+    assert percent["hvac"]["insideHumidity"] == 61
+    assert tenths["hvac"]["insideHumidity"] == 45.3
+    assert boundary["hvac"]["insideHumidity"] == 100
+    assert out_of_range["hvac"]["insideHumidity"] is None
+    assert absent["hvac"]["insideHumidity"] is None
 
 
 def test_normalize_s05_params_maps_seat_sides_and_scales():

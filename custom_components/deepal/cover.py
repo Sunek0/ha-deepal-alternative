@@ -14,6 +14,9 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
 
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
+
 
 def _set_windows(condition: Any, is_open: bool) -> Any:
     windows = condition.windows

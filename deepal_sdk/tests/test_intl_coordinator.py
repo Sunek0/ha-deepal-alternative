@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +10,9 @@ import pytest
 pytest.importorskip("homeassistant")
 
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from custom_components.deepal.charging import ChargingSessionManager
 from custom_components.deepal.const import (
     CONF_ACCESS_TOKEN,
     CONF_CAC_TOKEN,
@@ -23,7 +26,9 @@ from custom_components.deepal.deepal import (
     CommandResultStatus,
     DeepalAPIError,
     DeepalAuthError,
+    DeepalConnectionError,
     DeepalIntlClient,
+    DeepalRateLimitError,
     Vehicle,
     VehicleCapabilities,
     VehicleCondition,
@@ -44,6 +49,7 @@ class _FakeIntlClient(DeepalIntlClient):
         self.condition_calls = 0
         self.condition_timestamps: list[int] | None = None
         self.condition_power_on: bool | None = None
+        self.condition_error: Exception | None = None
         self.http_condition: VehicleCondition | None = None
         self.capabilities_calls = 0
         self.capabilities: VehicleCapabilities | None = None
@@ -109,6 +115,8 @@ class _FakeIntlClient(DeepalIntlClient):
         self, vehicle_id: str, vin: str | None = None
     ) -> VehicleCondition:
         self.events.append("condition")
+        if self.condition_error is not None:
+            raise self.condition_error
         if self.http_condition is not None:
             return self.http_condition
         self.condition_calls += 1
@@ -131,22 +139,32 @@ def _coordinator(
     coordinator = object.__new__(DeepalDataUpdateCoordinator)
     coordinator.client = client
     coordinator.vehicles = []
+    coordinator._last_vehicle_refresh = time.monotonic()
     coordinator.data = data or {}
+    coordinator.update_interval = timedelta(seconds=120)
     coordinator._command_locks = {}
     coordinator._command_cooldowns = {}
     coordinator._optimistic_holds = {}
-    coordinator._background_tasks = set()
+    coordinator._background_tasks = []
     coordinator._last_wake_at = {}
     coordinator._wake_locks = {}
+    coordinator.wake_enabled = True
     coordinator._wake_poll_interval = 0.01
     coordinator._wake_report_timeout = 0.1
     coordinator._mqtt_attempts = {}
+    coordinator.charging = None
+    def _create_background_task(hass, target, name, eager_start=True):
+        task = asyncio.create_task(target)
+        coordinator._background_tasks.append(task)
+        return task
+
     coordinator.entry = SimpleNamespace(
         data={
             CONF_ACCESS_TOKEN: "test_token_123",
             CONF_REFRESH_TOKEN: "test_refresh_123",
             CONF_CAC_TOKEN: "",
-        }
+        },
+        async_create_background_task=_create_background_task,
     )
     coordinator.hass = SimpleNamespace(
         config_entries=SimpleNamespace(async_update_entry=lambda *args, **kwargs: None)
@@ -838,8 +856,42 @@ async def test_failed_command_restores_optimistic_state():
 
     assert "TBOX_2001" in str(err.value)
     assert "offline or busy" in str(err.value)
+    assert err.value.translation_domain == "deepal"
+    assert err.value.translation_key == "command_result_failed_unreachable"
+    assert err.value.translation_placeholders["code"] == "2001"
     assert updates[0]["car-1"].climate.power_on is True
     assert coordinator.data["car-1"].climate.power_on is False
+
+
+@pytest.mark.asyncio
+async def test_power_on_command_failure_is_actionable():
+    client = _FakeIntlClient(
+        [
+            CommandResult(
+                status=CommandResultStatus.FAILED,
+                code=1032,
+                error_message="Operation failed\nError code:1032",
+                raw={"resultCode": 1032},
+            ),
+        ]
+    )
+    coordinator, _ = _coordinator(client)
+
+    async def send_command() -> str:
+        return "cmd-1"
+
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_execute_command(
+            "car-1",
+            send_command,
+            timeout=1.0,
+            interval=0.01,
+        )
+
+    assert "1032" in str(err.value)
+    assert "powered off" in str(err.value)
+    assert err.value.translation_key == "command_result_failed_power_off"
+    assert err.value.translation_placeholders["code"] == "1032"
 
 
 @pytest.mark.asyncio
@@ -963,6 +1015,105 @@ async def test_app_comfort_overlay_uses_server_condition():
     plain.seats.front_left.ventilation_level = None
     merged = await coordinator._overlay_app_comfort(vehicle, plain)
     assert merged.seats.front_left.ventilation_level is None
+
+
+def _charge_overlay_pair() -> tuple[VehicleCondition, VehicleCondition]:
+    """Return an app condition with connection data and an empty MQTT snapshot."""
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.battery.charger_connected = True
+    app_condition.battery.dc_gun_connected = True
+    app_condition.raw_data = {
+        "charge": {"chargeConStatus": 3, "dcChargeGunConnectStatus": 2}
+    }
+    mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    mqtt_condition.mqtt_raw_data = {"soc": 71}
+    return app_condition, mqtt_condition
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_fills_unreported_charge_connection():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+    app_condition, mqtt_condition = _charge_overlay_pair()
+    client.http_condition = app_condition
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    assert merged.battery.charger_connected is True
+    assert merged.battery.dc_gun_connected is True
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_keeps_reported_charge_connection():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+    app_condition, mqtt_condition = _charge_overlay_pair()
+    client.http_condition = app_condition
+    mqtt_condition.mqtt_raw_data = {
+        "acChargeGunConnectionState": 0,
+        "dcDhargeGunConnectionState": 0,
+    }
+    mqtt_condition.battery.charger_connected = False
+    mqtt_condition.battery.dc_gun_connected = False
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    assert merged.battery.charger_connected is False
+    assert merged.battery.dc_gun_connected is False
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_keeps_a_charging_flag_without_gun_data():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+    app_condition, mqtt_condition = _charge_overlay_pair()
+    app_condition.battery.charger_connected = False
+    client.http_condition = app_condition
+    mqtt_condition.mqtt_raw_data = {"ChrgSts": 2}
+    mqtt_condition.battery.charger_connected = True
+    mqtt_condition.battery.charging_status = "2"
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    assert merged.battery.charger_connected is True
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_skips_a_stale_charge_connection():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+    app_condition, mqtt_condition = _charge_overlay_pair()
+    app_condition.last_updated_timestamp = 1000
+    client.http_condition = app_condition
+    mqtt_condition.last_updated_timestamp = 2000
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    assert merged.battery.charger_connected is False
+    assert merged.battery.dc_gun_connected is False
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_survives_an_unavailable_condition():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+    _, mqtt_condition = _charge_overlay_pair()
+    client.condition_error = DeepalAPIError("app condition unavailable")
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    assert merged.battery.charger_connected is False
+    assert merged.battery.dc_gun_connected is False
 
 
 @pytest.mark.asyncio
@@ -1169,6 +1320,45 @@ async def test_command_cooldown_rejects_a_repeat_until_it_expires():
 
 
 @pytest.mark.asyncio
+async def test_flash_and_honk_has_its_own_thirty_second_cooldown():
+    client = _FakeIntlClient(
+        [
+            CommandResult(
+                status=CommandResultStatus.SUCCESS, code=0, raw={"resultCode": 0}
+            ),
+            CommandResult(
+                status=CommandResultStatus.SUCCESS, code=0, raw={"resultCode": 0}
+            ),
+        ]
+    )
+    coordinator, _ = _coordinator(client)
+    calls = 0
+
+    async def send_command() -> str:
+        nonlocal calls
+        calls += 1
+        return "cmd-1"
+
+    await coordinator.async_execute_command(
+        "car-1", send_command, cooldown_key="flash_and_honk"
+    )
+
+    with pytest.raises(HomeAssistantError, match="wait"):
+        await coordinator.async_execute_command(
+            "car-1", send_command, cooldown_key="flash_and_honk"
+        )
+    assert calls == 1
+    assert ("car-1", "flash_and_honk") in coordinator._command_cooldowns
+
+    # The combined action does not share the flash key, so the flash cooldown
+    # does not block it.
+    await coordinator.async_execute_command(
+        "car-1", send_command, cooldown_key="flash_lights"
+    )
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_command_cooldowns_are_independent_per_command():
     client = _FakeIntlClient(
         [
@@ -1273,6 +1463,27 @@ async def test_refresh_wakes_stale_mqtt_vehicle():
 
 
 @pytest.mark.asyncio
+async def test_refresh_wake_disabled_does_not_wake():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.wake_enabled = False
+    coordinator.vehicles = [_mqtt_vehicle()]
+
+    await coordinator.async_refresh_vehicle("car-1")
+
+    assert client.wake_calls == 0
+    assert client.events == []
+
+
+@pytest.mark.asyncio
 async def test_refresh_does_not_wake_sda_mqtt_vehicle():
     client = _FakeIntlClient([])
     stale = int(time.time()) - 3600
@@ -1352,6 +1563,7 @@ async def test_refresh_raises_when_woken_vehicle_does_not_report():
         await coordinator.async_refresh_vehicle("car-1")
 
     assert "did not report fresh data" in str(err.value)
+    assert err.value.translation_key == "wake_no_fresh_report"
     assert client.wake_calls == 1
 
 
@@ -1400,6 +1612,227 @@ async def test_periodic_update_does_not_wake():
 
     assert client.wake_calls == 0
     assert "wake" not in client.events
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_update_defers_the_next_refresh():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalRateLimitError("limit")
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after == 120.0
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_update_honors_a_longer_gateway_wait():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalRateLimitError("limit", retry_after=900)
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after == 900.0
+
+
+@pytest.mark.asyncio
+async def test_short_scan_interval_does_not_tighten_the_backoff():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalRateLimitError("limit")
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after == 120.0
+
+
+@pytest.mark.asyncio
+async def test_transport_errors_keep_no_retry_after():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalAPIError("boom")
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after is None
+
+
+class _RecordingStore:
+    """Store double recording the saved snapshots."""
+
+    def __init__(self) -> None:
+        self.saved: list[dict] = []
+
+    async def async_load(self):
+        return None
+
+    def async_delay_save(self, data, delay):
+        self.saved.append(data())
+
+    async def async_remove(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_periodic_update_tracks_charging_sessions():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    client.mqtt_condition.battery.charging_status = "2"
+    client.mqtt_condition.battery.soc_percentage = 55
+    store = _RecordingStore()
+    coordinator.charging = ChargingSessionManager(store)
+
+    await coordinator._async_update_data()
+
+    attrs = coordinator.charging.attributes("car-1")
+    assert attrs["current_charge"]["start_level"] == 55
+    assert store.saved
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_first_fetch_populates_without_reload():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    reloads: list[str] = []
+    coordinator.entry = SimpleNamespace(entry_id="entry-1", data={})
+    coordinator.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
+    )
+
+    async def get_vehicles():
+        return [Vehicle(car_id="car-1", vin="")]
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1"]
+    assert reloads == []
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_unchanged_within_interval_skips_the_request():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle("car-1")]
+    coordinator._last_vehicle_refresh = time.monotonic()
+
+    async def get_vehicles():
+        raise AssertionError("vehicle list must not be fetched")
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1"]
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_unchanged_after_interval_refetches_without_reload():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle("car-1")]
+    coordinator._last_vehicle_refresh = time.monotonic() - 601
+    reloads: list[str] = []
+    coordinator.entry = SimpleNamespace(entry_id="entry-1", data={})
+    coordinator.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
+    )
+
+    async def get_vehicles():
+        return [Vehicle(car_id="car-1", vin="VIN-FRESH")]
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1"]
+    assert coordinator.vehicles[0].vin == "VIN-FRESH"
+    assert reloads == []
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_change_schedules_a_reload():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle("car-1")]
+    coordinator._last_vehicle_refresh = 0.0
+    reloads: list[str] = []
+    coordinator.entry = SimpleNamespace(entry_id="entry-9", data={})
+    coordinator.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
+    )
+
+    async def get_vehicles():
+        return [Vehicle(car_id="car-1", vin=""), Vehicle(car_id="car-2", vin="")]
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert reloads == ["entry-9"]
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1", "car-2"]
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_failure_keeps_the_current_list():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle("car-1")]
+    coordinator._last_vehicle_refresh = 0.0
+    reloads: list[str] = []
+    coordinator.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
+    )
+
+    async def get_vehicles():
+        raise DeepalConnectionError("offline")
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1"]
+    assert reloads == []
+
+
+@pytest.mark.asyncio
+async def test_vehicle_list_empty_refresh_keeps_the_current_list():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle("car-1")]
+    coordinator._last_vehicle_refresh = 0.0
+    reloads: list[str] = []
+    coordinator.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
+    )
+
+    async def get_vehicles():
+        return []
+
+    client.get_vehicles = get_vehicles
+
+    await coordinator._async_maybe_refresh_vehicles()
+
+    assert [vehicle.car_id for vehicle in coordinator.vehicles] == ["car-1"]
+    assert reloads == []
 
 
 def _stale_condition(
@@ -1620,6 +2053,7 @@ async def test_asleep_command_rejection_is_actionable():
 
     assert "did not accept the command" in str(err.value)
     assert "may not have woken up" in str(err.value)
+    assert err.value.translation_key == "command_asleep"
     assert isinstance(err.value.__cause__, DeepalAPIError)
     assert err.value.__cause__.code == "APP_1_1_05_001"
 

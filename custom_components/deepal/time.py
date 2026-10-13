@@ -8,9 +8,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import DOMAIN
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
+
+# The coordinator serializes state-sharing commands per vehicle
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
@@ -54,7 +58,6 @@ def _format_hhmm(value: time) -> str:
 class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
     """Start or end time of the charging schedule."""
 
-    _attr_icon = "mdi:clock-outline"
 
     def __init__(
         self,
@@ -86,7 +89,11 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
         """Update the schedule time."""
         cond = self.condition
         if not cond or not cond.battery.charge_plan_id:
-            raise HomeAssistantError("Deepal charge schedule plan is not available")
+            raise HomeAssistantError(
+                "Deepal charge schedule plan is not available",
+                translation_domain=DOMAIN,
+                translation_key="charge_schedule_unavailable",
+            )
         start = cond.battery.charge_schedule_start or "0000"
         end = cond.battery.charge_schedule_end or "0000"
         if self._field == "start":

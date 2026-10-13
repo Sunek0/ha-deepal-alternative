@@ -1,4 +1,62 @@
 {
+  "exceptions": {
+    "command_failed": {
+      "message": "Il comando Deepal non è riuscito: {error}"
+    },
+    "climate_command_failed": {
+      "message": "Il comando clima Deepal non è riuscito: {error}"
+    },
+    "refresh_command_failed": {
+      "message": "Il comando di aggiornamento Deepal non è riuscito: {error}"
+    },
+    "unsupported_hvac_mode": {
+      "message": "Modalità clima non supportata: {mode}"
+    },
+    "charge_schedule_unavailable": {
+      "message": "Il programma di ricarica Deepal non è disponibile"
+    },
+    "commands_require_international": {
+      "message": "I comandi remoti richiedono la piattaforma internazionale"
+    },
+    "wake_requires_international": {
+      "message": "Il risveglio remoto richiede la piattaforma internazionale"
+    },
+    "wake_no_fresh_report": {
+      "message": "Il veicolo non ha segnalato nuovi dati dopo la richiesta di risveglio; potrebbe essere offline o in sospensione"
+    },
+    "command_still_running": {
+      "message": "Il veicolo sta ancora completando il comando precedente; attendi {seconds} s prima di ripeterlo"
+    },
+    "command_queue_busy": {
+      "message": "Un altro comando Deepal per questo veicolo sta impiegando troppo tempo; riprova tra qualche secondo"
+    },
+    "command_asleep": {
+      "message": "Il veicolo non ha accettato il comando; potrebbe non essersi svegliato o essere offline. Riprova quando è sveglio."
+    },
+    "command_result_failed": {
+      "message": "Il comando Deepal non è riuscito con codice risultato {code}: {message}"
+    },
+    "command_result_failed_power_off": {
+      "message": "Il comando Deepal non è riuscito con codice risultato {code}: {message} (il veicolo deve essere spento prima di poter eseguire questo comando)"
+    },
+    "command_result_failed_unreachable": {
+      "message": "Il comando Deepal non è riuscito con codice risultato {code}: {message} (il veicolo non ha accettato il comando; potrebbe essere offline o occupato, riprova quando è sveglio)"
+    }
+  },
+  "issues": {
+    "mqtt_user_id_missing": {
+      "title": "Autenticazione necessaria per la telemetria MQTT",
+      "description": "La sessione salvata per {name} non ha l'id utente dell'account, quindi la telemetria MQTT è disattivata e l'integrazione ripiega sull'endpoint REST con dati obsoleti. Autenticati di nuovo per ripristinare la telemetria MQTT.",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Autenticati di nuovo",
+            "description": "Avvia il flusso di autenticazione per questo account. L'avviso scompare quando la nuova sessione fornisce l'id utente."
+          }
+        }
+      }
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -61,7 +119,7 @@
       },
       "intl_phone": {
         "title": "Accesso via SMS",
-        "description": "Seleziona il paese di vendita e il numero di cellulare nazionale (senza prefisso internazionale). Home Assistant richiederà un codice di verifica via SMS.",
+        "description": "Seleziona il paese di vendita e il numero di cellulare nazionale (senza prefisso internazionale). Home Assistant richiederà un codice di verifica via SMS. Al momento Changan non consegna gli SMS; se l'SMS non arriva, richiedi di nuovo il codice o passa al metodo email.",
         "data": {
           "country": "Paese di vendita",
           "phone": "Numero di cellulare",
@@ -81,6 +139,17 @@
         },
         "data_description": {
           "auth_code": "Codice numerico ricevuto via SMS. Scade rapidamente; richiedine un altro se viene rifiutato."
+        }
+      },
+      "intl_code_menu": {
+        "title": "Codice inviato",
+        "description": "Home Assistant ha richiesto il codice di verifica per {destination}. Può richiedere un paio di minuti; controlla anche lo spam. Se non arriva, richiedilo di nuovo o correggi la destinazione.",
+        "menu_options": {
+          "intl_email_code": "Inserisci il codice email",
+          "intl_sms_code": "Inserisci il codice SMS",
+          "intl_code_resend": "Invia di nuovo il codice",
+          "intl_email_change": "Cambia email",
+          "intl_sms_change": "Cambia numero di cellulare"
         }
       },
       "sda_reauth": {
@@ -116,6 +185,7 @@
           "scan_interval": "Intervallo di aggiornamento (secondi)",
           "control_pin": "PIN di controllo remoto",
           "enable_api_logging": "Registra il traffico API",
+          "wake": "Sveglia il veicolo quando serve",
           "environment": "Ambiente regionale"
         },
         "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.",
@@ -123,6 +193,7 @@
           "scan_interval": "Ogni quanto Home Assistant interroga il veicolo quando non è disponibile la telemetria MQTT, in secondi (30-3600).",
           "control_pin": "PIN di controllo remoto di My Changan. Necessario per bloccare/sbloccare, muovere i finestrini o aprire il bagagliaio.",
           "enable_api_logging": "Scrive ogni richiesta e risposta API nel log di Home Assistant, con token, chiavi, VIN, email, telefono, PIN e numero di serie nascosti. Abilitalo solo durante la risoluzione dei problemi.",
+          "wake": "Sveglia un veicolo MQTT addormentato prima di aggiornare o inviare un comando con PIN. Attivo per impostazione predefinita; disattivalo per preservare la batteria a 12 V se aggiorni molto spesso.",
           "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita."
         }
       }
@@ -261,6 +332,27 @@
       },
       "remaining_charge_time_formatted": {
         "name": "Tempo di ricarica rimanente (H:MM)"
+      },
+      "climate_target_temperature": {
+        "name": "Temperatura obiettivo climatizzatore"
+      },
+      "fan_level": {
+        "name": "Livello ventola climatizzatore"
+      },
+      "license_plate": {
+        "name": "Targa"
+      },
+      "window_opening_front_left": {
+        "name": "Apertura finestrino anteriore sinistro"
+      },
+      "window_opening_front_right": {
+        "name": "Apertura finestrino anteriore destro"
+      },
+      "window_opening_rear_left": {
+        "name": "Apertura finestrino posteriore sinistro"
+      },
+      "window_opening_rear_right": {
+        "name": "Apertura finestrino posteriore destro"
       }
     },
     "binary_sensor": {
@@ -299,9 +391,6 @@
       },
       "engine": {
         "name": "Motore"
-      },
-      "defrost": {
-        "name": "Sbrinamento anteriore"
       },
       "connected": {
         "name": "Connessione cloud"
@@ -374,6 +463,48 @@
       },
       "front_right_seat_ventilation": {
         "name": "Ventilazione sedile anteriore destro"
+      },
+      "key_battery_low": {
+        "name": "Batteria del telecomando scarica"
+      },
+      "air_recirculation": {
+        "name": "Ricircolo dell'aria"
+      },
+      "rear_fog_lamp": {
+        "name": "Fendinebbia posteriore"
+      },
+      "warning_12v_battery": {
+        "name": "Spia batteria 12 V"
+      },
+      "warning_tpms": {
+        "name": "Spia pressione pneumatici"
+      },
+      "warning_abs": {
+        "name": "Spia ABS"
+      },
+      "warning_airbag": {
+        "name": "Spia airbag"
+      },
+      "warning_brake_fluid": {
+        "name": "Spia liquido freni"
+      },
+      "warning_brake": {
+        "name": "Spia freni"
+      },
+      "warning_eps": {
+        "name": "Spia servosterzo"
+      },
+      "warning_power_limit": {
+        "name": "Spia potenza limitata"
+      },
+      "warning_power_system": {
+        "name": "Spia sistema di propulsione"
+      },
+      "warning_traction_battery_low": {
+        "name": "Spia batteria di trazione scarica"
+      },
+      "warning_coolant_temperature": {
+        "name": "Spia temperatura refrigerante"
       }
     },
     "button": {
@@ -385,6 +516,9 @@
       },
       "honk_horn": {
         "name": "Suona clacson"
+      },
+      "flash_and_honk": {
+        "name": "Luci e clacson"
       }
     },
     "climate": {
