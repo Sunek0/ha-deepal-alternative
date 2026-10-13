@@ -5,6 +5,11 @@ Small, self-contained kit to capture the Deepal app's traffic to the SDA broker
 proxies cannot show the MQTT connection, and the remote-control command codes travel **encrypted**
 inside the MQTT `sers` field, so the kit decodes them locally and writes shareable logs.
 
+> Looking for something simpler first? The [broker probe](../sda-mqtt-probe/README.md) runs on your
+> computer with no phone, no mitmproxy and no certificate, and answers how the SDA broker session
+> works (identity, topics, login exchange). Use this capture kit when the command codes themselves
+> are needed.
+
 ## What you need
 
 - A Mac with [mitmproxy](https://mitmproxy.org/) installed: `brew install mitmproxy`

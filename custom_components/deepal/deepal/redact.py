@@ -38,6 +38,7 @@ _SENSITIVE_EXACT_KEYS = {
     "rctoken",
     "refresh_token",
     "safecode",
+    "secretkey",
     "seriralno",
     "sign",
     "token",

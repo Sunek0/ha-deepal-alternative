@@ -106,6 +106,7 @@ def test_vin_variants_redacted_but_innocent_keys_visible():
 def test_is_sensitive_key():
     assert is_sensitive_key("X-Tsp-User-Token")
     assert is_sensitive_key("seriralNo")
+    assert is_sensitive_key("secretKey")
     assert is_sensitive_key("plateNumber")
     assert is_sensitive_key("Lat")
     assert is_sensitive_key("carLatitude")

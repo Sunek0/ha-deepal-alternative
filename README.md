@@ -220,10 +220,12 @@ automation:
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.
 - **SDA vehicle (E07) remote controls or MQTT telemetry misbehave**: remote controls are not
-  supported on the SDA platform yet. For telemetry or MQTT reports, the release ships a capture
-  helper in [`tools/sda-mqtt-capture`](tools/sda-mqtt-capture): it decodes the official app's MQTT
-  frames locally (secrets, plate and location are masked in the log it produces) and its README
-  explains what to send. It is not part of the HACS install and only runs on a computer.
+  supported on the SDA platform yet. For telemetry or MQTT reports, the release ships two helpers
+  under [`tools/`](tools): the [`sda-mqtt-probe`](tools/sda-mqtt-probe) runs on your computer with no
+  phone setup and reports how the broker session works, and the
+  [`sda-mqtt-capture`](tools/sda-mqtt-capture) kit decodes the official app's MQTT frames locally
+  (secrets, plate and location are masked in the logs they produce). Neither is part of the HACS
+  install.
 
 ## Removal
 
