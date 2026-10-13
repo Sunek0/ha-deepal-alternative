@@ -325,6 +325,7 @@ class DeepalIntlClient:
         mqtt_tls_insecure: bool = False,
         mqtt_sda_probe_grace: float = MQTT_SDA_PROBE_GRACE,
         mqtt_exchange_timeout: Optional[float] = None,
+        mqtt_wake_timeout: Optional[float] = None,
         mqtt_token_ttl: float = INTL_MQTT_TOKEN_TTL_SECONDS,
         device_id: Optional[str] = None,
         private_key_pem: Optional[str] = None,
@@ -362,6 +363,7 @@ class DeepalIntlClient:
         self.mqtt_tls_insecure = mqtt_tls_insecure
         self.mqtt_sda_probe_grace = mqtt_sda_probe_grace
         self.mqtt_exchange_timeout = mqtt_exchange_timeout
+        self.mqtt_wake_timeout = mqtt_wake_timeout
         self.mqtt_token_ttl = mqtt_token_ttl
         self._mqtt_token: Optional[str] = None
         self._mqtt_token_expires_at = 0.0
@@ -2200,9 +2202,16 @@ class DeepalIntlClient:
                     )
                 )
                 await writer.drain()
+                logger.info(
+                    "Deepal wake for %s published on the properties/set topic",
+                    vehicle_id,
+                )
 
                 loop = asyncio.get_running_loop()
-                deadline = loop.time() + max(self.timeout, 20.0)
+                started = loop.time()
+                wait_seconds = self.mqtt_wake_timeout or max(self.timeout, 20.0)
+                deadline = started + wait_seconds
+                observed: list[str] = []
                 while loop.time() < deadline:
                     try:
                         first, body = await read_packet_with_keepalive(
@@ -2214,22 +2223,45 @@ class DeepalIntlClient:
                     except asyncio.TimeoutError:
                         break
                     if first >> 4 != 3:
+                        observed.append(f"packet_type={first >> 4}")
                         continue
-                    _topic, payload, packet_id = parse_publish(first, body)
+                    topic, payload, packet_id = parse_publish(first, body)
                     if packet_id is not None:
                         writer.write(build_puback_packet(packet_id))
                         await writer.drain()
-                    if payload.get("r") != req_id:
-                        continue
+                    matched = payload.get("r") == req_id
                     result = self._service_result_from_payload(payload, secret_key)
-                    if result is None:
+                    observed.append(
+                        "topic={} r={} result={}".format(
+                            "/".join(topic.rsplit("/", 2)[-2:]),
+                            "match" if matched else "other",
+                            result,
+                        )
+                    )
+                    if not matched or result is None:
                         continue
                     code, success = result
                     if success:
+                        logger.info(
+                            "Deepal wake for %s acknowledged with code %s after "
+                            "%.1f s",
+                            vehicle_id,
+                            code,
+                            loop.time() - started,
+                        )
                         return
                     raise DeepalAPIError(
                         f"Vehicle wake was rejected: {code}", code=code
                     )
+                summary = "; ".join(observed[:8])
+                if len(observed) > 8:
+                    summary += f" (+{len(observed) - 8} more)"
+                logger.warning(
+                    "Deepal wake for %s got no acknowledgement within %.0f s: %s",
+                    vehicle_id,
+                    wait_seconds,
+                    summary or "no publishes received",
+                )
                 raise DeepalAPIError("Vehicle wake did not return a response.")
             except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
                 raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc

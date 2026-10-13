@@ -1115,6 +1115,12 @@ class _FakeCommandClient:
         self.calls.append(("trunk", vehicle_id, open_value))
         return "cmd-1"
 
+    async def control_air_conditioner(
+        self, vehicle_id: str, enabled: bool, target_temp_c: float
+    ) -> str:
+        self.calls.append(("air", vehicle_id, enabled, target_temp_c))
+        return "cmd-1"
+
 
 class _FakeCommandCoordinator(FakeCoordinator):
     """Run commands synchronously and apply the optimistic update."""
@@ -1196,6 +1202,27 @@ async def test_seat_and_steering_controls_send_app_payloads() -> None:
     assert condition.seats.front_left.heating_level == 2
     assert condition.seats.front_right.ventilation_level == 0
     assert condition.climate.steering_wheel_heater_on is True
+
+
+@pytest.mark.asyncio
+async def test_climate_clamps_the_target_to_the_supported_range() -> None:
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    condition.climate.target_temperature_c = 17.0
+    coordinator = _FakeCommandCoordinator(condition)
+    entity = climate.DeepalCabinClimateEntity(coordinator, _fake_vehicle())
+
+    assert entity.min_temp == 18.0
+    assert entity.max_temp == 30.0
+    await entity.async_turn_on()
+
+    assert coordinator.client.calls == [("air", "car-1", True, 18.0)]
+    assert condition.climate.target_temperature_c == 18.0
+
+    await entity.async_set_temperature(temperature=16.0)
+    assert coordinator.client.calls[-1] == ("air", "car-1", True, 18.0)
+
+    await entity.async_set_temperature(temperature=31.0)
+    assert coordinator.client.calls[-1] == ("air", "car-1", True, 30.0)
 
 
 @pytest.mark.asyncio

@@ -123,6 +123,7 @@ class _FakeMqttBroker:
         connack_reason_code: int = 0,
         service_code: str = "car_condition",
         condition_sequence: Optional[list[Optional[dict[str, Any]]]] = None,
+        wake_reply: bool = True,
     ) -> None:
         self.reader = asyncio.StreamReader()
         self.writes: list[bytes] = []
@@ -138,6 +139,7 @@ class _FakeMqttBroker:
         self.wake_payload: Optional[dict[str, Any]] = None
         self.wake_code = "200"
         self.wake_success = True
+        self.wake_reply = wake_reply
         self.condition_publishes: list[dict[str, Any]] = []
         self.condition_sequence = (
             list(condition_sequence) if condition_sequence is not None else None
@@ -190,6 +192,8 @@ class _FakeMqttBroker:
         if "properties/set/req" in topic:
             self.wake_topic = topic
             self.wake_payload = payload
+            if not self.wake_reply:
+                return
             req_id = payload["r"]
             encrypted = aes_cbc_encrypt(
                 [
@@ -2407,6 +2411,28 @@ async def test_wake_vehicle_raises_on_rejected_service(monkeypatch):
 
     assert err.value.code == "VVCC_-1_-1_02_023"
     assert "rejected" in str(err.value)
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_without_acknowledgement_logs_the_observed_packets(
+    monkeypatch, caplog
+):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, wake_reply=False)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+    client.mqtt_wake_timeout = 0.05
+
+    with caplog.at_level(logging.INFO, logger="deepal_sdk"):
+        with pytest.raises(DeepalAPIError) as err:
+            await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert "did not return a response" in str(err.value)
+    assert "published on the properties/set topic" in caplog.text
+    assert "got no acknowledgement within 0 s: no publishes received" in caplog.text
     assert broker.close_count == 1
 
 
