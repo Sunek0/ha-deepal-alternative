@@ -38,7 +38,7 @@ normalidad en el teléfono.
 
 1. Abre la app **My Changan** y crea una cuenta nueva con un email o un número de teléfono
    diferente al de tu cuenta principal.
-2. Anota las credenciales (email/teléfono y código de acceso): serán las que uses en Home Assistant.
+2. Anota la información (email/teléfono): serán las que uses en Home Assistant.
 
 ### 2. Compartir el vehículo desde la cuenta principal
 
