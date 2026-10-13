@@ -25,3 +25,10 @@ dev = [
 ha = [
     "homeassistant>=2026.8.0",
 ]
+
+[tool.pytest.ini_options]
+# The Home Assistant compatibility tests import ``custom_components.deepal.*``,
+# so the repository root (one level above this file) must be importable.
+# Without it, ``pytest deepal_sdk/tests`` fails to collect those tests while
+# ``python -m pytest`` works by accident, because it adds the working directory.
+pythonpath = [".."]
