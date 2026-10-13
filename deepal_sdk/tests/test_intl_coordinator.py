@@ -1,6 +1,7 @@
 """Tests for the Home Assistant coordinator command flow."""
 
 import asyncio
+import math
 import time
 from datetime import timedelta
 from types import SimpleNamespace
@@ -1773,7 +1774,9 @@ async def test_vehicle_list_change_schedules_a_reload():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)
     coordinator.vehicles = [_mqtt_vehicle("car-1")]
-    coordinator._last_vehicle_refresh = 0.0
+    # -inf means "never refreshed": 0.0 only looks old once the host clock
+    # has run for longer than the refresh interval (a fresh CI runner has not).
+    coordinator._last_vehicle_refresh = -math.inf
     reloads: list[str] = []
     coordinator.entry = SimpleNamespace(entry_id="entry-9", data={})
     coordinator.hass = SimpleNamespace(
@@ -1796,7 +1799,9 @@ async def test_vehicle_list_failure_keeps_the_current_list():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)
     coordinator.vehicles = [_mqtt_vehicle("car-1")]
-    coordinator._last_vehicle_refresh = 0.0
+    # -inf means "never refreshed": 0.0 only looks old once the host clock
+    # has run for longer than the refresh interval (a fresh CI runner has not).
+    coordinator._last_vehicle_refresh = -math.inf
     reloads: list[str] = []
     coordinator.hass = SimpleNamespace(
         config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
@@ -1818,7 +1823,9 @@ async def test_vehicle_list_empty_refresh_keeps_the_current_list():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)
     coordinator.vehicles = [_mqtt_vehicle("car-1")]
-    coordinator._last_vehicle_refresh = 0.0
+    # -inf means "never refreshed": 0.0 only looks old once the host clock
+    # has run for longer than the refresh interval (a fresh CI runner has not).
+    coordinator._last_vehicle_refresh = -math.inf
     reloads: list[str] = []
     coordinator.hass = SimpleNamespace(
         config_entries=SimpleNamespace(async_schedule_reload=reloads.append)
