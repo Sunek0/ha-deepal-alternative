@@ -45,6 +45,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   minutes and a `H:MM` sensor for dashboards), charge limit, charge schedule and plan, doors,
   windows, climate, seats, tires and lamps. The charging sensor also exposes the tracked
   `current_charge` and `last_charge` sessions (start and end time, battery level and range).
+- Charging entities follow the car instead of a non-zero flag: the charging state is a translated
+  enum (`not_charging`, `connected_ac`, `connected_dc`, `charging_ac`, `charging_dc`), the
+  "Charging" sensor is on only for the charging states, the charge current is taken from the
+  active charger and validated (`0-600 A`), and the power state is a translated off/on sensor.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
   fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
   brakes, power steering, power limit, power system, traction battery low and coolant temperature),
@@ -89,6 +93,29 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
   (S05, S07, E07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
+
+### Vehicle panel, example dashboard and card
+
+- **Panel** (optional): the setup asks whether to add it (disabled by default) and the integration
+  options can change it later. Once enabled, a **Deepal** entry appears in the sidebar for every
+  Home Assistant user, with no dashboard YAML and no extra cards. The integration's **Configure**
+  button opens the integration options, where the panel can be enabled or disabled.
+- The panel discovers vehicles and entities from the Home Assistant registries, so it works with
+  any vehicle name, area or entity id, and with several cars. Missing optional entities (for
+  example the PIN-gated lock, window and trunk controls) simply hide their controls. Tabs:
+  **Status** (layered vehicle picture on the S05 and the image entity on other models, door,
+  window, trunk, hood, light and tire states), **Climate** (cabin temperature, seat heating and
+  ventilation, steering wheel) and **Charging** (battery, cable, current, time left and the
+  tracked charging sessions). Everything is served by the integration itself.
+- **Card**: add **Deepal vehicle** from the card picker of any dashboard and pick your vehicle in
+  the form; the card carries the panel's three views (status, climate and charging) with the same
+  controls, and it is loaded by the integration itself, so it needs no Lovelace resource.
+- **Example dashboard**: `guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready view
+  derived from the reference cockpit with every home charger (V2C) element removed. Its helpers
+  ship in `guides/dashboards/deepal-dashboard.helpers.yaml`; mushroom is its only frontend
+  prerequisite and the entity ids must be replaced with yours.
+- Full walkthrough: [panel, example dashboard and card guide (English)](guides/dashboard-guide.en.md)
+  · [guía del panel, el dashboard de ejemplo y la tarjeta (español)](guides/dashboard-guide.es.md).
 
 ### Diagnostics
 

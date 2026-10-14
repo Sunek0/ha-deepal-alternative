@@ -1735,6 +1735,25 @@ async def test_periodic_update_tracks_charging_sessions():
 
 
 @pytest.mark.asyncio
+async def test_periodic_update_does_not_track_a_plugged_only_car():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    client.mqtt_condition.battery.charging_status = "2"
+    client.mqtt_condition.battery.soc_percentage = 55
+    client.mqtt_condition.mqtt_raw_data = {"ChrgSts": 2}
+    store = _RecordingStore()
+    coordinator.charging = ChargingSessionManager(store)
+
+    await coordinator._async_update_data()
+
+    assert coordinator.charging.attributes("car-1") == {}
+    assert store.saved == []
+
+
+@pytest.mark.asyncio
 async def test_vehicle_list_first_fetch_populates_without_reload():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)

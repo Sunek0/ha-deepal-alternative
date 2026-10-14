@@ -129,6 +129,25 @@ Kofferraum) zu verwenden und damit Home Assistant deren Entitäten erstellt:
 - Die Befehle, die von der PIN abhängen (Türen, Fenster, Kofferraum), werden mit der PIN signiert,
   die du mit dem Zweitkonto erstellt hast; wenn sie fehlschlagen, prüfe Schritt 9 erneut.
 
+### 11. Das Fahrzeug-Panel
+
+Die Integration bringt ihr eigenes Panel mit, ohne Dashboard-YAML und ohne zusätzliche Karten:
+
+- Das Panel ist **optional**: Bei der Einrichtung wirst du gefragt, ob du es hinzufügen möchtest
+  (standardmäßig deaktiviert); in den Integrationsoptionen kannst du es später ändern. Mit
+  aktiviertem Panel erscheint **Deepal** für alle Home-Assistant-Benutzer in der Seitenleiste; die
+  Schaltfläche **Konfigurieren** öffnet die Integrationsoptionen (dort aktivierst oder deaktivierst
+  du das Panel).
+- Tabs: **Status** (Fahrzeugbild, Türen, Fenster, Kofferraum, Motorhaube, Lichter und Reifen),
+  **Klima** (Temperatur, Sitze und Lenkrad) und **Laden** (Batterie, Kabel, Strom, Restzeit und
+  die aufgezeichneten Ladevorgänge).
+- Steuerungen für Türen, Fenster und Kofferraum erscheinen nur, wenn du die PIN gespeichert hast
+  (Schritt 9); Lichter, Hupe, Klima, Sitze und Lenkrad funktionieren ohne PIN.
+
+Eine vollständige Anleitung zu Panel, Beispiel-Dashboard (ohne heimische Wallbox) und Karte gibt
+es auf Englisch und Spanisch: [dashboard-guide.en.md](dashboard-guide.en.md) ·
+[dashboard-guide.es.md](dashboard-guide.es.md).
+
 ## Hinweise und Fehlerbehebung
 
 - **Ich kann nichts steuern**: Prüfe zuerst, ob die offizielle App es mit demselben Konto kann. Das

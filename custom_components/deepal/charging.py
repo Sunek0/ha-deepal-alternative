@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Optional
 
+from .deepal.mqtt import charge_is_active
+
 CURRENT = "current"
 LAST = "last"
 
@@ -35,10 +37,20 @@ _END_FIELDS = ("end", "end_level", "end_range")
 
 
 def charging_flag(condition: Any) -> Optional[bool]:
-    """Return whether a condition reports the car charging (``None`` = unknown)."""
+    """Return whether a condition reports the car charging (``None`` = unknown).
+
+    The S05 reports ``ChrgSts`` as a charging-state enum whose connected-only
+    values (1 and 2) used to read as "charging": for those snapshots only the
+    charging states 3 and 4 are on. Vehicles that do not report ``ChrgSts``
+    (the SDA broker, the REST condition) keep the previous any-non-zero
+    behaviour until their enum is confirmed.
+    """
     status = condition.battery.charging_status
     if status is None:
         return None
+    raw = getattr(condition, "mqtt_raw_data", None) or {}
+    if "ChrgSts" in raw:
+        return charge_is_active(status)
     return str(status) not in ("0", "None")
 
 

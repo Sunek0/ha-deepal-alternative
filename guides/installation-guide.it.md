@@ -124,6 +124,25 @@ bagagliaio) e perché Home Assistant crei le relative entità:
 - I comandi che dipendono dal PIN (portiere, finestrini, bagagliaio) sono firmati con il PIN creato
   con l'account secondario; se falliscono, ricontrolla il passaggio 9.
 
+### 11. Il pannello del veicolo
+
+L'integrazione include il proprio pannello, senza YAML della dashboard e senza carte aggiuntive:
+
+- Il pannello è **opzionale**: durante la configurazione ti viene chiesto se aggiungerlo
+  (disattivato per impostazione predefinita) e puoi cambiarlo nelle opzioni dell'integrazione. Con
+  il pannello attivo, **Deepal** appare nella barra laterale per tutti gli utenti di Home
+  Assistant; il pulsante **Configura** apre le opzioni dell'integrazione (lì attivi o disattivi il
+  pannello).
+- Schede: **Stato** (immagine del veicolo, portiere, finestrini, bagagliaio, cofano, luci e
+  pneumatici), **Clima** (temperatura, sedili e volante) e **Ricarica** (batteria, cavo, corrente,
+  tempo rimanente e le sessioni registrate).
+- I comandi di portiere, finestrini e bagagliaio compaiono solo se hai salvato il PIN (passo 9);
+  luci, clacson, clima, sedili e volante funzionano senza PIN.
+
+Per la dashboard di esempio (senza la wallbox di casa) e la carta `deepal-card`, consulta la guida
+completa in inglese e spagnolo: [dashboard-guide.en.md](dashboard-guide.en.md) ·
+[dashboard-guide.es.md](dashboard-guide.es.md).
+
 ## Note e risoluzione dei problemi
 
 - **Non riesco a controllare nulla**: controlla prima se l'app ufficiale riesce a farlo con lo stesso

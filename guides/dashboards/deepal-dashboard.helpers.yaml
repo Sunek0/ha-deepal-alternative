@@ -1,0 +1,78 @@
+# Helpers required by guides/dashboards/deepal-dashboard.example.yaml
+#
+# The two input_selects drive the view navigation (Exterior / Estado / Clima /
+# Carga and Climatizacion / Asientos). The four template selects wrap the seat
+# number entities with a buttons-style select, like the reference view.
+#
+# You can create the input_selects from the Home Assistant UI (Settings >
+# Devices & services > Helpers) or paste this file into configuration.yaml
+# and restart. The entity ids of the number entities depend on your
+# installation: replace them if yours differ.
+
+input_select:
+  deepal_vista:
+    name: "Deepal - Vista activa"
+    options:
+      - "Exterior"
+      - "Estado"
+      - "Clima"
+      - "Carga"
+    icon: mdi:car
+
+  deepal_clima_vista:
+    name: "Deepal - Vista clima"
+    options:
+      - "Climatización"
+      - "Asientos"
+    icon: mdi:air-conditioner
+
+template:
+  - select:
+      - name: "Clima asiento izq calefacción"
+        default_entity_id: select.clima_asiento_izq_calefaccion
+        unique_id: deepal_clima_asiento_izq_calefaccion
+        icon: mdi:car-seat-heater
+        state: "{{ states('number.garaje_deepal_s05_s05_front_left_seat_heating_level') | int(0) }}"
+        options: "{{ ['0', '1', '2', '3'] }}"
+        select_option:
+          - action: number.set_value
+            target:
+              entity_id: number.garaje_deepal_s05_s05_front_left_seat_heating_level
+            data:
+              value: "{{ option | int(0) }}"
+      - name: "Clima asiento der calefacción"
+        default_entity_id: select.clima_asiento_der_calefaccion
+        unique_id: deepal_clima_asiento_der_calefaccion
+        icon: mdi:car-seat-heater
+        state: "{{ states('number.garaje_deepal_s05_s05_front_right_seat_heating_level') | int(0) }}"
+        options: "{{ ['0', '1', '2', '3'] }}"
+        select_option:
+          - action: number.set_value
+            target:
+              entity_id: number.garaje_deepal_s05_s05_front_right_seat_heating_level
+            data:
+              value: "{{ option | int(0) }}"
+      - name: "Clima asiento izq ventilación"
+        default_entity_id: select.clima_asiento_izq_ventilacion
+        unique_id: deepal_clima_asiento_izq_ventilacion
+        icon: mdi:car-seat-cooler
+        state: "{{ states('number.garaje_deepal_s05_s05_front_left_seat_ventilation_level') | int(0) }}"
+        options: "{{ ['0', '1', '2', '3'] }}"
+        select_option:
+          - action: number.set_value
+            target:
+              entity_id: number.garaje_deepal_s05_s05_front_left_seat_ventilation_level
+            data:
+              value: "{{ option | int(0) }}"
+      - name: "Clima asiento der ventilación"
+        default_entity_id: select.clima_asiento_der_ventilacion
+        unique_id: deepal_clima_asiento_der_ventilacion
+        icon: mdi:car-seat-cooler
+        state: "{{ states('number.garaje_deepal_s05_s05_front_right_seat_ventilation_level') | int(0) }}"
+        options: "{{ ['0', '1', '2', '3'] }}"
+        select_option:
+          - action: number.set_value
+            target:
+              entity_id: number.garaje_deepal_s05_s05_front_right_seat_ventilation_level
+            data:
+              value: "{{ option | int(0) }}"

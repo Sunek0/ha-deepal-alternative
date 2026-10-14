@@ -136,9 +136,13 @@ def _entities_by_platform() -> dict[str, list]:
                 coordinator, vehicle, "front_left", "heating_level"
             ),
             sensor.DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle),
+            sensor.DeepalChargeStatusSensor(coordinator, vehicle),
+            sensor.DeepalPowerStatusSensor(coordinator, vehicle),
+            sensor.DeepalChargeModeSensor(coordinator, vehicle),
             *(
                 sensor.DeepalSensor(coordinator, vehicle, description)
                 for description in sensor.SENSORS
+                if description.key != "charge_status"
             ),
         ],
         "binary_sensor": [
@@ -952,12 +956,10 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
     s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
 
-    s05_keys = {
-        entity.translation_key for entity in sensor.build_sensors(coordinator, s05)
-    }
-    s07_keys = {
-        entity.translation_key for entity in sensor.build_sensors(coordinator, s07)
-    }
+    s05_entities = sensor.build_sensors(coordinator, s05)
+    s07_entities = sensor.build_sensors(coordinator, s07)
+    s05_keys = {entity.translation_key for entity in s05_entities}
+    s07_keys = {entity.translation_key for entity in s07_entities}
 
     assert sensor.S05_UNSUPPORTED_SENSOR_KEYS.isdisjoint(s05_keys)
     assert sensor.S05_UNSUPPORTED_SENSOR_KEYS <= s07_keys
@@ -967,6 +969,24 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     rear_seats = {"seat_heating_level_rear_left", "seat_heating_level_rear_right"}
     assert rear_seats.isdisjoint(s05_keys)
     assert rear_seats <= s07_keys
+    assert "power_status" in s05_keys and "power_status" in s07_keys
+    assert "charge_mode" in s05_keys
+    assert "charge_mode" not in s07_keys
+    assert isinstance(
+        next(
+            entity
+            for entity in s05_entities
+            if entity.translation_key == "charge_status"
+        ),
+        sensor.DeepalChargeStatusSensor,
+    )
+    assert type(
+        next(
+            entity
+            for entity in s07_entities
+            if entity.translation_key == "charge_status"
+        )
+    ) is sensor.DeepalSensor
 
 
 def test_is_bev_matches_the_model_token() -> None:
@@ -1812,3 +1832,82 @@ def test_remaining_charge_time_formatted_sensor() -> None:
     assert formatted.native_value == "1:35"
     assert duration.native_value == 95
     assert duration._attr_device_class is sensor.SensorDeviceClass.DURATION
+
+
+def test_charge_status_sensor_maps_the_s05_states() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator.data["car-1"] = condition
+    entity = sensor.DeepalChargeStatusSensor(coordinator, _fake_vehicle())
+
+    assert entity._attr_unique_id == "deepal_car-1_charge_status"
+    assert entity._attr_device_class is sensor.SensorDeviceClass.ENUM
+    assert entity._attr_options == list(sensor.CHARGE_STATUS_OPTIONS)
+
+    expected = {
+        "0": "not_charging",
+        "1": "connected_ac",
+        "2": "connected_dc",
+        "3": "charging_ac",
+        "4": "charging_dc",
+    }
+    for raw, option in expected.items():
+        condition.battery.charging_status = raw
+        assert entity.native_value == option
+        assert entity.extra_state_attributes == {"raw_charge_status": raw}
+
+    condition.battery.charging_status = "9"
+    assert entity.native_value is None
+    assert entity.extra_state_attributes == {"raw_charge_status": "9"}
+
+    condition.battery.charging_status = None
+    assert entity.native_value is None
+    assert entity.extra_state_attributes is None
+
+
+def test_power_status_sensor_maps_the_verified_values() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator.data["car-1"] = condition
+    entity = sensor.DeepalPowerStatusSensor(coordinator, _fake_vehicle())
+
+    assert entity._attr_unique_id == "deepal_car-1_power_status"
+    assert entity._attr_options == list(sensor.POWER_STATUS_OPTIONS)
+
+    condition.power_status = 0
+    assert entity.native_value == "off"
+    condition.power_status = 2
+    assert entity.native_value == "on"
+    assert entity.extra_state_attributes == {"raw_power_status": 2}
+    condition.power_status = 1
+    assert entity.native_value is None
+    assert entity.extra_state_attributes == {"raw_power_status": 1}
+    condition.power_status = None
+    assert entity.native_value is None
+    assert entity.extra_state_attributes is None
+
+
+def test_charge_mode_sensor_derives_the_type() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator.data["car-1"] = condition
+    entity = sensor.DeepalChargeModeSensor(coordinator, _fake_vehicle())
+
+    assert entity._attr_unique_id == "deepal_car-1_charge_mode"
+    for raw, option in (("1", "ac"), ("3", "ac"), ("2", "dc"), ("4", "dc")):
+        condition.battery.charging_status = raw
+        assert entity.native_value == option
+    for raw in ("0", "9", None):
+        condition.battery.charging_status = raw
+        assert entity.native_value is None
+
+
+def test_charge_enum_states_are_translated_in_every_language() -> None:
+    for path in TRANSLATION_FILES:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        states = data["entity"]["sensor"]["charge_status"]["state"]
+        assert set(states) == set(sensor.CHARGE_STATUS_OPTIONS), path.name
+        power_states = data["entity"]["sensor"]["power_status"]["state"]
+        assert set(power_states) == set(sensor.POWER_STATUS_OPTIONS), path.name
+        mode_states = data["entity"]["sensor"]["charge_mode"]["state"]
+        assert set(mode_states) == {"ac", "dc"}, path.name

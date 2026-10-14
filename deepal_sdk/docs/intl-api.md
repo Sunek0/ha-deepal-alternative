@@ -284,10 +284,10 @@ Mapping:
 | `vehicleStatus.connectStatus` | Cloud connection (`== 1`) | `connected` |
 | `vehicleStatus.steeringWheelHeater` | Steering wheel heater (`!= 0`) | `climate.steering_wheel_heater_on` |
 | `vehicleStatus.steeringWheelHeaterLevel` | Heater level | `climate.steering_wheel_heater_level` |
-| `charge.chargeStatus` | Charging state (`!= 0` means connected) | `battery.charging_status` (string) |
+| `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging; anything else unknown) | `battery.charging_status` (raw string) |
 | `charge.chargeConStatus` | Cable state (`0`/`1` disconnected) | `battery.charger_connected` fallback |
 | `charge.dcChargeGunConnectStatus` | DC gun (`0`/`1` disconnected) | `battery.dc_gun_connected` |
-| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A) | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
+| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated to `0-600 A`; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
 | `charge.maxSocPercent` | Charge limit (%) | `battery.charge_limit_percent` |
 | `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |

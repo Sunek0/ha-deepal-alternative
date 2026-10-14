@@ -131,6 +131,24 @@ vitres et coffre) et pour que Home Assistant crée leurs entités :
 - Les commandes qui dépendent du code PIN (portes, vitres, coffre) sont signées avec le code PIN
   créé avec le compte secondaire ; si elles échouent, revérifiez l'étape 9.
 
+### 11. Le panneau du véhicule
+
+L'intégration fournit son propre panneau, sans YAML de tableau de bord ni cartes supplémentaires :
+
+- Le panneau est **facultatif** : la configuration demande si vous voulez l'ajouter (désactivé
+  par défaut) et les options de l'intégration permettent de le modifier ensuite. Avec le panneau
+  activé, **Deepal** apparaît dans la barre latérale pour tous les utilisateurs de Home Assistant ;
+  le bouton **Configurer** ouvre les options de l'intégration (activez ou désactivez-y le panneau).
+- Onglets : **État** (image du véhicule, portes, vitres, coffre, capot, feux et pneus), **Climat**
+  (température, sièges et volant) et **Charge** (batterie, câble, courant, temps restant et les
+  sessions enregistrées).
+- Les commandes des portes, vitres et coffre n'apparaissent que si vous avez enregistré le PIN
+  (étape 9) ; les feux, le klaxon, le climat, les sièges et le volant fonctionnent sans PIN.
+
+Pour le tableau de bord d'exemple (sans la borne de recharge) et la carte `deepal-card`,
+consultez le guide complet en anglais et en espagnol : [dashboard-guide.en.md](dashboard-guide.en.md) ·
+[dashboard-guide.es.md](dashboard-guide.es.md).
+
 ## Remarques et dépannage
 
 - **Je ne peux rien contrôler** : vérifiez d'abord si l'application officielle peut le faire avec le

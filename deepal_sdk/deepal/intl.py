@@ -116,6 +116,7 @@ from deepal.mqtt import (
     build_puback_packet,
     build_publish_packet,
     build_subscribe_packet,
+    clean_charge_current,
     condition_request_payload,
     config_mqtt_identity,
     login_request_payload,
@@ -136,6 +137,20 @@ from deepal.mqtt import (
 )
 
 logger = logging.getLogger("deepal_sdk")
+
+# Charge keys the debug discovery log prints on every S05 report so a session
+# can be diagnosed from a log without downloading the diagnostics.
+S05_CHARGE_DEBUG_KEYS = (
+    "ChrgSts",
+    "BattACChrgInCurr",
+    "battACChrgInCurr",
+    "BattDCChrgInCurr",
+    "battDCChrgInCurr",
+    "chargDeltMins",
+    "acChargeGunConnectionState",
+    "dcChargeGunConnectionState",
+    "dcDhargeGunConnectionState",
+)
 
 INTL_APP_ID = "ca"
 INTL_APP_TYPE = "Android"
@@ -1284,9 +1299,15 @@ class DeepalIntlClient:
             dc_gun_connected=_is_charge_connection(
                 charge.get("dcChargeGunConnectStatus")
             ),
-            charge_current_a=_as_float(charge.get("chargeCurrent")),
-            ac_charge_current_a=_as_float(charge.get("acChargeCurrent")),
-            dc_charge_current_a=_as_float(charge.get("dcChargeCurrent")),
+            charge_current_a=clean_charge_current(
+                charge.get("chargeCurrent"), "charge.chargeCurrent"
+            ),
+            ac_charge_current_a=clean_charge_current(
+                charge.get("acChargeCurrent"), "charge.acChargeCurrent"
+            ),
+            dc_charge_current_a=clean_charge_current(
+                charge.get("dcChargeCurrent"), "charge.dcChargeCurrent"
+            ),
             remaining_charge_time_min=remaining_charge_time,
             charge_limit_percent=_as_int(charge.get("maxSocPercent")),
             charge_schedule_enabled=(
@@ -1781,6 +1802,14 @@ class DeepalIntlClient:
         """
         if not params or not logger.isEnabledFor(logging.DEBUG):
             return
+        charge = {
+            key: params[key] for key in S05_CHARGE_DEBUG_KEYS if key in params
+        }
+        if charge:
+            logger.debug(
+                "S05 MQTT charge parameters: %s",
+                json.dumps(charge, ensure_ascii=False, sort_keys=True, default=str),
+            )
         unmapped = unmapped_s05_keys(params)
         if not unmapped:
             return

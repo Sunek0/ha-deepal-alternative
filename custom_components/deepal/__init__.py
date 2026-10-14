@@ -14,6 +14,8 @@ from homeassistant.helpers.storage import Store
 
 from .charging import ChargingSessionManager
 from .deepal import DeepalClient, DeepalIntlClient
+from .frontend import async_register_frontend, async_unregister_frontend
+from .panel import async_sync_panel, async_unregister_panel_if_unwanted
 from .const import (
     DOMAIN,
     PLATFORM_SDA,
@@ -248,6 +250,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
     _remove_stale_vehicle_registry(hass, entry, coordinator)
     _sync_mqtt_reauth_issue(hass, entry, coordinator)
 
+    # The panel and its assets are an addition: registration is contained and
+    # happens once per Home Assistant run, even with several entries. Whether
+    # the panel shows depends on the accounts' stored preference.
+    await async_register_frontend(hass)
+    await async_sync_panel(hass)
+
     platforms = _platforms(entry)
     _LOGGER.debug(
         "Deepal setting up platforms: %s", [platform.value for platform in platforms]
@@ -276,6 +284,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> N
     """
     await _charging_store(hass, entry).async_remove()
     ir.async_delete_issue(hass, DOMAIN, _mqtt_reauth_issue_id(entry))
+    async_unregister_panel_if_unwanted(hass, entry)
+    if not any(
+        other.entry_id != entry.entry_id
+        for other in hass.config_entries.async_entries(DOMAIN)
+    ):
+        await async_unregister_frontend(hass)
     if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) != PLATFORM_INTL:
         return
     if not entry.data.get(CONF_ACCESS_TOKEN):

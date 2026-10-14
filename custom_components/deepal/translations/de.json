@@ -160,6 +160,16 @@
         "data_description": {
           "access_token": "Neues langlebiges SDA-Access-Token. Das alte wird erst nach der Prüfung ersetzt."
         }
+      },
+      "panel": {
+        "title": "Seitenleisten-Panel",
+        "description": "Wähle, ob die Integration ein Deepal-Panel zur Home-Assistant-Seitenleiste hinzufügt. Du kannst das später in den Integrationsoptionen ändern.",
+        "data": {
+          "show_panel": "Seitenleisten-Panel anzeigen"
+        },
+        "data_description": {
+          "show_panel": "Fügt allen Home-Assistant-Benutzern eine Deepal-Seite in der Seitenleiste hinzu."
+        }
       }
     },
     "error": {
@@ -185,7 +195,8 @@
           "control_pin": "Fernsteuerungs-PIN",
           "enable_api_logging": "API-Verkehr protokollieren",
           "wake": "Fahrzeug bei Bedarf aufwecken",
-          "environment": "Regionale Umgebung"
+          "environment": "Regionale Umgebung",
+          "show_panel": "Seitenleisten-Panel anzeigen"
         },
         "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
         "data_description": {
@@ -193,7 +204,8 @@
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit ausgeblendeten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
           "wake": "Weckt ein schlafendes MQTT-Fahrzeug vor dem Aktualisieren oder vor PIN-Befehlen. Standardmäßig aktiviert; deaktivieren, um die 12-V-Batterie zu schonen, wenn sehr häufig aktualisiert wird.",
-          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa."
+          "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa.",
+          "show_panel": "Fügt allen Home-Assistant-Benutzern eine Deepal-Seite in der Seitenleiste hinzu."
         }
       }
     },
@@ -282,7 +294,21 @@
         "name": "Luftqualitätsstufe"
       },
       "charge_status": {
-        "name": "Ladestatus"
+        "name": "Ladestatus",
+        "state": {
+          "not_charging": "Nicht laden",
+          "connected_ac": "AC-Kabel angeschlossen",
+          "connected_dc": "DC-Kabel angeschlossen",
+          "charging_ac": "Lädt mit AC",
+          "charging_dc": "Lädt mit DC"
+        }
+      },
+      "charge_mode": {
+        "name": "Ladeart",
+        "state": {
+          "ac": "AC",
+          "dc": "DC"
+        }
       },
       "charge_current": {
         "name": "Ladestrom"
@@ -318,7 +344,11 @@
         "name": "Fahrzeugstatus"
       },
       "power_status": {
-        "name": "Leistungsstatus"
+        "name": "Leistungsstatus",
+        "state": {
+          "off": "Aus",
+          "on": "Ein"
+        }
       },
       "gear": {
         "name": "Gang"

@@ -1,5 +1,8 @@
 """Constants for the Deepal Alternative Home Assistant integration."""
 
+import json
+from pathlib import Path
+
 try:  # Home Assistant 2026.4 and later expose the density unit enum.
     from homeassistant.const import UnitOfDensity
 
@@ -43,12 +46,17 @@ CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
 CONF_WAKE = "wake"
+CONF_SHOW_PANEL = "show_panel"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 DEFAULT_WAKE = True
+# New entries start without the sidebar panel (the setup flow asks for it).
+# A missing preference means the entry predates the option, so the panel is
+# kept for those entries.
+DEFAULT_SHOW_PANEL = False
 
 # Vehicle wake (MQTT): an explicit refresh wakes a stale car, throttled so
 # repeated refreshes cannot drain the 12 V battery.
@@ -59,3 +67,30 @@ WAKE_REPORT_TIMEOUT = 60  # seconds to wait for the fresh report after a wake
 # Device Info
 MANUFACTURER = "Changan Auto"
 DEFAULT_MODEL = "Deepal S05 Max"
+
+# Bundled frontend panel and dashboard card
+PANEL_URL_PATH = "deepal-panel"
+PANEL_ELEMENT = "deepal-panel"
+FRONTEND_JS_FILE = "deepal-frontend.js"
+PANEL_SIDEBAR_TITLE = "Deepal"
+PANEL_SIDEBAR_ICON = "mdi:car-electric"
+FRONTEND_URL_PATH = "/deepal/frontend"
+FRONTEND_JS_URL = f"{FRONTEND_URL_PATH}/{FRONTEND_JS_FILE}"
+FRONTEND_ASSETS_URL = f"{FRONTEND_URL_PATH}/assets"
+
+INTEGRATION_DIR = Path(__file__).parent
+
+
+def _read_manifest_version() -> str:
+    """Return the integration version from the bundled manifest."""
+    try:
+        manifest = json.loads(
+            (INTEGRATION_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return "0"
+    version = manifest.get("version")
+    return version if isinstance(version, str) else "0"
+
+
+VERSION = _read_manifest_version()

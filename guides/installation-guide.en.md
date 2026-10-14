@@ -122,6 +122,23 @@ Assistant to create their entities:
 - The commands that depend on the PIN (doors, windows, trunk) are signed with the PIN you created
   with the secondary account; if they fail, recheck step 9.
 
+### 11. The vehicle panel
+
+The integration ships its own panel, with no dashboard YAML and no extra cards:
+
+- The panel is **optional**: the setup asks whether to add it (disabled by default) and the
+  integration options can change it later. With the panel enabled, **Deepal** appears in the
+  sidebar for every Home Assistant user; the **Configure** button opens the integration options
+  (enable or disable the panel there).
+- Tabs: **Status** (vehicle picture, doors, windows, trunk, hood, lights and tires), **Climate**
+  (temperature, seats and steering wheel) and **Charging** (battery, cable, current, time left and
+  the tracked sessions).
+- Door, window and trunk controls only appear when you saved the PIN (step 9); lights, horn,
+  climate, seats and steering wheel work without a PIN.
+
+For the example dashboard (without the home charger) and the `deepal-card`, see the
+**[panel, example dashboard and card guide](dashboard-guide.en.md)**.
+
 ## Notes and troubleshooting
 
 - **I cannot control anything**: first check whether the official app can do it with the same

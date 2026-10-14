@@ -13,6 +13,7 @@ import base64
 import gzip
 import hashlib
 import json
+import logging
 import struct
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -21,6 +22,8 @@ from typing import Any, Optional
 
 from cryptography.hazmat.primitives import padding as symmetric_padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+logger = logging.getLogger("deepal_sdk")
 
 S05_SERVICE_CODES = (
     None,
@@ -1002,6 +1005,31 @@ def _as_int(value: Any) -> Optional[int]:
 # The app reports 8191 in chargDeltMins when it has no remaining-time estimate.
 CHARGE_TIME_SENTINEL = 8191
 
+# S05 ChrgSts charging states (observed live on the reference car, 2026-10-15,
+# moving the gun through every state): 0 not charging, 1 AC gun connected,
+# 2 DC gun connected, 3 AC charging, 4 DC charging. Any other value means the
+# state is unknown and MUST NOT be translated into one.
+CHARGE_STATE_NOT_CHARGING = 0
+CHARGE_STATE_AC_CONNECTED = 1
+CHARGE_STATE_DC_CONNECTED = 2
+CHARGE_STATE_AC_CHARGING = 3
+CHARGE_STATE_DC_CHARGING = 4
+CHARGE_STATES = (
+    CHARGE_STATE_NOT_CHARGING,
+    CHARGE_STATE_AC_CONNECTED,
+    CHARGE_STATE_DC_CONNECTED,
+    CHARGE_STATE_AC_CHARGING,
+    CHARGE_STATE_DC_CHARGING,
+)
+CHARGING_STATES = frozenset({CHARGE_STATE_AC_CHARGING, CHARGE_STATE_DC_CHARGING})
+
+# No S05 charging current can approach this: the reference car sent 2538 in
+# BattDCChrgInCurr while parked after a DC session whose history showed real
+# amperes (0 -> 60 -> 0 -> 2538), so a reading outside 0..MAX_CHARGE_CURRENT_A
+# is a raw glitch and is dropped instead of published as amperes. The car's DC
+# peak is about 480 A, so the bound leaves margin and still rejects 2538.
+MAX_CHARGE_CURRENT_A = 600.0
+
 # S05 charge-connection aliases: the app's AC gun name plus the DC gun names the
 # mapping still accepts (the app writes "dcDhargeGun..." with the typo).
 S05_CHARGE_GUN_KEYS = (
@@ -1076,6 +1104,76 @@ def _seat_level(value: Any) -> Optional[int]:
     return parsed
 
 
+def charge_state(value: Any) -> Optional[int]:
+    """Return the S05 charging-state code, or None when the value is not one."""
+    parsed = _as_int(value)
+    return parsed if parsed in CHARGE_STATES else None
+
+
+def charge_is_active(value: Any) -> Optional[bool]:
+    """Return whether a charging state means the car is charging (None = unknown)."""
+    state = charge_state(value)
+    return None if state is None else state in CHARGING_STATES
+
+
+def clean_charge_current(value: Any, field: str = "chargeCurrent") -> Optional[float]:
+    """Return a believable charging current in amperes, or None.
+
+    A reading outside ``0..MAX_CHARGE_CURRENT_A`` is a raw glitch (the live car
+    published 2538 while parked), so it is logged at debug level and dropped
+    instead of being exposed as amperes.
+    """
+    current = _as_float(value)
+    if current is None:
+        return None
+    if not 0 <= current <= MAX_CHARGE_CURRENT_A:
+        logger.debug(
+            "S05 %s=%r dropped: outside 0-%g A",
+            field,
+            value,
+            MAX_CHARGE_CURRENT_A,
+        )
+        return None
+    return current
+
+
+def charge_currents(
+    ac_value: Any, dc_value: Any, state_value: Any
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return the (AC, DC, active) charging currents of one S05 report.
+
+    The car keeps reporting the current of the charger it is not using and the
+    flat mapping used to pick the AC field first, so a present AC ``0`` hid the
+    real DC current. Both fields are resolved against ``ChrgSts``: the field of
+    the active mode is the active current, the other one is zeroed when the car
+    reported a value, and connected-without-charging (``1``, ``2``) or unplugged
+    (``0``) report ``0`` instead of a stale value or the post-session sentinel.
+    An unrecognized state keeps the sanitized readings, preferring a non-zero
+    one.
+    """
+    state = charge_state(state_value)
+    ac_reported = _as_float(ac_value) is not None
+    dc_reported = _as_float(dc_value) is not None
+    ac = clean_charge_current(ac_value, "BattACChrgInCurr")
+    dc = clean_charge_current(dc_value, "BattDCChrgInCurr")
+
+    if state == CHARGE_STATE_DC_CHARGING:
+        return (0.0 if ac_reported else None), dc, dc
+    if state == CHARGE_STATE_AC_CHARGING:
+        return ac, (0.0 if dc_reported else None), ac
+    if state is not None:
+        return (
+            0.0 if ac_reported else None,
+            0.0 if dc_reported else None,
+            0.0 if (ac_reported or dc_reported) else None,
+        )
+
+    active = ac if ac not in (None, 0) else dc
+    if active is None and ac is not None:
+        active = 0.0
+    return ac, dc, active
+
+
 def _to_millis(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
@@ -1093,6 +1191,12 @@ def _to_millis(value: Any) -> int:
 def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
     """Map S05 MQTT parameter names into the shared international condition shape."""
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
+    charge_status = _as_int(params.get("ChrgSts"))
+    ac_current, dc_current, active_current = charge_currents(
+        _first(params, "BattACChrgInCurr", "battACChrgInCurr"),
+        _first(params, "BattDCChrgInCurr", "battDCChrgInCurr"),
+        charge_status,
+    )
     return {
         "lastUpdatedAt": _to_millis(latest),
         "vehicleStatus": {
@@ -1124,17 +1228,11 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "fanLevel": _as_int(params.get("airConditioningHairRatings")),
         },
         "charge": {
-            "chargeStatus": _as_int(params.get("ChrgSts")),
+            "chargeStatus": charge_status,
             "chargeConStatus": _as_int(_first(params, *S05_CHARGE_GUN_KEYS)),
-            "acChargeCurrent": _as_float(
-                _first(params, "BattACChrgInCurr", "battACChrgInCurr")
-            ),
-            "dcChargeCurrent": _as_float(
-                _first(params, "BattDCChrgInCurr", "battDCChrgInCurr")
-            ),
-            "chargeCurrent": _as_float(
-                _first(params, "BattACChrgInCurr", "BattDCChrgInCurr")
-            ),
+            "acChargeCurrent": ac_current,
+            "dcChargeCurrent": dc_current,
+            "chargeCurrent": active_current,
             "remainChargeTime": _as_charge_time(params.get("chargDeltMins")),
             "dcChargeGunConnectStatus": _as_int(_first(params, *S05_DC_GUN_KEYS)),
         },
@@ -1431,9 +1529,15 @@ def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
             "chargeStatus": _as_int(_sda_value(params, "BcuChrgSts")),
             "chargeConStatus": connected,
             "dcChargeGunConnectStatus": dc_connected,
-            "chargeCurrent": _as_float(_sda_value(params, "BcuBattI")),
-            "acChargeCurrent": _as_float(_sda_value(params, "ObcChrgInpAcIL1")),
-            "dcChargeCurrent": _as_float(_sda_value(params, "ObcChrgDcI")),
+            "chargeCurrent": clean_charge_current(
+                _sda_value(params, "BcuBattI"), "BcuBattI"
+            ),
+            "acChargeCurrent": clean_charge_current(
+                _sda_value(params, "ObcChrgInpAcIL1"), "ObcChrgInpAcIL1"
+            ),
+            "dcChargeCurrent": clean_charge_current(
+                _sda_value(params, "ObcChrgDcI"), "ObcChrgDcI"
+            ),
             "remainChargeTime": _as_charge_time(
                 _sda_value(params, "BcuChrgTiDisp")
             ),

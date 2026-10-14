@@ -126,6 +126,24 @@ bagageira) e para que o Home Assistant crie as respetivas entidades:
 - Os comandos que dependem do PIN (portas, janelas, bagageira) são assinados com o PIN criado com a
   conta secundária; se falharem, revê o passo 9.
 
+### 11. O painel do veículo
+
+A integração inclui o seu próprio painel, sem YAML de dashboard e sem cartões adicionais:
+
+- O painel é **opcional**: a configuração pergunta se o queres adicionar (vem desativado) e
+  podes alterá-lo nas opções da integração. Com o painel ativo, **Deepal** aparece na barra
+  lateral para todos os utilizadores do Home Assistant; o botão **Configurar** abre as opções da
+  integração (aí ativas ou desativas o painel).
+- Separadores: **Estado** (imagem do veículo, portas, janelas, mala, capô, luzes e pneus),
+  **Clima** (temperatura, bancos e volante) e **Carregamento** (bateria, cabo, corrente, tempo
+  restante e as sessões registadas).
+- Os controlos de portas, janelas e mala só aparecem se guardou o PIN (passo 9); luzes, buzina,
+  clima, bancos e volante funcionam sem PIN.
+
+Para o dashboard de exemplo (sem o carregador doméstico) e o cartão `deepal-card`, consulta o guia
+completo em inglês e espanhol: [dashboard-guide.en.md](dashboard-guide.en.md) ·
+[dashboard-guide.es.md](dashboard-guide.es.md).
+
 ## Notas e resolução de problemas
 
 - **Não consigo controlar nada**: verifica primeiro se a app oficial consegue fazê-lo com a mesma

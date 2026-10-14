@@ -5,11 +5,12 @@
     "@sunek0"
   ],
   "config_flow": true,
+  "dependencies": ["http", "frontend", "panel_custom"],
   "documentation": "https://github.com/Sunek0/ha-deepal-alternative",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Sunek0/ha-deepal-alternative/issues",
   "loggers": ["deepal_sdk"],
   "requirements": ["pydantic>=2.0.0"],
-  "version": "1.4.0-beta.5"
+  "version": "1.4.0-beta.6"
 }

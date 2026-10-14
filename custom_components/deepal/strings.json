@@ -160,6 +160,16 @@
         "data_description": {
           "access_token": "New long-lived SDA access token. The old token is replaced only after it is verified."
         }
+      },
+      "panel": {
+        "title": "Sidebar panel",
+        "description": "Choose whether the integration adds a Deepal panel to the Home Assistant sidebar. You can change this later in the integration options.",
+        "data": {
+          "show_panel": "Show the sidebar panel"
+        },
+        "data_description": {
+          "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
+        }
       }
     },
     "error": {
@@ -185,7 +195,8 @@
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log API traffic",
           "wake": "Wake the vehicle when needed",
-          "environment": "Regional environment"
+          "environment": "Regional environment",
+          "show_panel": "Show the sidebar panel"
         },
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
         "data_description": {
@@ -193,7 +204,8 @@
           "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number hidden. Enable only while troubleshooting.",
           "wake": "Wake a sleeping MQTT vehicle before refreshing or sending a PIN command. Enabled by default; disable it to protect the 12 V battery if you refresh very often.",
-          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe."
+          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
+          "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
         }
       }
     },
@@ -282,7 +294,21 @@
         "name": "Air quality level"
       },
       "charge_status": {
-        "name": "Charge status"
+        "name": "Charge status",
+        "state": {
+          "not_charging": "Not charging",
+          "connected_ac": "AC cable connected",
+          "connected_dc": "DC cable connected",
+          "charging_ac": "Charging on AC",
+          "charging_dc": "Charging on DC"
+        }
+      },
+      "charge_mode": {
+        "name": "Charging type",
+        "state": {
+          "ac": "AC",
+          "dc": "DC"
+        }
       },
       "charge_current": {
         "name": "Charge current"
@@ -318,7 +344,11 @@
         "name": "Vehicle status"
       },
       "power_status": {
-        "name": "Power status"
+        "name": "Power status",
+        "state": {
+          "off": "Off",
+          "on": "On"
+        }
       },
       "gear": {
         "name": "Gear"

@@ -578,7 +578,7 @@ def test_normalize_s05_params_maps_telemetry():
         "frontDefrostStatus": 1,
         "airPurifierStatus": 3,
         "airConditioningHairRatings": 4,
-        "ChrgSts": 2,
+        "ChrgSts": 3,
         "acChargeGunConnectionState": 3,
         "BattACChrgInCurr": 16.2,
         "chargDeltMins": 95,
@@ -630,7 +630,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert "steeringWheelHeater" not in condition["vehicleStatus"]
     assert condition["hvac"]["acStatus"] == 1
     assert condition["hvac"]["remoteTemp"] == 225
-    assert condition["charge"]["chargeStatus"] == 2
+    assert condition["charge"]["chargeStatus"] == 3
     assert condition["door"]["doors"] == [1, 0, 0, 1]
     assert condition["door"]["trunk"] == 0
     assert condition["door"]["driverLock"] == 0
@@ -661,6 +661,60 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["lamp"]["positionLamp"] == 1
     assert condition["lamp"]["rightTurn"] == 1
     assert condition["lamp"]["lowBeam"] == 0
+
+
+def test_normalize_s05_params_picks_the_dc_current_while_dc_charging():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattACChrgInCurr": 0, "BattDCChrgInCurr": 60.5}
+    )
+
+    assert condition["charge"]["chargeCurrent"] == 60.5
+    assert condition["charge"]["dcChargeCurrent"] == 60.5
+    assert condition["charge"]["acChargeCurrent"] == 0.0
+
+
+def test_normalize_s05_params_picks_the_ac_current_while_ac_charging():
+    condition = normalize_s05_params(
+        {"ChrgSts": 3, "BattACChrgInCurr": 16.2, "BattDCChrgInCurr": 0}
+    )
+
+    assert condition["charge"]["chargeCurrent"] == 16.2
+    assert condition["charge"]["acChargeCurrent"] == 16.2
+    assert condition["charge"]["dcChargeCurrent"] == 0.0
+
+
+def test_normalize_s05_params_zeroes_the_currents_while_only_connected():
+    condition = normalize_s05_params(
+        {"ChrgSts": 2, "BattACChrgInCurr": 0, "BattDCChrgInCurr": 60.5}
+    )
+
+    assert condition["charge"]["chargeCurrent"] == 0.0
+    assert condition["charge"]["acChargeCurrent"] == 0.0
+    assert condition["charge"]["dcChargeCurrent"] == 0.0
+
+
+def test_normalize_s05_params_drops_the_post_session_sentinel():
+    condition = normalize_s05_params({"ChrgSts": 0, "BattDCChrgInCurr": 2538})
+
+    assert condition["charge"]["dcChargeCurrent"] == 0.0
+    assert condition["charge"]["chargeCurrent"] == 0.0
+
+
+def test_normalize_s05_params_drops_an_out_of_range_current_while_charging():
+    condition = normalize_s05_params({"ChrgSts": 4, "BattDCChrgInCurr": 2538})
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+
+def test_normalize_s05_params_keeps_reported_currents_for_an_unknown_state():
+    condition = normalize_s05_params(
+        {"ChrgSts": 9, "BattACChrgInCurr": 0, "BattDCChrgInCurr": 60.5}
+    )
+
+    assert condition["charge"]["chargeCurrent"] == 60.5
+    assert condition["charge"]["dcChargeCurrent"] == 60.5
+    assert condition["charge"]["acChargeCurrent"] == 0.0
 
 
 def test_normalize_s05_params_maps_warnings_and_window_openings():

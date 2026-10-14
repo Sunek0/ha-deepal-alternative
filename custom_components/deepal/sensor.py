@@ -1,5 +1,6 @@
 """Sensor platform for Changan Deepal integration."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,11 +35,42 @@ from .const import (
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
+from .deepal.mqtt import (
+    CHARGE_STATE_AC_CHARGING,
+    CHARGE_STATE_AC_CONNECTED,
+    CHARGE_STATE_DC_CHARGING,
+    CHARGE_STATE_DC_CONNECTED,
+    CHARGE_STATE_NOT_CHARGING,
+    charge_state,
+)
 from .runtime_data import DeepalConfigEntry
 from .vehicle_model import is_s05, supports_fuel
 
+_LOGGER = logging.getLogger(__name__)
+
 # Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
+
+#: Charging-state enum options (translated under entity.sensor.charge_status.state).
+CHARGE_STATUS_OPTIONS = (
+    "not_charging",
+    "connected_ac",
+    "connected_dc",
+    "charging_ac",
+    "charging_dc",
+)
+CHARGE_STATUS_OPTION_BY_STATE = {
+    CHARGE_STATE_NOT_CHARGING: "not_charging",
+    CHARGE_STATE_AC_CONNECTED: "connected_ac",
+    CHARGE_STATE_DC_CONNECTED: "connected_dc",
+    CHARGE_STATE_AC_CHARGING: "charging_ac",
+    CHARGE_STATE_DC_CHARGING: "charging_dc",
+}
+
+#: Power-state enum options: only the verified 0/2 mapping is translated.
+POWER_STATUS_OPTIONS = ("off", "on")
+POWER_STATUS_OPTION_BY_VALUE = {0: "off", 2: "on"}
+
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
 # payload has no speed, gear, outside temperature, PM2.5, air quality, charge
@@ -59,6 +91,10 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
 
 # The S05 has no rear seat heating hardware (the app disables those controls).
 S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
+
+# Sensors the S05 gets from a typed enum class instead of the raw description,
+# because its wire values (the ChrgSts states) are verified for that model only.
+S05_ENUM_SENSOR_KEYS = frozenset({"charge_status"})
 
 # Fuel sensors exist only for fuel vehicles (see supports_fuel).
 FUEL_SENSOR_KEYS = frozenset({"fuel_level", "fuel_range", "fuel_tank_capacity"})
@@ -96,6 +132,11 @@ def build_sensors(
         ])
 
     if isinstance(coordinator.client, DeepalIntlClient):
+        entities.append(DeepalPowerStatusSensor(coordinator, vehicle))
+        if s05:
+            entities.append(DeepalChargeStatusSensor(coordinator, vehicle))
+            entities.append(DeepalChargeModeSensor(coordinator, vehicle))
+
         for key in ("front_left", "front_right", "rear_left", "rear_right"):
             entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
 
@@ -119,7 +160,11 @@ def build_sensors(
         entities.extend(
             DeepalSensor(coordinator, vehicle, description)
             for description in SENSORS
-            if not (s05 and description.key in S05_UNSUPPORTED_SENSOR_KEYS)
+            if not (
+                s05
+                and description.key
+                in (S05_UNSUPPORTED_SENSOR_KEYS | S05_ENUM_SENSOR_KEYS)
+            )
             and not (description.key in FUEL_SENSOR_KEYS and not fuel)
         )
 
@@ -325,6 +370,130 @@ class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
         return cond.climate.steering_wheel_heater_level if cond else None
 
 
+class DeepalChargeStatusSensor(DeepalBaseSensor):
+    """S05 charging-state sensor with the app's translated states.
+
+    The wire values are the ``ChrgSts`` enum: 0 not charging, 1 AC gun
+    connected, 2 DC gun connected, 3 AC charging and 4 DC charging. A value
+    outside the enum is unknown, logged once per distinct value and kept
+    visible through the raw attribute; it is never translated into a state.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(CHARGE_STATUS_OPTIONS)
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_charge_status"
+        self._attr_translation_key = "charge_status"
+        self._last_unrecognized: str | None = None
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the translated charging state, unknown when unrecognized."""
+        cond = self.coordinator.data.get(self._car_id)
+        raw = cond.battery.charging_status if cond else None
+        if raw is None:
+            return None
+        state = charge_state(raw)
+        if state is None:
+            if raw != self._last_unrecognized:
+                _LOGGER.warning(
+                    "Deepal: unrecognized charging state %r for %s; "
+                    "reporting unknown",
+                    raw,
+                    self._car_id,
+                )
+                self._last_unrecognized = raw
+            return None
+        self._last_unrecognized = None
+        return CHARGE_STATUS_OPTION_BY_STATE[state]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose the raw charging-state value the enum was derived from."""
+        cond = self.coordinator.data.get(self._car_id)
+        raw = cond.battery.charging_status if cond else None
+        return {"raw_charge_status": raw} if raw is not None else None
+
+
+class DeepalPowerStatusSensor(DeepalBaseSensor):
+    """Power-state sensor: 0 off, 2 on, any other value unknown and logged.
+
+    Only the two values verified on a live car are translated; anything else
+    (for example an accessory state another model may report) stays unknown
+    instead of being published as a number, and remains visible through the
+    raw attribute.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(POWER_STATUS_OPTIONS)
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_power_status"
+        self._attr_translation_key = "power_status"
+        self._last_unrecognized: int | None = None
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the translated power state, unknown when unrecognized."""
+        cond = self.coordinator.data.get(self._car_id)
+        status = cond.power_status if cond else None
+        if status is None:
+            return None
+        option = POWER_STATUS_OPTION_BY_VALUE.get(status)
+        if option is None:
+            if status != self._last_unrecognized:
+                _LOGGER.warning(
+                    "Deepal: unrecognized power state %r for %s; "
+                    "reporting unknown",
+                    status,
+                    self._car_id,
+                )
+                self._last_unrecognized = status
+            return None
+        self._last_unrecognized = None
+        return option
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose the raw power-state value the enum was derived from."""
+        cond = self.coordinator.data.get(self._car_id)
+        status = cond.power_status if cond else None
+        return {"raw_power_status": status} if status is not None else None
+
+
+class DeepalChargeModeSensor(DeepalBaseSensor):
+    """Charging type (AC/DC) derived from the S05 charging state.
+
+    Unknown while the car is not connected or charging: the entity reports the
+    type of the current session, not a guess.
+    """
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["ac", "dc"]
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_charge_mode"
+        self._attr_translation_key = "charge_mode"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return ``ac``/``dc`` while connected or charging, else unknown."""
+        cond = self.coordinator.data.get(self._car_id)
+        state = charge_state(cond.battery.charging_status) if cond else None
+        if state in (CHARGE_STATE_AC_CONNECTED, CHARGE_STATE_AC_CHARGING):
+            return "ac"
+        if state in (CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING):
+            return "dc"
+        return None
+
+
 @dataclass(frozen=True, kw_only=True)
 class DeepalSensorDescription(SensorEntityDescription):
     """Description of an extended international sensor."""
@@ -489,15 +658,6 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         key="vehicle_status",
         name="Vehicle Status",
         value_fn=lambda cond, vehicle: cond.vehicle_status,
-        device_class=None,
-        state_class=None,
-        native_unit_of_measurement=None,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    DeepalSensorDescription(
-        key="power_status",
-        name="Power Status",
-        value_fn=lambda cond, vehicle: cond.power_status,
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,

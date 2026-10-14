@@ -194,6 +194,9 @@
       "charge_limit": {
         "default": "mdi:battery-lock"
       },
+      "charge_mode": {
+        "default": "mdi:lightning-bolt"
+      },
       "charge_schedule_end": {
         "default": "mdi:clock-end"
       },

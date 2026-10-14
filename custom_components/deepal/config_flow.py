@@ -42,10 +42,12 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
     CONF_WAKE,
+    CONF_SHOW_PANEL,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
+    DEFAULT_SHOW_PANEL,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
 
@@ -209,6 +211,15 @@ def _sda_unique_id(phone: str, vehicles: list[Vehicle], token: str) -> str:
     return token[:10]
 
 
+def _panel_schema() -> vol.Schema:
+    """Schema of the sidebar panel question (disabled by default)."""
+    return vol.Schema(
+        {
+            vol.Optional(CONF_SHOW_PANEL, default=DEFAULT_SHOW_PANEL): bool,
+        }
+    )
+
+
 class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Deepal Alternative."""
 
@@ -218,6 +229,8 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow."""
         self._pending_login: dict[str, Any] = {}
         self._reauth_identity: dict[str, Any] = {}
+        self._pending_title = ""
+        self._pending_data: dict[str, Any] = {}
 
     # ------------------------------------------------------------------ user
     async def async_step_user(
@@ -238,6 +251,23 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema)
 
+    # ------------------------------------------------------------------ panel
+    async def async_step_panel(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask whether to add the vehicle panel to the sidebar."""
+        if user_input is not None:
+            return self.async_create_entry(
+                title=self._pending_title,
+                data=self._pending_data,
+                options={
+                    CONF_SHOW_PANEL: bool(
+                        user_input.get(CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL)
+                    )
+                },
+            )
+        return self.async_show_form(step_id="panel", data_schema=_panel_schema())
+
     # ------------------------------------------------------------------- SDA
     async def async_step_sda(
         self, user_input: dict[str, Any] | None = None
@@ -257,15 +287,14 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 for vehicle in vehicles:
                     if _vehicle_device_entry(self.hass, vehicle.car_id) is not None:
                         return self.async_abort(reason="already_configured")
-                return self.async_create_entry(
-                    title=f"Deepal Account ({len(vehicles)} vehicle/s)",
-                    data={
-                        CONF_PLATFORM: PLATFORM_SDA,
-                        CONF_ACCESS_TOKEN: token,
-                        CONF_COUNTRY: user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
-                        CONF_PHONE: user_input.get(CONF_PHONE) or "",
-                    },
-                )
+                self._pending_title = f"Deepal Account ({len(vehicles)} vehicle/s)"
+                self._pending_data = {
+                    CONF_PLATFORM: PLATFORM_SDA,
+                    CONF_ACCESS_TOKEN: token,
+                    CONF_COUNTRY: user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
+                    CONF_PHONE: user_input.get(CONF_PHONE) or "",
+                }
+                return await self.async_step_panel()
             except DeepalAuthError:
                 errors["base"] = "invalid_auth"
             except DeepalError:
@@ -636,25 +665,26 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         await self.async_set_unique_id(vehicle.vin or vehicle.car_id)
         self._abort_if_unique_id_configured()
-        return self.async_create_entry(
-            title=vehicle.car_name or vehicle.series_name or "Deepal Alternative",
-            data={
-                CONF_PLATFORM: PLATFORM_INTL,
-                CONF_ACCESS_TOKEN: data_updates[CONF_ACCESS_TOKEN],
-                CONF_REFRESH_TOKEN: data_updates[CONF_REFRESH_TOKEN],
-                CONF_CAC_TOKEN: data_updates[CONF_CAC_TOKEN],
-                CONF_USER_ID: data_updates[CONF_USER_ID],
-                CONF_PRIVATE_KEY: data_updates[CONF_PRIVATE_KEY],
-                CONF_PUBLIC_KEY: data_updates[CONF_PUBLIC_KEY],
-                CONF_DEVICE_ID: data_updates[CONF_DEVICE_ID],
-                CONF_VEHICLE_ID: data_updates[CONF_VEHICLE_ID],
-                CONF_COUNTRY: data_updates[CONF_COUNTRY],
-                CONF_ENVIRONMENT: data_updates[CONF_ENVIRONMENT],
-                CONF_EMAIL: data_updates[CONF_EMAIL],
-                CONF_PHONE: data_updates[CONF_PHONE],
-                CONF_CONTROL_PIN: "",
-            },
+        self._pending_title = (
+            vehicle.car_name or vehicle.series_name or "Deepal Alternative"
         )
+        self._pending_data = {
+            CONF_PLATFORM: PLATFORM_INTL,
+            CONF_ACCESS_TOKEN: data_updates[CONF_ACCESS_TOKEN],
+            CONF_REFRESH_TOKEN: data_updates[CONF_REFRESH_TOKEN],
+            CONF_CAC_TOKEN: data_updates[CONF_CAC_TOKEN],
+            CONF_USER_ID: data_updates[CONF_USER_ID],
+            CONF_PRIVATE_KEY: data_updates[CONF_PRIVATE_KEY],
+            CONF_PUBLIC_KEY: data_updates[CONF_PUBLIC_KEY],
+            CONF_DEVICE_ID: data_updates[CONF_DEVICE_ID],
+            CONF_VEHICLE_ID: data_updates[CONF_VEHICLE_ID],
+            CONF_COUNTRY: data_updates[CONF_COUNTRY],
+            CONF_ENVIRONMENT: data_updates[CONF_ENVIRONMENT],
+            CONF_EMAIL: data_updates[CONF_EMAIL],
+            CONF_PHONE: data_updates[CONF_PHONE],
+            CONF_CONTROL_PIN: "",
+        }
+        return await self.async_step_panel()
 
     # ------------------------------------------------------------- reauth
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
@@ -768,6 +798,10 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 vol.Optional(
                     CONF_WAKE,
                     default=options.get(CONF_WAKE, DEFAULT_WAKE),
+                ): bool,
+                vol.Optional(
+                    CONF_SHOW_PANEL,
+                    default=options.get(CONF_SHOW_PANEL, True),
                 ): bool,
                 vol.Optional(
                     CONF_ENVIRONMENT,

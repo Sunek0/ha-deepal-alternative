@@ -19,14 +19,33 @@ START = datetime(2026, 10, 13, 12, 0, 0, tzinfo=UTC)
 START_STAMP = START.isoformat(timespec="seconds")
 
 
-def _condition(charging_status):
-    return SimpleNamespace(battery=SimpleNamespace(charging_status=charging_status))
+def _condition(charging_status, raw=None):
+    return SimpleNamespace(
+        battery=SimpleNamespace(charging_status=charging_status),
+        mqtt_raw_data=raw,
+    )
 
 
 def test_charging_flag_reads_the_status():
     assert charging_flag(_condition("2")) is True
     assert charging_flag(_condition("0")) is False
     assert charging_flag(_condition(None)) is None
+
+
+def test_charging_flag_only_counts_the_s05_charging_states():
+    for status in ("0", "1", "2"):
+        assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is False
+    for status in ("3", "4"):
+        assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is True
+
+
+def test_charging_flag_is_unknown_for_an_unrecognized_s05_state():
+    assert charging_flag(_condition("9", {"ChrgSts": 9})) is None
+
+
+def test_charging_flag_keeps_the_non_s05_semantics():
+    assert charging_flag(_condition("2", {"BcuChrgSts": 2})) is True
+    assert charging_flag(_condition("2", None)) is True
 
 
 def test_session_starts_with_the_current_values():

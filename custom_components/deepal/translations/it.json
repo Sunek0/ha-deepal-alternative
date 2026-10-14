@@ -160,6 +160,16 @@
         "data_description": {
           "access_token": "Nuovo access token SDA a lunga durata. Quello vecchio viene sostituito solo dopo la verifica."
         }
+      },
+      "panel": {
+        "title": "Pannello laterale",
+        "description": "Scegli se l'integrazione aggiunge un pannello Deepal alla barra laterale di Home Assistant. Puoi cambiarlo in seguito nelle opzioni dell'integrazione.",
+        "data": {
+          "show_panel": "Mostra il pannello laterale"
+        },
+        "data_description": {
+          "show_panel": "Aggiunge una pagina Deepal nella barra laterale per tutti gli utenti di Home Assistant."
+        }
       }
     },
     "error": {
@@ -185,7 +195,8 @@
           "control_pin": "PIN di controllo remoto",
           "enable_api_logging": "Registra il traffico API",
           "wake": "Sveglia il veicolo quando serve",
-          "environment": "Ambiente regionale"
+          "environment": "Ambiente regionale",
+          "show_panel": "Mostra il pannello laterale"
         },
         "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.",
         "data_description": {
@@ -193,7 +204,8 @@
           "control_pin": "PIN di controllo remoto di My Changan. Necessario per bloccare/sbloccare, muovere i finestrini o aprire il bagagliaio.",
           "enable_api_logging": "Scrive ogni richiesta e risposta API nel log di Home Assistant, con token, chiavi, VIN, email, telefono, PIN e numero di serie nascosti. Abilitalo solo durante la risoluzione dei problemi.",
           "wake": "Sveglia un veicolo MQTT addormentato prima di aggiornare o inviare un comando con PIN. Attivo per impostazione predefinita; disattivalo per preservare la batteria a 12 V se aggiorni molto spesso.",
-          "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita."
+          "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita.",
+          "show_panel": "Aggiunge una pagina Deepal nella barra laterale per tutti gli utenti di Home Assistant."
         }
       }
     },
@@ -282,7 +294,21 @@
         "name": "Livello qualità aria"
       },
       "charge_status": {
-        "name": "Stato di ricarica"
+        "name": "Stato di ricarica",
+        "state": {
+          "not_charging": "Non in carica",
+          "connected_ac": "Cavo CA collegato",
+          "connected_dc": "Cavo CC collegato",
+          "charging_ac": "In carica in CA",
+          "charging_dc": "In carica in CC"
+        }
+      },
+      "charge_mode": {
+        "name": "Tipo di ricarica",
+        "state": {
+          "ac": "AC",
+          "dc": "DC"
+        }
       },
       "charge_current": {
         "name": "Corrente di ricarica"
@@ -318,7 +344,11 @@
         "name": "Stato del veicolo"
       },
       "power_status": {
-        "name": "Stato alimentazione"
+        "name": "Stato alimentazione",
+        "state": {
+          "off": "Spento",
+          "on": "Acceso"
+        }
       },
       "gear": {
         "name": "Marcia"
