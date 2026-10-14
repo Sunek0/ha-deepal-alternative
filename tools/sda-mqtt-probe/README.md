@@ -20,9 +20,11 @@ the open questions and costs you nothing to run.
    configuration and the function tree, then connects to the broker over TLS
    and tries the CONNECT identities in order, reporting which one the broker
    accepts and why the others are rejected.
-4. Subscribes to the topics the account is allowed to use and reports the
-   SUBACK result per topic (granted / not authorized / wildcards not supported).
-5. Listens for a while and logs everything the broker sends, with tokens,
+4. Subscribes to the topics of the identity the broker accepted and reports
+   the SUBACK result per topic (granted / not authorized / wildcards not
+   supported).
+5. Listens for a while and logs everything the broker sends — acknowledging
+   QoS 1 deliveries so the broker does not retransmit them — with tokens,
    passwords, identifiers, plate and location masked (every device segment of
    a topic included). Any encrypted `sers` list it can decode is decoded
    locally.
@@ -37,6 +39,9 @@ may kick the app on your phone.
   accepts (the question the SDK cannot guess);
 - which topics this account may subscribe to, and whether wildcard
   subscriptions are allowed;
+- whether the broker pushes the car's event stream during the window (the
+  15-oct run received `Et_*` frames, including `Et_IT001` lock states, plus a
+  queued burst from before the CONNECT);
 - whether the broker delivers the app's own frames to another session of the
   same account (if it does, pressing unlock in the app while the probe listens
   can hand us the command codes without any phone setup);

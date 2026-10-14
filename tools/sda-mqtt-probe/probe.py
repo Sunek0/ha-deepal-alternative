@@ -44,11 +44,13 @@ from deepal import DeepalIntlClient  # noqa: E402
 from deepal.endpoints import INTL_CA_APP_APIGW_GET_AUTH_TOKEN  # noqa: E402
 from deepal.exceptions import DeepalError  # noqa: E402
 from deepal.mqtt import (  # noqa: E402
+    EVENT_SUB_TOPIC_TEMPLATE,
     LOGIN_PUB_TOPIC_TEMPLATE,
     MQTT_DEFAULT_KEEPALIVE,
     aes_cbc_decrypt,
     basic_identifiers,
     build_connect_packet,
+    build_puback_packet,
     build_publish_packet,
     build_subscribe_packet,
     login_request_payload,
@@ -410,7 +412,12 @@ async def listen(
     seconds: float,
     secret_holder: dict[str, Optional[str]],
 ) -> list[dict[str, Any]]:
-    """Log every PUBLISH the broker sends during the window."""
+    """Log every PUBLISH the broker sends during the window.
+
+    QoS 1 deliveries are acknowledged with PUBACK; without the ack the broker
+    retransmits the same block on every retry interval (seen in the 15-oct run
+    as the whole burst repeating every ~30 s).
+    """
     seen: list[dict[str, Any]] = []
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -430,11 +437,19 @@ async def listen(
         if kind != 3:
             log(f"  <- {kind} (control packet)")
             continue
+        qos = (first >> 1) & 0x03
+        dup = bool(first & 0x08)
         try:
-            topic, payload, _ = parse_publish(first, body)
+            topic, payload, packet_id = parse_publish(first, body)
         except (ValueError, UnicodeDecodeError) as exc:
             log(f"  <- PUBLISH with a payload the probe could not parse: {exc}")
             continue
+        if packet_id is not None:
+            if qos == 1:
+                writer.write(build_puback_packet(packet_id))
+                await writer.drain()
+            else:
+                log(f"  <- PUBLISH qos={qos}: the probe only acknowledges QoS 1")
         found = secret_from_login_payload(payload)
         if found and not secret_holder.get("secret_key"):
             secret_holder["secret_key"] = found
@@ -445,9 +460,12 @@ async def listen(
         entry = {
             "topic": topic,
             "payload": decode_sers(payload, secret_holder.get("secret_key")),
+            "qos": qos,
+            "dup": dup,
         }
         seen.append(entry)
-        log(f"  <- PUBLISH topic={mask_topic(topic)}")
+        flags = f" qos={qos}" + (" dup" if dup else "")
+        log(f"  <- PUBLISH topic={mask_topic(topic)}{flags}")
         log("     " + json.dumps(redact(entry["payload"]), ensure_ascii=False)[:800])
     return seen
 
@@ -456,15 +474,22 @@ async def probe_broker(
     config: dict[str, Any],
     auth_token: Optional[str],
     login_did: str,
-    subscriptions: list[str],
+    subscriptions: Optional[list[str]],
     *,
     seconds: float,
     allow_login: bool,
     timeout: float,
     secret_key: Optional[str] = None,
     dids: Optional[list[str]] = None,
+    car_id: Optional[str] = None,
+    wildcard: bool = False,
 ) -> dict[str, Any]:
-    """Try the identity candidates, subscribe and listen. Never sends a command."""
+    """Try the identity candidates, subscribe and listen. Never sends a command.
+
+    ``subscriptions`` may be ``None``: the topics are then built after the
+    CONNECT from the identity the broker accepted, so the session subscribes
+    under the accepted DID instead of the first candidate.
+    """
     host = config.get("host")
     port = config.get("port")
     if not host or not port:
@@ -547,6 +572,14 @@ async def probe_broker(
         log("No candidate was accepted by the broker.")
         return report
 
+    if subscriptions is None:
+        subscriptions = probe_topics(
+            config, accepted_did, wildcard, car_id=car_id
+        )
+        log("Subscriptions to request (accepted identity):")
+        for topic in subscriptions:
+            log(f"  {mask_topic(topic)}")
+
     if subscriptions:
         writer.write(build_subscribe_packet(1, subscriptions))
         await writer.drain()
@@ -601,10 +634,27 @@ async def probe_broker(
     return report
 
 
-def probe_topics(config: dict[str, Any], login_did: str, wildcard: bool) -> list[str]:
-    """Return the topics to subscribe to: the app's set plus the publish topics."""
+def probe_topics(
+    config: dict[str, Any],
+    login_did: str,
+    wildcard: bool,
+    car_id: Optional[str] = None,
+) -> list[str]:
+    """Return the topics to subscribe for an accepted identity.
+
+    The SDA broker delivers events as ``$vdp/<did>/<car_id>/server/event``
+    (live probe, 15-oct-2026), so the event filter uses the car id when it is
+    known instead of the CA fallback that repeats the DID.
+    """
     topics = resolve_mqtt_topics(config, login_did)
     subscriptions = list(topics.subscriptions)
+    device_did = topics.device_did or login_did
+    if car_id:
+        repeated = EVENT_SUB_TOPIC_TEMPLATE % (device_did, device_did)
+        event = EVENT_SUB_TOPIC_TEMPLATE % (device_did, car_id)
+        subscriptions = [topic for topic in subscriptions if topic != repeated]
+        if event not in subscriptions:
+            subscriptions.append(event)
     for candidate in (
         topics.login_publish,
         topics.properties_publish,
@@ -613,7 +663,6 @@ def probe_topics(config: dict[str, Any], login_did: str, wildcard: bool) -> list
         if candidate and candidate not in subscriptions:
             subscriptions.append(candidate)
     if wildcard:
-        device_did = topics.device_did or login_did
         wildcard_topic = f"$vdp/{device_did}/#"
         if wildcard_topic not in subscriptions:
             subscriptions.append(wildcard_topic)
@@ -638,6 +687,16 @@ def _tree_device_ids(value: Any) -> list[str]:
                 if did not in found:
                     found.append(did)
     return found
+
+
+def _event_id(payload: dict[str, Any]) -> Optional[str]:
+    """Return the event request id of an SDA event payload, when present."""
+    header = payload.get("h")
+    if isinstance(header, dict) and header.get("r"):
+        return str(header["r"])
+    if payload.get("r"):
+        return str(payload["r"])
+    return None
 
 
 def _report_for_log(report: dict[str, Any]) -> dict[str, Any]:
@@ -734,6 +793,7 @@ async def run(args: argparse.Namespace) -> int:
             return EXIT_BROKER_CONFIG
 
         did_candidates: list[str] = []
+        did_sources: dict[str, str] = {}
         try:
             ca_config = await client.get_mqtt_config(car_id)
         except DeepalError as exc:
@@ -743,6 +803,7 @@ async def run(args: argparse.Namespace) -> int:
             for did in (ca_topics.device_did, ca_topics.login_did):
                 if did and did not in did_candidates:
                     did_candidates.append(did)
+                    did_sources[did] = "ca-config"
         try:
             tree = await client.get_car_function_config(car_id)
         except DeepalError as exc:
@@ -751,10 +812,11 @@ async def run(args: argparse.Namespace) -> int:
             for did in _tree_device_ids(tree):
                 if did not in did_candidates:
                     did_candidates.append(did)
+                    did_sources[did] = "function-tree"
         if did_candidates:
             log("Device DID candidates (masked):")
             for did in did_candidates:
-                log(f"  <did:{mask_identifier(did)}>")
+                log(f"  <did:{mask_identifier(did)}> ({did_sources[did]})")
         else:
             log("No device DID found in the CA config or the function tree.")
         register_sensitive_ids(*did_candidates)
@@ -778,26 +840,19 @@ async def run(args: argparse.Namespace) -> int:
             or (did_candidates[0] if did_candidates else None)
             or car_id
         )
-        subscriptions = probe_topics(config, login_did, args.wildcard)
-        if args.wildcard:
-            for did in did_candidates:
-                wildcard_topic = f"$vdp/{did}/#"
-                if wildcard_topic not in subscriptions:
-                    subscriptions.append(wildcard_topic)
-        log("Subscriptions to request:")
-        for topic in subscriptions:
-            log(f"  {mask_topic(topic)}")
 
         report = await probe_broker(
             config,
             auth_token,
             login_did,
-            subscriptions,
+            None,
             seconds=args.seconds,
             allow_login=args.allow_login,
             timeout=args.timeout,
             secret_key=identity.get("secretKey"),
             dids=did_candidates,
+            car_id=car_id,
+            wildcard=args.wildcard,
         )
 
         log("")
@@ -814,12 +869,18 @@ async def run(args: argparse.Namespace) -> int:
                 f"{attempt.get('reason_name') or attempt.get('error')}"
             )
         log(f"  subscribed topics: {len(report.get('subscriptions', []))}")
-        log(f"  messages received: {len(report.get('messages', []))}")
+        messages = report.get("messages", [])
+        unique_ids = {_event_id(message["payload"]) for message in messages}
+        unique_ids.discard(None)
+        log(
+            f"  messages received: {len(messages)} "
+            f"({len(unique_ids)} unique event ids)"
+        )
         log(f"  secretKey seen: {report.get('secret_key_seen')}")
-        if report.get("messages"):
+        if messages:
             decoded = sum(
                 1
-                for message in report["messages"]
+                for message in messages
                 if isinstance(message["payload"].get("sers_decoded"), list)
             )
             log(f"  of those, sers decoded: {decoded}")

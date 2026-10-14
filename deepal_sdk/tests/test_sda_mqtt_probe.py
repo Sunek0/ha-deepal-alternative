@@ -422,3 +422,85 @@ def test_decode_sers_says_when_it_cannot_decode() -> None:
 
     with_key = probe.decode_sers({"r": "r-1", "sers": encrypted}, SECRET_KEY)
     assert with_key["sers_decoded"] == [{"service_code": "LockDoor"}]
+
+
+def test_probe_topics_use_the_car_id_in_the_event_topic() -> None:
+    topics = probe.probe_topics({}, DID, wildcard=False, car_id=CAR_ID)
+
+    assert f"$vdp/{DID}/{CAR_ID}/server/event" in topics
+    assert f"$vdp/{DID}/{DID}/server/event" not in topics
+
+
+def test_event_id_reads_the_header() -> None:
+    assert probe._event_id({"h": {"r": "abc"}}) == "abc"
+    assert probe._event_id({"r": "xyz"}) == "xyz"
+    assert probe._event_id({"h": {}}) is None
+
+
+@pytest.mark.asyncio
+async def test_probe_subscribes_with_the_accepted_did_when_built_late(
+    monkeypatch, tmp_path
+) -> None:
+    second_did = "1111111111111111111"
+    broker = _Broker(
+        _connack(0x87) + _connack(0x87) + _connack(0x87)
+        + _connack(0x00) + _suback(1, [0x01])
+    )
+    _install(monkeypatch, broker)
+    probe._LOG_FILE = (tmp_path / "probe.log").open("w", encoding="utf-8")
+
+    config = probe.parse_broker_config(
+        {"host": "prod-appmq.sda.changanauto.sg", "port": 8883, "authType": 2}
+    )
+    report = await probe.probe_broker(
+        config,
+        AUTH_TOKEN,
+        DID,
+        None,
+        seconds=0.3,
+        allow_login=False,
+        timeout=5.0,
+        dids=[DID, second_did],
+        car_id=CAR_ID,
+    )
+    probe._LOG_FILE.close()
+
+    assert report["connected"] is True
+    assert report["client_id"] == probe.mask_identifier(second_did)
+
+    subscribe = next(packet for packet in broker.writes if packet[0] >> 4 == 8)
+    assert f"$vdp/{second_did}/{CAR_ID}/server/event".encode() in subscribe
+    assert f"$vdp/{second_did}/server/loginout".encode() in subscribe
+    assert f"$vdp/{DID}/{CAR_ID}/server/event".encode() not in subscribe
+
+
+@pytest.mark.asyncio
+async def test_probe_pubacks_qos1_publishes(monkeypatch, tmp_path) -> None:
+    event = build_publish_packet(
+        f"$vdp/{DID}/{CAR_ID}/server/event",
+        {
+            "h": {"r": "req-1", "m": "Et_IT001"},
+            "d": {"p": {"DrvrDoorLockLogicSts": 2}},
+        },
+        qos=1,
+        packet_id=7,
+    )
+    broker = _Broker(_connack(0x00) + _suback(1, [0x01]) + event)
+    _install(monkeypatch, broker)
+    probe._LOG_FILE = (tmp_path / "probe.log").open("w", encoding="utf-8")
+
+    report = await probe.probe_broker(
+        probe.parse_broker_config(BROKER_CONFIG),
+        AUTH_TOKEN,
+        DID,
+        [f"$vdp/{DID}/#"],
+        seconds=0.4,
+        allow_login=False,
+        timeout=5.0,
+    )
+    probe._LOG_FILE.close()
+
+    pubacks = [packet for packet in broker.writes if packet[0] == 0x40]
+    assert [packet[2:4].hex() for packet in pubacks] == ["0007"]
+    assert report["messages"][0]["qos"] == 1
+    assert report["messages"][0]["dup"] is False
