@@ -13,14 +13,19 @@ the open questions and costs you nothing to run.
 
 1. Logs in with your account (the same secondary account Home Assistant uses).
 2. Asks the SDA gateway for the broker configuration the app uses
-   (`get-mqtt-server-config?carId=`) and for the `vot-auth` auth token.
-3. Connects to the broker over TLS and tries the CONNECT identities in order,
-   reporting which one the broker accepts and why the others are rejected.
+   (`get-mqtt-server-config?carId=`) and for the `vot-auth` auth token (the
+   exact parameter-less `GET` the app makes; the `userId` variants stay as
+   fallbacks).
+3. Collects the car's MQTT device DID candidates from the CA connection
+   configuration and the function tree, then connects to the broker over TLS
+   and tries the CONNECT identities in order, reporting which one the broker
+   accepts and why the others are rejected.
 4. Subscribes to the topics the account is allowed to use and reports the
    SUBACK result per topic (granted / not authorized / wildcards not supported).
 5. Listens for a while and logs everything the broker sends, with tokens,
-   passwords, identifiers, plate and location masked. Any encrypted `sers` list
-   it can decode is decoded locally.
+   passwords, identifiers, plate and location masked (every device segment of
+   a topic included). Any encrypted `sers` list it can decode is decoded
+   locally.
 
 It **never publishes a control command**. The only message it can send is the
 `loginout` exchange, and only with `--allow-login`, because opening a session
@@ -67,6 +72,7 @@ Useful options:
 | `--seconds 90` | listen window (default 90 s) |
 | `--allow-login` | publish the `loginout` exchange (may kick the app session) |
 | `--wildcard` | also subscribe to `$vdp/<did>/#` to observe the app's frames |
+| `--debug` | add a redacted, paste-ready JSON report at the end of the log |
 | `--log sda-probe.log` | redacted log file (default `sda-probe.log`) |
 
 Credentials come from the environment: `DEEPAL_EMAIL` + `DEEPAL_PASSWORD`, or
@@ -91,6 +97,21 @@ shows the command topics and, when the `secretKey` is available, the decoded
 `tools/sda-mqtt-probe/sda-probe.log` (or the path you passed to `--log`). Skim
 it first: it must not contain your tokens, your plate, your car's location or
 your account ids.
+
+## Exit codes
+
+A failed run names the phase that stopped it:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Connected and finished |
+| 2 | Usage or setup error (missing credentials, unexpected API error) |
+| 10 | Login failed |
+| 11 | Could not list the account vehicles |
+| 12 | `get-mqtt-server-config` failed |
+| 13 | No `vot-auth` token and no config-reported identity |
+| 14 | No CONNECT identity was accepted by the broker |
+| 130 | Interrupted (Ctrl-C) |
 
 ## Notes and safety
 

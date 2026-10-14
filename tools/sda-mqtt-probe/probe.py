@@ -108,6 +108,16 @@ SUBACK_REASONS = {
     0xA2: "wildcard subscriptions not supported",
 }
 
+#: Exit codes: one per failed phase so a run names where it stopped.
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_LOGIN = 10
+EXIT_VEHICLES = 11
+EXIT_BROKER_CONFIG = 12
+EXIT_AUTH_TOKEN = 13
+EXIT_NO_IDENTITY = 14
+EXIT_INTERRUPTED = 130
+
 _LOG_FILE: Optional[Any] = None
 
 
@@ -124,14 +134,35 @@ def mask_identifier(value: Any) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:8]
 
 
+#: Identifiers the topic masker must hide wherever they appear.
+_SENSITIVE_IDS: set[str] = set()
+
+
+def register_sensitive_ids(*values: Any) -> None:
+    """Remember identifiers that must never appear raw in a logged topic."""
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            _SENSITIVE_IDS.add(text)
+
+
 def mask_topic(topic: str) -> str:
-    """Mask the ``$vdp/<did>`` device segment of an MQTT topic."""
+    """Mask every device segment of a ``$vdp/<did>/...`` MQTT topic.
+
+    The event topics repeat the device id (``$vdp/<did>/<did>/server/event``),
+    so a segment is masked when it is the first device segment, when it repeats
+    it, or when it is a registered identifier. The topic shape stays readable.
+    """
     if not topic.startswith("$vdp/"):
         return topic
-    parts = topic.split("/", 2)
+    parts = topic.split("/")
     if len(parts) < 3:
         return topic
-    return f"$vdp/<did:{mask_identifier(parts[1])}>/{parts[2]}"
+    device = parts[1]
+    for index, part in enumerate(parts[1:], start=1):
+        if part and (index == 1 or part == device or part in _SENSITIVE_IDS):
+            parts[index] = f"<did:{mask_identifier(part)}>"
+    return "/".join(parts)
 
 
 #: Credential spellings the probe must never write to the log.
@@ -230,29 +261,46 @@ def connect_candidates(
     auth_token: Optional[str],
     login_did: str,
     secret_key: Optional[str] = None,
+    dids: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Build the CONNECT identity candidates the probe tries in order.
 
     The app's ``authType 2`` handshake is not documented, so the probe tries the
     identity the configuration reports (when it carries one) and the auth token
-    in the roles the sibling CA broker uses.
+    in the roles the sibling CA broker uses. On the CA broker the client id is
+    the car's MQTT device DID, not the car id, so every known DID is tried as
+    the client id as well.
     """
     identity = config.get("identity") or {}
     reported_client = identity.get("clientId") or identity.get("client_id")
     reported_user = identity.get("userName") or identity.get("username")
     reported_password = identity.get("password")
 
+    identities: list[str] = []
+    for value in (login_did, *(dids or [])):
+        text = str(value or "").strip()
+        if text and text not in identities:
+            identities.append(text)
+
     candidates: list[dict[str, Any]] = []
 
-    def add(label: str, client_id: Any, username: Any, password: Any) -> None:
+    def add(
+        label: str,
+        client_id: Any,
+        username: Any,
+        password: Any,
+        did: Optional[str] = None,
+    ) -> None:
         if not (client_id and username and password):
             return
-        entry = {
+        entry: dict[str, Any] = {
             "label": label,
             "client_id": str(client_id),
             "username": str(username),
             "password": str(password),
         }
+        if did:
+            entry["did"] = str(did)
         if entry not in candidates:
             candidates.append(entry)
 
@@ -263,10 +311,12 @@ def connect_candidates(
             reported_client or login_did,
             reported_user or login_did,
             secret_key,
+            did=login_did,
         )
-    add("authToken as password", login_did, login_did, auth_token)
-    add("authToken as username and password", login_did, auth_token, auth_token)
-    add("authToken as client id", auth_token, login_did, auth_token)
+    for did in identities:
+        add("authToken as password", did, did, auth_token, did=did)
+        add("authToken as username and password", did, auth_token, auth_token, did=did)
+        add("authToken as client id", auth_token, did, auth_token, did=did)
     return candidates
 
 
@@ -295,33 +345,53 @@ async def fetch_broker_config(
 
 
 async def fetch_auth_token(client: DeepalIntlClient) -> Optional[str]:
-    """Fetch the ``vot-auth`` auth token on the SDA host, trying GET then POST."""
-    attempts = (
-        ("GET", {"userId": client.user_id}, None),
-        ("POST", None, {"userId": client.user_id}),
+    """Fetch the ``vot-auth`` auth token on the SDA host.
+
+    The official app calls this endpoint as a GET without parameters and the
+    account identity travels in the ``X-Tsp-User-Token`` header (issue #2
+    trace). That exact call goes first; the ``userId`` variants stay as
+    fallbacks for other client versions.
+    """
+    attempts: tuple[tuple[str, Optional[dict[str, Any]]], ...] = (
+        ("GET", None),
+        ("GET", {"userId": client.user_id}),
+        ("POST", {"userId": client.user_id}),
     )
-    for method, query, body in attempts:
-        query = {k: v for k, v in (query or {}).items() if v}
-        body = {k: v for k, v in (body or {}).items() if v}
-        if not query and not body:
-            continue
+    for method, params in attempts:
+        params = (
+            {key: value for key, value in (params or {}).items() if value} or None
+        )
+        label = f"{method} " + (
+            f"{sorted(params)}" if params else "without parameters"
+        )
         try:
             raw = await client._request(  # noqa: SLF001
                 INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
-                json_data=body,
+                json_data=params if method == "POST" else None,
                 auth_required=True,
                 base_url=client.sda_base_url,
                 method=method,
-                query=query,
+                query=params if method == "GET" else None,
             )
         except DeepalError as exc:
-            log(f"  authToken via {method} {sorted(query or body)}: {exc}")
+            log(f"  authToken via {label}: {exc}")
             continue
-        if isinstance(raw, dict) and raw.get("authToken"):
-            log(f"  authToken via {method} {sorted(query or body)}: captured")
-            return str(raw["authToken"])
-        log(f"  authToken via {method}: response without authToken (masked below)")
+        token = _first_auth_token(raw)
+        if token:
+            log(f"  authToken via {label}: captured ({len(token)} chars)")
+            return token
+        log(f"  authToken via {label}: response without authToken (masked below)")
         log("    " + json.dumps(redact(raw), ensure_ascii=False)[:300])
+    return None
+
+
+def _first_auth_token(raw: Any) -> Optional[str]:
+    """Return the token of the app's response shape, flat or nested."""
+    if not isinstance(raw, dict):
+        return None
+    for candidate in (raw, raw.get("data"), raw.get("params")):
+        if isinstance(candidate, dict) and candidate.get("authToken"):
+            return str(candidate["authToken"])
     return None
 
 
@@ -392,6 +462,7 @@ async def probe_broker(
     allow_login: bool,
     timeout: float,
     secret_key: Optional[str] = None,
+    dids: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Try the identity candidates, subscribe and listen. Never sends a command."""
     host = config.get("host")
@@ -403,21 +474,27 @@ async def probe_broker(
     log(f"Connecting to {host}:{port} (TLS, verified)")
     log(f"  cluster={config.get('cluster_name')} authType={config.get('auth_type')}")
 
-    candidates = connect_candidates(config, auth_token, login_did, secret_key)
+    candidates = connect_candidates(config, auth_token, login_did, secret_key, dids)
     if not candidates:
         log("No CONNECT identity candidates to try; nothing to probe.")
         return {"connected": False, "reason": "no candidates"}
 
     report: dict[str, Any] = {"connected": False, "attempts": [], "messages": []}
     reader = writer = None
+    accepted_did = login_did
     for candidate in candidates:
-        log(f"  CONNECT as {candidate['label']}")
+        client_tag = mask_identifier(candidate["client_id"])
+        log(f"  CONNECT as {candidate['label']} [client_id=<id:{client_tag}>]")
         try:
             reader, writer = await open_broker(host, port, timeout)
         except (OSError, asyncio.TimeoutError) as exc:
             log(f"    connection failed: {type(exc).__name__}: {exc}")
             report["attempts"].append(
-                {"label": candidate["label"], "error": type(exc).__name__}
+                {
+                    "label": candidate["label"],
+                    "error": type(exc).__name__,
+                    "client_id": client_tag,
+                }
             )
             continue
         writer.write(
@@ -434,7 +511,11 @@ async def probe_broker(
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError) as exc:
             log(f"    no CONNACK: {type(exc).__name__}")
             report["attempts"].append(
-                {"label": candidate["label"], "error": type(exc).__name__}
+                {
+                    "label": candidate["label"],
+                    "error": type(exc).__name__,
+                    "client_id": client_tag,
+                }
             )
             writer.close()
             continue
@@ -442,11 +523,18 @@ async def probe_broker(
         name = CONNACK_REASONS.get(reason, f"0x{reason:02X}" if reason else "unknown")
         log(f"    CONNACK session_present={session_present} reason={name}")
         report["attempts"].append(
-            {"label": candidate["label"], "reason": reason, "reason_name": name}
+            {
+                "label": candidate["label"],
+                "reason": reason,
+                "reason_name": name,
+                "client_id": client_tag,
+            }
         )
         if reason == 0:
             report["connected"] = True
             report["identity"] = candidate["label"]
+            report["client_id"] = client_tag
+            accepted_did = candidate.get("did") or login_did
             break
         writer.close()
         try:
@@ -484,14 +572,14 @@ async def probe_broker(
 
     secret_holder: dict[str, Optional[str]] = {"secret_key": secret_key}
     if allow_login:
-        topic = LOGIN_PUB_TOPIC_TEMPLATE % login_did
+        topic = LOGIN_PUB_TOPIC_TEMPLATE % accepted_did
         if any(marker in topic for marker in CONTROL_TOPIC_MARKERS):
             log("  refusing to publish on a control topic; skipping the login")
         else:
             payload = login_request_payload(
-                login_did,
-                new_request_id(login_did),
-                basic_identifiers(ruid=login_did),
+                accepted_did,
+                new_request_id(accepted_did),
+                basic_identifiers(ruid=accepted_did),
             )
             log(f"  -> PUBLISH loginout on {mask_topic(topic)} (opens a session)")
             writer.write(build_publish_packet(topic, payload))
@@ -532,6 +620,43 @@ def probe_topics(config: dict[str, Any], login_did: str, wildcard: bool) -> list
     return subscriptions
 
 
+def _tree_device_ids(value: Any) -> list[str]:
+    """Collect every ``deviceId`` string of a function tree of any shape."""
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() == "deviceid" and isinstance(item, str) and item:
+                if item not in found:
+                    found.append(item)
+            else:
+                for did in _tree_device_ids(item):
+                    if did not in found:
+                        found.append(did)
+    elif isinstance(value, list):
+        for item in value:
+            for did in _tree_device_ids(item):
+                if did not in found:
+                    found.append(did)
+    return found
+
+
+def _report_for_log(report: dict[str, Any]) -> dict[str, Any]:
+    """Return a redacted copy of the report for a paste-ready debug dump."""
+    out: dict[str, Any] = {}
+    for key, value in report.items():
+        if key == "messages" and isinstance(value, list):
+            out[key] = [
+                {
+                    "topic": mask_topic(message["topic"]),
+                    "payload": redact(message["payload"]),
+                }
+                for message in value
+            ]
+        else:
+            out[key] = value
+    return out
+
+
 def build_client(args: argparse.Namespace) -> DeepalIntlClient:
     """Build the SDK client from the CLI arguments and the environment."""
     client = DeepalIntlClient(
@@ -558,15 +683,23 @@ async def run(args: argparse.Namespace) -> int:
             if not email or not (password or code):
                 log("Set DEEPAL_EMAIL and DEEPAL_PASSWORD (or DEEPAL_CODE), or")
                 log("DEEPAL_ACCESS_TOKEN/DEEPAL_REFRESH_TOKEN, to run the probe.")
-                return 2
+                return EXIT_USAGE
             log(f"Logging in as {email[:2]}***@{email.split('@')[-1]} ({args.country})")
-            if code:
-                await client.login_with_email_code(email, code, args.country)
-            else:
-                await client.login_with_email_password(email, password, args.country)
+            try:
+                if code:
+                    await client.login_with_email_code(email, code, args.country)
+                else:
+                    await client.login_with_email_password(email, password, args.country)
+            except DeepalError as exc:
+                log(f"Login failed: {exc}")
+                return EXIT_LOGIN
             log(f"Logged in; account user id {'present' if client.user_id else 'MISSING'}")
 
-        vehicles = await client.get_vehicles()
+        try:
+            vehicles = await client.get_vehicles()
+        except DeepalError as exc:
+            log(f"Could not list the account vehicles: {exc}")
+            return EXIT_VEHICLES
         if args.list_vehicles or not vehicles:
             log("Vehicles in this account:")
             for vehicle in vehicles:
@@ -576,7 +709,7 @@ async def run(args: argparse.Namespace) -> int:
                     f"protocol={vehicle.protocol_type} vin={'set' if vehicle.vin else 'unset'}"
                 )
             if args.list_vehicles:
-                return 0
+                return EXIT_OK
         car_id = args.car_id or next(
             (
                 vehicle.car_id
@@ -587,23 +720,70 @@ async def run(args: argparse.Namespace) -> int:
         )
         if not car_id:
             log("No vehicle to probe.")
-            return 2
+            return EXIT_VEHICLES
         log(f"Probing car_id=<{mask_identifier(car_id)}>")
+        register_sensitive_ids(
+            car_id,
+            next((vehicle.vin for vehicle in vehicles if vehicle.car_id == car_id), None),
+        )
 
-        config = await fetch_broker_config(client, car_id)
+        try:
+            config = await fetch_broker_config(client, car_id)
+        except DeepalError as exc:
+            log(f"Broker configuration failed: {exc}")
+            return EXIT_BROKER_CONFIG
+
+        did_candidates: list[str] = []
+        try:
+            ca_config = await client.get_mqtt_config(car_id)
+        except DeepalError as exc:
+            log(f"CA connection config unavailable ({exc}); no DIDs from it")
+        else:
+            ca_topics = resolve_mqtt_topics(ca_config, None)
+            for did in (ca_topics.device_did, ca_topics.login_did):
+                if did and did not in did_candidates:
+                    did_candidates.append(did)
+        try:
+            tree = await client.get_car_function_config(car_id)
+        except DeepalError as exc:
+            log(f"Function tree unavailable ({exc}); no DIDs from it")
+        else:
+            for did in _tree_device_ids(tree):
+                if did not in did_candidates:
+                    did_candidates.append(did)
+        if did_candidates:
+            log("Device DID candidates (masked):")
+            for did in did_candidates:
+                log(f"  <did:{mask_identifier(did)}>")
+        else:
+            log("No device DID found in the CA config or the function tree.")
+        register_sensitive_ids(*did_candidates)
+
         auth_token = await fetch_auth_token(client)
+        identity = config.get("identity") or {}
         if auth_token is None:
+            if not (identity.get("userName") or identity.get("password")):
+                log(
+                    "No vot-auth auth token and no config-reported identity; "
+                    "nothing to connect with."
+                )
+                return EXIT_AUTH_TOKEN
             log("No vot-auth auth token; the probe will still try the config identity.")
 
-        identity = config.get("identity") or {}
         topics = resolve_mqtt_topics(config, None)
         login_did = (
             topics.login_did
             or identity.get("did")
             or identity.get("loginDid")
+            or (did_candidates[0] if did_candidates else None)
             or car_id
         )
         subscriptions = probe_topics(config, login_did, args.wildcard)
+        if args.wildcard:
+            for did in did_candidates:
+                wildcard_topic = f"$vdp/{did}/#"
+                if wildcard_topic not in subscriptions:
+                    subscriptions.append(wildcard_topic)
         log("Subscriptions to request:")
         for topic in subscriptions:
             log(f"  {mask_topic(topic)}")
@@ -617,6 +797,7 @@ async def run(args: argparse.Namespace) -> int:
             allow_login=args.allow_login,
             timeout=args.timeout,
             secret_key=identity.get("secretKey"),
+            dids=did_candidates,
         )
 
         log("")
@@ -624,9 +805,12 @@ async def run(args: argparse.Namespace) -> int:
         log(f"  connected: {report.get('connected')}")
         if report.get("identity"):
             log(f"  accepted identity: {report['identity']}")
+            if report.get("client_id"):
+                log(f"  accepted client id: <id:{report['client_id']}>")
         for attempt in report.get("attempts", []):
             log(
-                f"  attempt: {attempt['label']} -> "
+                f"  attempt: {attempt['label']} "
+                f"[client_id=<id:{attempt.get('client_id', '?')}>] -> "
                 f"{attempt.get('reason_name') or attempt.get('error')}"
             )
         log(f"  subscribed topics: {len(report.get('subscriptions', []))}")
@@ -639,7 +823,22 @@ async def run(args: argparse.Namespace) -> int:
                 if isinstance(message["payload"].get("sers_decoded"), list)
             )
             log(f"  of those, sers decoded: {decoded}")
-        return 0 if report.get("connected") else 1
+        if not report.get("connected"):
+            log(
+                "No identity was accepted. The SDA broker identity (authType 2) "
+                "is still unknown: run tools/sda-mqtt-capture and send the "
+                "transcript, which records the app's CONNECT summary masked."
+            )
+        if args.debug:
+            log("")
+            log("Paste-ready JSON report (redacted):")
+            log(
+                "  "
+                + json.dumps(
+                    _report_for_log(report), ensure_ascii=False, sort_keys=True
+                )
+            )
+        return EXIT_OK if report.get("connected") else EXIT_NO_IDENTITY
 
 
 def main() -> int:
@@ -665,6 +864,11 @@ def main() -> int:
         action="store_true",
         help="also subscribe to $vdp/<did>/# to observe the app's own frames",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="add a redacted, paste-ready JSON report at the end of the log",
+    )
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--api-logging", action="store_true")
     parser.add_argument("--list-vehicles", action="store_true")
@@ -685,10 +889,10 @@ def main() -> int:
             return asyncio.run(run(args))
         except DeepalError as exc:
             log(f"Deepal API error: {exc}")
-            return 2
+            return EXIT_USAGE
         except KeyboardInterrupt:
             log("Interrupted")
-            return 130
+            return EXIT_INTERRUPTED
         finally:
             log(f"--- end of probe (log: {path.resolve()}) ---")
 

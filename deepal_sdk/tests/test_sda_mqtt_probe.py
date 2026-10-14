@@ -123,6 +123,37 @@ class _Broker:
         return self.writer.writes
 
 
+class _FakeAuthClient:
+    """Client stub that records the probe's ``_request`` calls."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self.user_id = "user-1"
+        self.sda_base_url = "https://prod-m.sda.changanauto.sg"
+        self.responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def _request(
+        self,
+        path: str,
+        json_data: Optional[dict[str, Any]] = None,
+        auth_required: bool = False,
+        base_url: Optional[str] = None,
+        *,
+        method: str = "POST",
+        query: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "path": path,
+                "method": method,
+                "query": query,
+                "json_data": json_data,
+                "base_url": base_url,
+            }
+        )
+        return self.responses.pop(0)
+
+
 def _install(monkeypatch: Any, broker: _Broker) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
@@ -292,6 +323,91 @@ def test_topic_masking_keeps_the_shape() -> None:
     )
     assert DID not in probe.mask_topic(f"$vdp/{DID}/properties/set/req")
     assert probe.mask_topic("$SYS/broker/uptime") == "$SYS/broker/uptime"
+
+
+def test_topic_masking_covers_repeated_and_registered_ids() -> None:
+    masked = probe.mask_topic(f"$vdp/{DID}/{DID}/server/event")
+
+    assert DID not in masked
+    assert masked.endswith("/server/event")
+    assert masked.count("<did:") == 2
+
+    sensitive = "9999999999999999999"
+    probe.register_sensitive_ids(sensitive)
+    other = probe.mask_topic(f"$vdp/{DID}/{sensitive}/server/event")
+    assert sensitive not in other
+
+
+def test_connect_candidates_try_every_known_did() -> None:
+    config = probe.parse_broker_config(BROKER_CONFIG)
+    second_did = "1111111111111111111"
+
+    candidates = probe.connect_candidates(config, AUTH_TOKEN, DID, None, [second_did])
+
+    tried = {
+        (candidate.get("did"), candidate["client_id"])
+        for candidate in candidates
+        if candidate["label"] == "authToken as password"
+    }
+    assert (DID, DID) in tried
+    assert (second_did, second_did) in tried
+    assert candidates[0]["label"] == "config-reported identity"
+
+
+def test_tree_device_ids_collects_nested_device_ids() -> None:
+    tree = {
+        "data": {
+            "list": [
+                {"deviceId": DID},
+                {"child": {"deviceId": "device-2"}},
+            ]
+        }
+    }
+
+    assert probe._tree_device_ids(tree) == [DID, "device-2"]
+
+
+def test_first_auth_token_reads_flat_and_nested_shapes() -> None:
+    assert probe._first_auth_token({"authToken": "flat"}) == "flat"
+    assert probe._first_auth_token({"data": {"authToken": "nested"}}) == "nested"
+    assert probe._first_auth_token({"code": "0"}) is None
+    assert probe._first_auth_token(None) is None
+
+
+@pytest.mark.asyncio
+async def test_auth_token_prefers_the_app_call_without_parameters(tmp_path) -> None:
+    probe._LOG_FILE = (tmp_path / "probe.log").open("w", encoding="utf-8")
+    client = _FakeAuthClient([{"authToken": AUTH_TOKEN}])
+
+    token = await probe.fetch_auth_token(client)
+    probe._LOG_FILE.close()
+
+    assert token == AUTH_TOKEN
+    assert len(client.calls) == 1
+    first = client.calls[0]
+    assert first["method"] == "GET"
+    assert first["query"] is None
+    assert first["json_data"] is None
+    assert first["base_url"] == "https://prod-m.sda.changanauto.sg"
+
+
+@pytest.mark.asyncio
+async def test_auth_token_falls_back_to_the_user_id_variants(tmp_path) -> None:
+    probe._LOG_FILE = (tmp_path / "probe.log").open("w", encoding="utf-8")
+    client = _FakeAuthClient([{}, {}, {"authToken": AUTH_TOKEN}])
+
+    token = await probe.fetch_auth_token(client)
+    probe._LOG_FILE.close()
+
+    assert token == AUTH_TOKEN
+    calls = [
+        (call["method"], call["query"], call["json_data"]) for call in client.calls
+    ]
+    assert calls == [
+        ("GET", None, None),
+        ("GET", {"userId": "user-1"}, None),
+        ("POST", None, {"userId": "user-1"}),
+    ]
 
 
 def test_decode_sers_says_when_it_cannot_decode() -> None:
