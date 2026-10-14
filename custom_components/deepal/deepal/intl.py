@@ -2199,6 +2199,10 @@ class DeepalIntlClient:
                             req_id,
                             basic_info=basic_info,
                         ),
+                        # QoS 1: the broker queues the wake for the vehicle
+                        # session when the car is deeply asleep and offline,
+                        # instead of dropping it like a QoS 0 message.
+                        qos=1,
                     )
                 )
                 await writer.drain()

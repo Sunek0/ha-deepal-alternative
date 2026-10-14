@@ -1212,7 +1212,7 @@ async def test_climate_clamps_the_target_to_the_supported_range() -> None:
     entity = climate.DeepalCabinClimateEntity(coordinator, _fake_vehicle())
 
     assert entity.min_temp == 18.0
-    assert entity.max_temp == 30.0
+    assert entity.max_temp == 32.0
     await entity.async_turn_on()
 
     assert coordinator.client.calls == [("air", "car-1", True, 18.0)]
@@ -1222,7 +1222,10 @@ async def test_climate_clamps_the_target_to_the_supported_range() -> None:
     assert coordinator.client.calls[-1] == ("air", "car-1", True, 18.0)
 
     await entity.async_set_temperature(temperature=31.0)
-    assert coordinator.client.calls[-1] == ("air", "car-1", True, 30.0)
+    assert coordinator.client.calls[-1] == ("air", "car-1", True, 31.0)
+
+    await entity.async_set_temperature(temperature=33.0)
+    assert coordinator.client.calls[-1] == ("air", "car-1", True, 32.0)
 
 
 @pytest.mark.asyncio

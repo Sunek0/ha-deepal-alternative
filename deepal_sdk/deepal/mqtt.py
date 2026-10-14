@@ -151,14 +151,27 @@ def build_subscribe_packet(packet_id: int, topics: list[str]) -> bytes:
     return bytes([0x82]) + mqtt_remaining_length(len(body)) + body
 
 
-def build_publish_packet(topic: str, payload: dict[str, Any]) -> bytes:
-    """Build an MQTT 5.0 QoS 0 PUBLISH packet with a JSON payload."""
-    body = (
-        mqtt_string(topic)
-        + b"\x00"
+def build_publish_packet(
+    topic: str, payload: dict[str, Any], *, qos: int = 0, packet_id: int = 1
+) -> bytes:
+    """Build an MQTT 5.0 PUBLISH packet with a JSON payload.
+
+    ``qos`` 1 adds the packet identifier and lets the broker queue the message
+    for an offline subscriber session (the vehicle wake relies on it while the
+    car sleeps); every other caller keeps QoS 0.
+    """
+    body = mqtt_string(topic)
+    if qos > 0:
+        body += struct.pack("!H", packet_id)
+    body += (
+        b"\x00"
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     )
-    return bytes([0x30]) + mqtt_remaining_length(len(body)) + body
+    return (
+        bytes([0x30 | ((qos & 0x03) << 1)])
+        + mqtt_remaining_length(len(body))
+        + body
+    )
 
 
 def build_puback_packet(packet_id: int) -> bytes:

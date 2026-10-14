@@ -53,7 +53,7 @@ class DeepalCabinClimateEntity(
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_min_temp = 18.0
-    _attr_max_temp = 30.0
+    _attr_max_temp = 32.0
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         """Initialize the climate entity."""
@@ -122,10 +122,10 @@ class DeepalCabinClimateEntity(
         await self._async_send(False, self.target_temperature or 21.0)
 
     async def _async_send(self, enabled: bool, temperature: float) -> None:
-        # The gateway rejects targetTemp below 18.0 °C with COMMON_1_1_01_005
-        # (verified live 2026-10-14), and the car can report a lower physical
-        # setting that HA mirrors and async_turn_on reuses, so the command is
-        # clamped to the entity range.
+        # The gateway rejects targetTemp outside 18.0-32.0 °C with
+        # COMMON_1_1_01_005 (verified live 2026-10-14), and the car can report
+        # a setting outside the range that HA mirrors and async_turn_on reuses,
+        # so the command is clamped to the entity range.
         temperature = min(max(temperature, self.min_temp), self.max_temp)
 
         def _optimistic(condition: Any) -> Any:

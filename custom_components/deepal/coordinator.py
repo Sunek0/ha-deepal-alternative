@@ -675,14 +675,20 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 return True
         return False
 
-    async def _async_wake_and_wait(self, vehicle_id: str) -> bool | None:
+    async def _async_wake_and_wait(
+        self, vehicle_id: str, *, wait_when_unconfirmed: bool = False
+    ) -> bool | None:
         """Wake one vehicle and wait for a newer condition report.
 
-        Returns True when a newer report arrived, False when the wake was
-        accepted but the vehicle did not report within the wait window, and
-        None when the wake request itself failed. The wake cooldown is
-        recorded as soon as the wake is accepted, whether or not the report
-        arrives afterwards.
+        Returns True when a newer report arrived, False when no report arrived
+        within the wait window, and None when the wake request itself failed
+        and the caller asked not to wait for the report
+        (``wait_when_unconfirmed=False``). The gateway acknowledgement is
+        unreliable while the car is deeply asleep (observed 2026-10-14: the
+        wake is published, the car wakes, and no service result arrives), so a
+        manual refresh passes ``wait_when_unconfirmed=True`` and lets the
+        report decide the outcome. The wake cooldown is recorded as soon as the
+        wake is accepted, whether or not the report arrives afterwards.
         """
         current = (self.data or {}).get(vehicle_id)
         previous = current.last_updated_timestamp if current is not None else None
@@ -692,8 +698,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _LOGGER.warning(
                 "Deepal wake request failed for %s: %s", vehicle_id, err
             )
-            return None
-        self._last_wake_at[vehicle_id] = time.monotonic()
+            if not wait_when_unconfirmed:
+                return None
+        else:
+            self._last_wake_at[vehicle_id] = time.monotonic()
         if await self._async_wait_for_report(vehicle_id, previous):
             return True
         _LOGGER.warning(
@@ -735,8 +743,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         MQTT vehicles are woken through the app's ``TxWakeup`` service when the
         last report is older than the stale threshold and the per-vehicle wake
         cooldown elapsed; the coordinator waits for a newer report and raises a
-        Home Assistant error when none arrives. REST vehicles keep the signed
-        condition-inquiry request.
+        Home Assistant error when none arrives. The gateway acknowledgement is
+        not required: when the wake request fails, the report wait still
+        decides the outcome. REST vehicles keep the signed condition-inquiry
+        request.
         """
         vehicle = self._vehicle(vehicle_id)
         current = (self.data or {}).get(vehicle_id)
@@ -749,7 +759,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # falls through to the normal SDA condition update.
                 return
             if self._should_wake(vehicle_id, previous) and (
-                await self._async_wake_and_wait(vehicle_id)
+                await self._async_wake_and_wait(
+                    vehicle_id, wait_when_unconfirmed=True
+                )
             ) is False:
                 raise HomeAssistantError(
                     "The vehicle did not report fresh data after the wake "

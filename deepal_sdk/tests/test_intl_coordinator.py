@@ -1569,7 +1569,7 @@ async def test_refresh_raises_when_woken_vehicle_does_not_report():
 
 
 @pytest.mark.asyncio
-async def test_refresh_wake_failure_keeps_cached_refresh():
+async def test_refresh_wake_failure_without_report_raises():
     client = _FakeIntlClient([])
     client.wake_error = DeepalAPIError("wake rejected", code="VVCC_-1_-1_02_023")
     stale = int(time.time()) - 3600
@@ -1582,11 +1582,38 @@ async def test_refresh_wake_failure_keeps_cached_refresh():
         },
     )
     coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale] * 20
+
+    with pytest.raises(HomeAssistantError) as err:
+        await coordinator.async_refresh_vehicle("car-1")
+
+    assert err.value.translation_key == "wake_no_fresh_report"
+    assert client.wake_calls == 1
+    assert client.events[0] == "wake"
+    assert "mqtt_condition" in client.events
+    assert "car-1" not in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_refresh_wake_failure_with_report_succeeds():
+    client = _FakeIntlClient([])
+    client.wake_error = DeepalAPIError("Vehicle wake did not return a response.")
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale + 30]
 
     await coordinator.async_refresh_vehicle("car-1")
 
     assert client.wake_calls == 1
-    assert client.events == ["wake"]
+    assert client.events == ["wake", "mqtt_condition", "condition"]
     assert "car-1" not in coordinator._last_wake_at
 
 

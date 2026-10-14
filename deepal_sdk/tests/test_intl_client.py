@@ -163,7 +163,7 @@ class _FakeMqttBroker:
         elif first == 0x82:
             self.subscribe_packet = data
             self.reader.feed_data(b"\x90\x05\x00\x01\x00\x00\x00")
-        elif first == 0x30:
+        elif first & 0xF0 == 0x30:
             self._on_publish(first, body)
         elif first == 0xC0:
             self.pings += 1
@@ -2391,6 +2391,10 @@ async def test_wake_vehicle_publishes_wake_service(monkeypatch):
     assert services[0]["service_req_id"] == broker.wake_payload["r"]
     assert services[0]["params"] == {}
     assert broker.condition_topic is None
+    wake_packet = next(
+        packet for packet in broker.writes if b"properties/set/req" in packet
+    )
+    assert wake_packet[0] == 0x32  # PUBLISH with QoS 1
     assert broker.writes[-1] == b"\xe0\x02\x00\x00"
     assert broker.close_count == 1
 

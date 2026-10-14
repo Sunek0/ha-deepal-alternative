@@ -117,6 +117,18 @@ def test_v5_subscribe_publish_puback_and_lifecycle_packets():
     assert build_disconnect_packet() == b"\xe0\x02\x00\x00"
 
 
+def test_qos_one_publish_carries_the_packet_identifier():
+    packet = build_publish_packet("$vdp/did-1/set/req", {"n": 1}, qos=1, packet_id=7)
+
+    assert packet[0] == 0x32
+    first, body = packet[0], packet[2:]
+    topic, payload, packet_id = parse_publish(first, body)
+
+    assert topic == "$vdp/did-1/set/req"
+    assert payload == {"n": 1}
+    assert packet_id == 7
+
+
 def test_parse_connack_reason_codes():
     assert parse_connack(0x20, b"\x00\x00\x00") == (0, 0)
     assert parse_connack(0x20, b"\x01\x86\x00") == (1, 0x86)
