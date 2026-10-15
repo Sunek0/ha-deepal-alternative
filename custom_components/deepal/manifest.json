@@ -1,12 +1,12 @@
 {
   "domain": "deepal",
   "name": "Deepal Alternative",
+  "after_dependencies": ["lovelace"],
   "codeowners": [
     "@sunek0"
   ],
   "config_flow": true,
   "dependencies": ["http", "frontend", "panel_custom"],
-  "after_dependencies": ["lovelace"],
   "documentation": "https://github.com/Sunek0/ha-deepal-alternative",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
