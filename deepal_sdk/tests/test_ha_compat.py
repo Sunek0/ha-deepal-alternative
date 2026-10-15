@@ -788,17 +788,18 @@ def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
     assert ventilation_binary.is_on is None
 
 
-def test_defrost_entity_is_retired() -> None:
+def test_retired_entities_are_removed() -> None:
     keys = {description.key for description in binary_sensor.BINARY_SENSORS}
-    assert "defrost" not in keys
+    assert {"defrost", "warning_airbag", "warning_coolant_temperature"}.isdisjoint(
+        keys
+    )
 
     removed: list[str] = []
 
     class _Registry:
         def async_get_entity_id(self, platform, domain, unique_id):
             assert (platform, domain) == ("binary_sensor", "deepal")
-            assert unique_id == "deepal_car-1_defrost"
-            return "binary_sensor.deepal_defrost"
+            return f"binary_sensor.{unique_id}"
 
         def async_remove(self, entity_id):
             removed.append(entity_id)
@@ -807,7 +808,32 @@ def test_defrost_entity_is_retired() -> None:
         _Registry(), SimpleNamespace(car_id="car-1")
     )
 
-    assert removed == ["binary_sensor.deepal_defrost"]
+    assert sorted(removed) == [
+        "binary_sensor.deepal_car-1_defrost",
+        "binary_sensor.deepal_car-1_warning_airbag",
+        "binary_sensor.deepal_car-1_warning_coolant_temperature",
+    ]
+
+
+def test_ac_gun_binary_sensor_follows_the_model() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    coordinator.data["car-1"] = condition
+    descriptions = {description.key: description for description in binary_sensor.BINARY_SENSORS}
+    entity = binary_sensor.DeepalBinarySensor(
+        coordinator, _fake_vehicle(), descriptions["ac_gun_connected"]
+    )
+
+    assert entity._attr_unique_id == "deepal_car-1_ac_gun_connected"
+    assert entity._attr_translation_key == "ac_gun_connected"
+    assert entity.device_class is binary_sensor.BinarySensorDeviceClass.PLUG
+
+    condition.battery.ac_gun_connected = True
+    assert entity.is_on is True
+    condition.battery.ac_gun_connected = False
+    assert entity.is_on is False
+    condition.battery.ac_gun_connected = None
+    assert entity.is_on is None
 
 
 def test_new_telemetry_entities_are_created() -> None:
@@ -830,14 +856,14 @@ def test_new_telemetry_entities_are_created() -> None:
         "warning_12v_battery",
         "warning_tpms",
         "warning_abs",
-        "warning_airbag",
         "warning_brake_fluid",
         "warning_brake",
         "warning_eps",
         "warning_power_limit",
         "warning_power_system",
         "warning_traction_battery_low",
-        "warning_coolant_temperature",
+        "ac_gun_connected",
+        "dc_gun_connected",
     } <= binary_keys
 
 

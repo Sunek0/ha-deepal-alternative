@@ -106,6 +106,10 @@ class BatteryCondition(BaseModel):
     charging_status: Optional[str] = Field(default=None, description="Charging / Discharging / Idle")
     charger_connected: bool = Field(default=False, description="Is charging cable plugged in")
     dc_gun_connected: bool = Field(default=False, description="Is the DC charging gun connected")
+    ac_gun_connected: Optional[bool] = Field(
+        default=None,
+        description="Is the AC charging gun connected; None when the vehicle did not report it",
+    )
     charge_current_a: Optional[float] = Field(default=None, description="Charging current in amperes")
     ac_charge_current_a: Optional[float] = Field(default=None, description="AC charging current in amperes")
     dc_charge_current_a: Optional[float] = Field(default=None, description="DC charging current in amperes")
@@ -206,14 +210,12 @@ class WarningLightsCondition(BaseModel):
     battery_12v: Optional[bool] = None
     tpms: Optional[bool] = None
     abs: Optional[bool] = None
-    airbag: Optional[bool] = None
     brake_fluid: Optional[bool] = None
     brake: Optional[bool] = None
     eps: Optional[bool] = None
     power_limit: Optional[bool] = None
     power_system: Optional[bool] = None
     traction_battery_low: Optional[bool] = None
-    coolant_temperature: Optional[bool] = None
 
 
 class LampsCondition(BaseModel):

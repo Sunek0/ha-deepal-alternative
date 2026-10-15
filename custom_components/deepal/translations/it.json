@@ -469,6 +469,9 @@
       "dc_gun_connected": {
         "name": "Pistola DC collegata"
       },
+      "ac_gun_connected": {
+        "name": "Pistola CA collegata"
+      },
       "charging": {
         "name": "In carica"
       },
@@ -511,9 +514,6 @@
       "warning_abs": {
         "name": "Spia ABS"
       },
-      "warning_airbag": {
-        "name": "Spia airbag"
-      },
       "warning_brake_fluid": {
         "name": "Spia liquido freni"
       },
@@ -531,9 +531,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Spia batteria di trazione scarica"
-      },
-      "warning_coolant_temperature": {
-        "name": "Spia temperatura refrigerante"
       }
     },
     "button": {

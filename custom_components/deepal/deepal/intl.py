@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 import json
 import logging
@@ -56,8 +57,10 @@ from .endpoints import (
     INTL_LOGIN_BY_MOBILE_PASSWORD,
     INTL_LOGOUT,
     INTL_REFRESH_TOKEN,
+    INTL_SDA_GET_AUTH_TOKEN,
     INTL_SDA_GET_CAR_CONDITION,
     INTL_SDA_GET_FUNCTION_CONFIG,
+    INTL_SDA_GET_MQTT_SERVER_CONFIG,
     INTL_SDA_VOT_FUNCTION_CONFIG,
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
@@ -108,7 +111,9 @@ from .mqtt import (
     SDA_CONDITION_SERVICE,
     SDA_SERVICE_CODES,
     MqttExchangeResult,
+    SdaBrokerConfig,
     SdaConditionPlan,
+    SdaSessionResult,
     aes_cbc_decrypt,
     basic_identifiers,
     build_connect_packet,
@@ -119,17 +124,21 @@ from .mqtt import (
     clean_charge_current,
     condition_request_payload,
     config_mqtt_identity,
+    device_id_candidates,
     login_request_payload,
     new_request_id,
     normalize_s05_params,
     normalize_sda_params,
     parse_connack,
     parse_publish,
+    parse_sda_broker_config,
     read_packet,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    sda_broker_session,
     sda_condition_plan,
     sda_condition_request_payload,
+    sda_session_topics,
     secret_from_login_payload,
     topic_with_device,
     unmapped_s05_keys,
@@ -243,6 +252,21 @@ def _path_value(data: Any, path: tuple[Any, ...]) -> Any:
     return value
 
 
+def _first_auth_token(data: Any) -> Optional[str]:
+    """Return ``authToken`` of the app's response shape, flat or nested.
+
+    The SDA ``vot-auth`` call answers with the token at the root (live E07
+    trace, issue #2); the gateway wrappers used by other routes nest it under
+    ``data`` or ``params``, so all three shapes are accepted.
+    """
+    if not isinstance(data, dict):
+        return None
+    for candidate in (data, data.get("data"), data.get("params")):
+        if isinstance(candidate, dict) and candidate.get("authToken"):
+            return str(candidate["authToken"])
+    return None
+
+
 def _as_int(value: Any) -> Optional[int]:
     try:
         return int(value)
@@ -291,6 +315,25 @@ def _is_charge_connection(value: Any) -> bool:
     plugged in.
     """
     return _as_int(value) not in (None, 0, 1)
+
+
+def _gun_connected(value: Any) -> bool:
+    """Return whether a gun value means connected, accepting codes or booleans.
+
+    The normalizers resolve the S05 flags from the charging state and send
+    booleans; the raw connection fields keep their ``0``/``1`` not-connected
+    rule.
+    """
+    if isinstance(value, bool):
+        return value
+    return _is_charge_connection(value)
+
+
+def _gun_connected_optional(value: Any) -> Optional[bool]:
+    """Return ``None`` when the vehicle did not report a gun value."""
+    if value is None:
+        return None
+    return _gun_connected(value)
 
 
 def _to_millis(value: Any) -> Optional[int]:
@@ -1268,7 +1311,7 @@ class DeepalIntlClient:
         if charge_status not in (None, 0):
             charger_connected = True
         else:
-            charger_connected = _is_charge_connection(charge.get("chargeConStatus"))
+            charger_connected = _gun_connected(charge.get("chargeConStatus"))
 
         doors = door.get("doors") or []
 
@@ -1296,8 +1339,9 @@ class DeepalIntlClient:
             remaining_range_km=_as_int(status.get("drvMileage")),
             charging_status=str(charge_status) if charge_status is not None else None,
             charger_connected=charger_connected,
-            dc_gun_connected=_is_charge_connection(
-                charge.get("dcChargeGunConnectStatus")
+            dc_gun_connected=_gun_connected(charge.get("dcChargeGunConnectStatus")),
+            ac_gun_connected=_gun_connected_optional(
+                charge.get("acChargeGunConnectStatus")
             ),
             charge_current_a=clean_charge_current(
                 charge.get("chargeCurrent"), "charge.chargeCurrent"
@@ -1490,7 +1534,6 @@ class DeepalIntlClient:
                 battery_12v=_as_bool(warnings.get("battery12v")),
                 tpms=_as_bool(warnings.get("tpms")),
                 abs=_as_bool(warnings.get("abs")),
-                airbag=_as_bool(warnings.get("airbag")),
                 brake_fluid=_as_bool(warnings.get("brakeFluid")),
                 brake=_as_bool(warnings.get("brake")),
                 eps=_as_bool(warnings.get("eps")),
@@ -1498,9 +1541,6 @@ class DeepalIntlClient:
                 power_system=_as_bool(warnings.get("powerSystem")),
                 traction_battery_low=_as_bool(
                     warnings.get("tractionBatteryLow")
-                ),
-                coolant_temperature=_as_bool(
-                    warnings.get("coolantTemperature")
                 ),
             ),
             key_battery_low=_as_bool(raw.get("keyBatteryLow")),
@@ -1619,6 +1659,142 @@ class DeepalIntlClient:
         self._mqtt_token = token
         self._mqtt_token_expires_at = time.monotonic() + self.mqtt_token_ttl
         return token
+
+    async def get_sda_broker_config(self, vehicle_id: str) -> SdaBrokerConfig:
+        """Fetch the SDA broker connection configuration for a vehicle.
+
+        The app calls the ``sda-app-control`` variant on the SDA gateway (the
+        one the probe verified live on the E07, issue #2); the ``vot-app-conf``
+        alternate recovered from the 1.12.0 DEX stays defined in ``endpoints``
+        until the capture confirms which one the app uses.
+        """
+        data = await self._request(
+            INTL_SDA_GET_MQTT_SERVER_CONFIG,
+            auth_required=True,
+            base_url=self.sda_base_url,
+            method="GET",
+            query={"carId": vehicle_id},
+        )
+        return parse_sda_broker_config(data)
+
+    async def get_sda_auth_token(self) -> str:
+        """Fetch the SDA ``vot-auth`` token the broker accepts as password.
+
+        The official app calls this endpoint as a GET without parameters and
+        the account identity travels in the session headers (issue #2 trace);
+        the gateway envelope carries ``authToken`` flat or nested.
+        """
+        data = await self._request(
+            INTL_SDA_GET_AUTH_TOKEN,
+            auth_required=True,
+            base_url=self.sda_base_url,
+            method="GET",
+        )
+        token = _first_auth_token(data)
+        if not token:
+            raise DeepalAuthError("SDA auth response did not include an authToken.")
+        return token
+
+    async def _sda_device_ids(self, vehicle_id: str) -> tuple[str, ...]:
+        """Collect the car's MQTT device DID candidates for an SDA session.
+
+        The SDA broker configuration carries no device id, so the candidates
+        come from the CA connection config and the function tree — the same
+        sources the probe used on the E07 (issue #2). Each source is optional:
+        a missing one only removes candidates.
+        """
+        candidates: list[str] = []
+        config: Optional[Mapping[str, Any]] = None
+        try:
+            config = await self.get_mqtt_config(vehicle_id)
+        except DeepalError:
+            config = None
+        if isinstance(config, Mapping):
+            topics = resolve_mqtt_topics(config, None)
+            for did in (topics.device_did, topics.login_did):
+                if did and did not in candidates:
+                    candidates.append(did)
+            for did in device_id_candidates(config):
+                if did not in candidates:
+                    candidates.append(did)
+        tree: Optional[Mapping[str, Any]] = None
+        try:
+            tree = await self.get_car_function_config(vehicle_id)
+        except DeepalError:
+            tree = None
+        for did in device_id_candidates(tree or {}):
+            if did not in candidates:
+                candidates.append(did)
+        return tuple(candidates)
+
+    async def open_sda_session(
+        self,
+        vehicle_id: str,
+        *,
+        device_ids: Optional[Sequence[str]] = None,
+        topics: Optional[Sequence[str]] = None,
+        seconds: float = 10.0,
+        login: bool = False,
+    ) -> SdaSessionResult:
+        """Open a read-only session on the SDA broker for an SDA-MQTT vehicle.
+
+        Resolves the broker configuration and the ``vot-auth`` token, then
+        connects with the app's confirmed ``authType 2`` identity
+        (``clientId``/``username`` = a device DID, password = the token), trying
+        the known DIDs in order and keeping the accepted one. Subscriptions
+        default to the event and login topics the broker configuration and the
+        CA configuration describe. No command is ever published; ``login`` opts
+        into the ``client/loginout`` exchange that opens the app's session. A
+        broker rejection raises a typed error so the integration can
+        reauthenticate.
+        """
+        config = await self.get_sda_broker_config(vehicle_id)
+        if not config.usable or not config.host or not config.port:
+            raise DeepalAPIError(
+                "SDA broker configuration did not include host and port."
+            )
+        token = await self.get_sda_auth_token()
+        candidates = (
+            tuple(device_ids)
+            if device_ids
+            else await self._sda_device_ids(vehicle_id)
+        )
+        if not candidates:
+            raise DeepalAPIError(
+                "SDA session needs the car's device DID; none was found in the "
+                "CA configuration or the function tree."
+            )
+        subscriptions = (
+            tuple(topics)
+            if topics is not None
+            else sda_session_topics(config.payload, candidates[0], car_id=vehicle_id)
+        )
+        result = await sda_broker_session(
+            config.host,
+            config.port,
+            device_ids=candidates,
+            password=token,
+            topics=subscriptions,
+            seconds=seconds,
+            timeout=self.timeout,
+            keepalive=self.mqtt_keepalive,
+            ssl_context=await asyncio.to_thread(self._mqtt_ssl_context),
+            login=login,
+        )
+        if result.connected:
+            return result
+        if result.connack_reason is not None:
+            reason = MQTT_CONNACK_REASONS.get(
+                result.connack_reason, "unknown reason code"
+            )
+            raise DeepalAuthError(
+                "SDA broker rejected the session: "
+                f"reason code {result.connack_reason} ({reason}); the account "
+                "session or the device DID may be stale."
+            )
+        raise DeepalConnectionError(
+            "Could not reach the SDA broker for the resolved device DIDs."
+        )
 
     async def s05_mqtt_condition(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False

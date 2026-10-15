@@ -22,10 +22,20 @@ jobs:
           python-version: "3.14"
 
       - name: Install the SDK with its test and Home Assistant dependencies
-        run: pip install -e "deepal_sdk[dev,ha]"
+        run: |
+          for sdk in deepal_sdk mazda_sdk; do
+            if [ -d "$sdk" ]; then
+              pip install -e "$sdk[dev,ha]"
+            fi
+          done
 
       - name: Compile every Python file
-        run: python -m compileall -q custom_components/deepal deepal_sdk
+        run: |
+          for path in custom_components deepal_sdk mazda_sdk; do
+            if [ -d "$path" ]; then
+              python -m compileall -q "$path"
+            fi
+          done
 
       - name: Validate every JSON file
         run: |
@@ -33,19 +43,23 @@ jobs:
           import json
           from pathlib import Path
 
-          for path in Path("custom_components/deepal").rglob("*.json"):
+          for path in Path("custom_components").rglob("*.json"):
               json.loads(path.read_text(encoding="utf-8"))
           json.loads(Path("hacs.json").read_text(encoding="utf-8"))
           print("JSON OK")
           EOF
 
-      - name: Run the test suite
+      - name: Run the test suites
         run: |
           set -o pipefail
-          if pytest deepal_sdk/tests -q 2>&1 | tee pytest.log; then
-            exit 0
-          fi
-          # Surface the failure in the check annotations: the job log needs
-          # admin rights, the annotation does not.
-          tail -n 10 pytest.log | sed 's/^/::error::/'
-          exit 1
+          for sdk in deepal_sdk mazda_sdk; do
+            if [ -d "$sdk/tests" ]; then
+              if pytest "$sdk/tests" -q 2>&1 | tee "pytest-$sdk.log"; then
+                continue
+              fi
+              # Surface the failure in the check annotations: the job log
+              # needs admin rights, the annotation does not.
+              tail -n 10 "pytest-$sdk.log" | sed 's/^/::error::/'
+              exit 1
+            fi
+          done

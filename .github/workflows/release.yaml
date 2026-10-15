@@ -25,12 +25,24 @@ jobs:
           from pathlib import Path
 
           tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          components = sorted(
+              path for path in Path("custom_components").iterdir() if path.is_dir()
+          )
+          if len(components) != 1:
+              sys.exit(
+                  "expected exactly one integration under custom_components/, "
+                  f"found {len(components)}"
+              )
+          component = components[0]
           version = json.loads(
-              Path("custom_components/deepal/manifest.json").read_text(encoding="utf-8")
+              (component / "manifest.json").read_text(encoding="utf-8")
           )["version"]
           if tag != version:
-              sys.exit(f"Tag {tag} does not match manifest version {version}")
-          print(f"Tag {tag} matches manifest version")
+              sys.exit(
+                  f"Tag {tag} does not match manifest version {version} "
+                  f"of {component}"
+              )
+          print(f"Tag {tag} matches manifest version of {component}")
           EOF
 
       - name: Create or update the release

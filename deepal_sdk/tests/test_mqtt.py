@@ -18,16 +18,21 @@ from deepal.mqtt import (
     build_publish_packet,
     build_subscribe_packet,
     condition_request_payload,
+    device_id_candidates,
     login_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
     normalize_sda_params,
     parse_connack,
     parse_publish,
+    parse_sda_broker_config,
+    parse_suback,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    sda_broker_session,
     sda_condition_plan,
     sda_condition_request_payload,
+    sda_session_topics,
     secret_from_login_payload,
     topic_device_id,
     unmapped_s05_keys,
@@ -655,7 +660,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["charge"]["acChargeCurrent"] == 16.2
     assert condition["charge"]["chargeCurrent"] == 16.2
     assert condition["charge"]["remainChargeTime"] == 95
-    assert condition["charge"]["dcChargeGunConnectStatus"] == 0
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
     assert condition["door"]["hood"] == 0
     assert condition["lamp"]["highBeam"] == 1
     assert condition["lamp"]["positionLamp"] == 1
@@ -717,6 +722,54 @@ def test_normalize_s05_params_keeps_reported_currents_for_an_unknown_state():
     assert condition["charge"]["acChargeCurrent"] == 0.0
 
 
+def test_normalize_s05_params_maps_the_dc_gun_from_the_state():
+    condition = normalize_s05_params({"ChrgSts": 2})
+
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_maps_the_ac_gun_from_the_state():
+    condition = normalize_s05_params({"ChrgSts": 1})
+
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_ignores_stale_gun_fields_when_unplugged():
+    condition = normalize_s05_params(
+        {
+            "ChrgSts": 0,
+            "acChargeGunConnectionState": 3,
+            "dcDhargeGunConnectionState": 3,
+        }
+    )
+
+    assert condition["charge"]["chargeConStatus"] is False
+    assert condition["charge"]["acChargeGunConnectStatus"] is False
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_falls_back_to_the_gun_fields_without_a_state():
+    condition = normalize_s05_params(
+        {"acChargeGunConnectionState": 0, "dcDhargeGunConnectionState": 3}
+    )
+
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is False
+
+    unrecognized = normalize_s05_params(
+        {"ChrgSts": 9, "acChargeGunConnectionState": 3}
+    )
+
+    assert unrecognized["charge"]["chargeConStatus"] is True
+    assert unrecognized["charge"]["acChargeGunConnectStatus"] is True
+    assert unrecognized["charge"]["dcChargeGunConnectStatus"] is None
+
+
 def test_normalize_s05_params_maps_warnings_and_window_openings():
     params = {
         "batt12VLightStatus": 0,
@@ -742,7 +795,6 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
 
     assert normalized["warningLights"]["tpms"] is True
     assert normalized["warningLights"]["battery12v"] is False
-    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["keyBatteryLow"] is True
     assert normalized["airRecirculation"] is True
     assert normalized["windowOpenings"] == {
@@ -758,14 +810,12 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
         "battery12v",
         "tpms",
         "abs",
-        "airbag",
         "brakeFluid",
         "brake",
         "eps",
         "powerLimit",
         "powerSystem",
         "tractionBatteryLow",
-        "coolantTemperature",
     }
     assert empty["warningLights"]["tpms"] is None
     assert empty["keyBatteryLow"] is None
@@ -819,13 +869,13 @@ def test_normalize_s05_params_accepts_legacy_spellings():
     condition = normalize_s05_params(
         {
             "lastUpdatedAt": "2026-09-18T10:00:00Z",
-            "dcChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 3,
             "hoodStatus": 1,
         }
     )
     assert condition["lastUpdatedAt"] == 1789725600000
-    assert condition["charge"]["dcChargeGunConnectStatus"] == 1
-    assert condition["charge"]["chargeConStatus"] == 1
+    assert condition["charge"]["dcChargeGunConnectStatus"] is True
+    assert condition["charge"]["chargeConStatus"] is True
     assert condition["door"]["hood"] == 1
 
 
@@ -950,3 +1000,248 @@ def test_unmapped_s05_keys_returns_only_unknown_fields():
 
 def test_unmapped_s05_keys_empty_for_mapped_payload():
     assert unmapped_s05_keys({key: 0 for key in MAPPED_S05_KEYS}) == set()
+
+
+# SDA broker bootstrap and session (change add-sda-remote-controls).
+
+
+class _WriteLog:
+    """StreamWriter stand-in that keeps every write as its own packet."""
+
+    def __init__(self) -> None:
+        self.packets: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.packets.append(bytes(data))
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+class _ScriptedBroker:
+    """Broker double whose pre-fed bytes are consumed in order."""
+
+    def __init__(self, script: bytes = b"") -> None:
+        self.reader = asyncio.StreamReader()
+        self.writer = _WriteLog()
+        if script:
+            self.reader.feed_data(script)
+
+
+def _install_broker(monkeypatch: Any, broker: _ScriptedBroker) -> None:
+    async def fake_open_connection(host, port, *, ssl=None, server_hostname=None):
+        return broker.reader, broker.writer
+
+    monkeypatch.setattr(asyncio, "open_connection", fake_open_connection)
+
+
+def _connack(reason: int) -> bytes:
+    return bytes([0x20, 0x02, 0x00, reason])
+
+
+def _suback(packet_id: int, reasons: list[int]) -> bytes:
+    body = packet_id.to_bytes(2, "big") + bytes(reasons)
+    return bytes([0x90, len(body)]) + body
+
+
+def _split_packet(data: bytes) -> tuple[int, bytes]:
+    first = data[0]
+    multiplier, remaining, pos = 1, 0, 1
+    while True:
+        byte = data[pos]
+        pos += 1
+        remaining += (byte & 0x7F) * multiplier
+        if not byte & 0x80:
+            break
+        multiplier *= 128
+    return first, data[pos : pos + remaining]
+
+
+def test_parse_sda_broker_config_unwraps_and_normalizes_types():
+    raw = {
+        "code": "0",
+        "data": {
+            "mqttConnectionInfos": [
+                {
+                    "mqttHost": "prod-appmq.sda.changanauto.sg",
+                    "mqttPort": "8883",
+                    "clusterName": "APN1",
+                    "authType": "2",
+                }
+            ]
+        },
+    }
+
+    config = parse_sda_broker_config(raw)
+
+    assert config.usable
+    assert config.host == "prod-appmq.sda.changanauto.sg"
+    assert config.port == 8883
+    assert config.cluster_name == "APN1"
+    assert config.auth_type == 2
+    assert config.payload["mqttHost"] == "prod-appmq.sda.changanauto.sg"
+
+
+def test_parse_sda_broker_config_tolerates_missing_fields():
+    assert parse_sda_broker_config({}).usable is False
+    assert parse_sda_broker_config(["not", "a", "mapping"]).usable is False
+    assert parse_sda_broker_config({"host": "h"}).usable is False
+    assert parse_sda_broker_config(
+        {"host": "h", "port": "not-a-port"}
+    ).port is None
+
+
+def test_device_id_candidates_walks_nested_sources_in_order():
+    ca_config = {
+        "mqttConnectionInfos": [
+            {"deviceId": "did-ca", "clusterInfos": [{"deviceId": "did-ca"}]}
+        ]
+    }
+    tree = {
+        "data": {
+            "nodes": [
+                {"deviceId": "did-tree"},
+                {"child": {"deviceId": "did-tree"}},
+                {"deviceId": 12345},
+                {"deviceId": ""},
+            ]
+        }
+    }
+
+    assert device_id_candidates(ca_config, tree) == ("did-ca", "did-tree")
+    assert device_id_candidates() == ()
+
+
+def test_sda_session_topics_uses_the_car_id_event_topic():
+    topics = sda_session_topics({}, "did-1", car_id="car-1")
+
+    assert topics == (
+        "$vdp/did-1/server/loginout",
+        "$vdp/did-1/car-1/server/event",
+        "$vdp/did-1/client/loginout",
+        "$vdp/did-1/properties/set/req",
+    )
+
+    without_car = sda_session_topics({}, "did-1")
+
+    assert "$vdp/did-1/did-1/server/event" in without_car
+    assert "$vdp/did-1/car-1/server/event" not in without_car
+
+
+def test_parse_suback_returns_packet_id_and_reason_codes():
+    assert parse_suback(0x90, b"\x00\x01\x00\x01") == (1, [0, 1])
+    assert parse_suback(0x90, b"\x00") == (None, [])
+    assert parse_suback(0x30, b"\x00\x01\x00") == (None, [])
+
+
+@pytest.mark.asyncio
+async def test_sda_broker_session_tries_dids_subscribes_and_acks(monkeypatch):
+    event = build_publish_packet(
+        "$vdp/did-2/car-1/server/event",
+        {
+            "h": {"r": "ev-1", "sk": "Et_IT001", "m": "Et_IT001"},
+            "d": {"p": {"DrvrDoorLockLogicSts": 2}},
+        },
+        qos=1,
+        packet_id=7,
+    )
+    broker = _ScriptedBroker(
+        _connack(0x87) + _connack(0x00) + _suback(1, [0x01, 0x00]) + event
+    )
+    _install_broker(monkeypatch, broker)
+
+    result = await sda_broker_session(
+        "prod-appmq.example",
+        8883,
+        device_ids=["did-1", "did-2", "did-2"],
+        password="token-123",
+        topics=["$vdp/did-2/car-1/server/event", "$vdp/did-2/client/loginout"],
+        seconds=0.05,
+        timeout=1.0,
+    )
+
+    assert result.connected is True
+    assert result.device_id == "did-2"
+    assert result.attempts == (
+        {"device_id": "did-1", "connack_reason": 0x87},
+        {"device_id": "did-2", "connack_reason": 0},
+    )
+    assert result.subscriptions == (
+        {"topic": "$vdp/did-2/car-1/server/event", "reason": 0x01},
+        {"topic": "$vdp/did-2/client/loginout", "reason": 0x00},
+    )
+    assert len(result.messages) == 1
+    assert result.messages[0]["topic"] == "$vdp/did-2/car-1/server/event"
+    assert result.messages[0]["qos"] == 1
+    assert result.messages[0]["dup"] is False
+    assert result.messages[0]["payload"]["d"]["p"]["DrvrDoorLockLogicSts"] == 2
+    # The QoS 1 delivery is acknowledged and the session closes with DISCONNECT.
+    assert broker.writer.packets[-2] == build_puback_packet(7)
+    assert broker.writer.packets[-1] == build_disconnect_packet()
+    assert broker.writer.closed
+    # A read-only session never publishes (CONNECT/SUBSCRIBE/PUBACK only).
+    assert not any(packet[0] >> 4 == 3 for packet in broker.writer.packets)
+
+
+@pytest.mark.asyncio
+async def test_sda_broker_session_reports_rejections_without_subscribing(monkeypatch):
+    broker = _ScriptedBroker(_connack(0x87) + _connack(0x9E))
+    _install_broker(monkeypatch, broker)
+
+    result = await sda_broker_session(
+        "prod-appmq.example",
+        8883,
+        device_ids=["did-1", "did-2"],
+        password="token-123",
+        topics=["$vdp/did-1/car-1/server/event"],
+        seconds=0.02,
+        timeout=1.0,
+    )
+
+    assert result.connected is False
+    assert result.device_id is None
+    assert result.connack_reason == 0x9E
+    assert [attempt["connack_reason"] for attempt in result.attempts] == [0x87, 0x9E]
+    assert result.messages == ()
+    assert not any(packet[0] >> 4 in (3, 8) for packet in broker.writer.packets)
+
+
+@pytest.mark.asyncio
+async def test_sda_broker_session_login_publishes_the_loginout(monkeypatch):
+    secret = "secret-key-12345"
+    login_response = build_publish_packet(
+        "$vdp/did-1/server/loginout",
+        {"r": "login-1", "rs": [{"params": {"secretKey": secret}}]},
+        qos=1,
+        packet_id=3,
+    )
+    broker = _ScriptedBroker(_connack(0x00) + _suback(1, [0x01]) + login_response)
+    _install_broker(monkeypatch, broker)
+
+    result = await sda_broker_session(
+        "prod-appmq.example",
+        8883,
+        device_ids=["did-1"],
+        password="token-123",
+        topics=["$vdp/did-1/server/loginout"],
+        seconds=0.05,
+        timeout=1.0,
+        login=True,
+    )
+
+    publishes = [packet for packet in broker.writer.packets if packet[0] >> 4 == 3]
+    assert len(publishes) == 1
+    first, body = _split_packet(publishes[0])
+    topic, payload, _ = parse_publish(first, body)
+    assert topic == "$vdp/did-1/client/loginout"
+    assert payload["did"] == "did-1"
+    assert payload["mt"] == "loginout"
+    assert result.secret_key == secret
+    assert build_puback_packet(3) in broker.writer.packets

@@ -153,6 +153,21 @@ INTL_CA_APP_APIGW_GET_AUTH_TOKEN = (
     "/app-apigw/vot-auth/api/token/getAuthTokenByUserId"
 )
 
+# SDA gateway broker bootstrap (SDA-MQTT vehicles, change add-sda-remote-controls).
+# Both configuration paths exist in the 1.12.0 DEX (CarControlApiKt
+# GET_MQTT_SERVER_CONFIG and GETMQTTSERVERCONFIG); the primary is the one the
+# probe verified live on the E07 (issue #2, 14-oct-2026) and the alternate stays
+# defined until the capture confirms which one the app calls.
+INTL_SDA_GET_MQTT_SERVER_CONFIG = (
+    "/app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/get-mqtt-server-config"
+)
+INTL_SDA_GET_MQTT_SERVER_CONFIG_ALT = (
+    "/app-apigw/vot-app-conf/api/v1/app/config/get-mqtt-server-config"
+)
+# The SDA session token is the vot-auth call without parameters on the SDA host
+# (issue #2 trace); the path is shared with the app-apigw fallback above.
+INTL_SDA_GET_AUTH_TOKEN = INTL_CA_APP_APIGW_GET_AUTH_TOKEN
+
 # Digital key endpoints (ApiKt.java in the 1.12.0 DEX). The /app-apigw prefix is
 # served by the regional SDA gateway, not by the CA host (verified live).
 INTL_CA_GET_CAR_AUTH_LIST = (

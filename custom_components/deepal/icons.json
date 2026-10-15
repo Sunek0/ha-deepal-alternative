@@ -22,6 +22,9 @@
       "dc_gun_connected": {
         "default": "mdi:ev-plug-ccs2"
       },
+      "ac_gun_connected": {
+        "default": "mdi:ev-plug-type2"
+      },
       "door_front_left": {
         "default": "mdi:car-door"
       },
@@ -103,17 +106,11 @@
       "warning_abs": {
         "default": "mdi:car-brake-abs"
       },
-      "warning_airbag": {
-        "default": "mdi:airbag"
-      },
       "warning_brake": {
         "default": "mdi:car-brake-alert"
       },
       "warning_brake_fluid": {
         "default": "mdi:car-brake-fluid-level"
-      },
-      "warning_coolant_temperature": {
-        "default": "mdi:coolant-temperature"
       },
       "warning_eps": {
         "default": "mdi:steering"

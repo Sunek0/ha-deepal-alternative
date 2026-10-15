@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 
 My Changan*.apk
+MAZDA*.apk
 alauncher/
 alauncher-*/
 extracted/

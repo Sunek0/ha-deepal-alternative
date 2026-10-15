@@ -33,6 +33,7 @@ from deepal import (
 from deepal.mqtt import (
     SDA_CONDITION_SECTIONS,
     MqttExchangeResult,
+    SdaSessionResult,
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_publish_packet,
@@ -46,6 +47,7 @@ from deepal.intl import (
 from deepal.endpoints import (
     INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
     INTL_CA_GET_CAR_CONF_FUNC,
+    INTL_CA_GET_CONN_CONF,
     INTL_CHARGE_ADD_PLAN,
     INTL_CHARGE_DELETE_PLAN,
     INTL_CHARGE_VALIDITY,
@@ -78,6 +80,8 @@ from deepal.endpoints import (
     INTL_LOGIN_BY_MOBILE_PASSWORD,
     INTL_LOGOUT,
     INTL_REFRESH_TOKEN,
+    INTL_SDA_GET_AUTH_TOKEN,
+    INTL_SDA_GET_MQTT_SERVER_CONFIG,
     INTL_SEND_EMAIL_CODE,
     INTL_SEND_SMS_CODE,
 )
@@ -3447,6 +3451,31 @@ async def test_get_vehicle_condition_without_dc_gun_field():
 
     assert condition.battery.charger_connected is False
     assert condition.battery.dc_gun_connected is False
+    assert condition.battery.ac_gun_connected is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_accepts_normalized_gun_flags():
+    payload = {
+        "charge": {
+            "chargeStatus": 2,
+            "chargeConStatus": True,
+            "acChargeGunConnectStatus": False,
+            "dcChargeGunConnectStatus": True,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is True
+    assert condition.battery.ac_gun_connected is False
+    assert condition.battery.dc_gun_connected is True
 
 
 def _command_handler(public_key, captured: dict):
@@ -4951,3 +4980,248 @@ async def test_requests_pass_the_client_timeout():
 
     assert http_client.calls
     assert http_client.calls[0]["timeout"] == client.timeout
+
+
+# SDA broker bootstrap and session (change add-sda-remote-controls).
+
+
+def _sda_bootstrap_handler(captured: dict[str, Any]):
+    """MockTransport handler covering the SDA bootstrap and the DID sources."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.setdefault("calls", []).append(
+            {
+                "method": request.method,
+                "path": request.url.path,
+                "host": request.url.host,
+                "query": dict(request.url.params),
+            }
+        )
+        path = request.url.path
+        if path == INTL_SDA_GET_MQTT_SERVER_CONFIG:
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": {
+                        "host": "prod-appmq.sda.changanauto.sg",
+                        "port": 8883,
+                        "clusterName": "APN1",
+                        "authType": 2,
+                    },
+                },
+            )
+        if path == INTL_SDA_GET_AUTH_TOKEN:
+            return httpx.Response(
+                200, json={"code": "0", "data": {"authToken": "sda-token-123"}}
+            )
+        if path == INTL_CA_GET_CONN_CONF:
+            return httpx.Response(
+                200,
+                json={
+                    "code": "0",
+                    "data": {
+                        "mqttConnectionInfos": [
+                            {
+                                "clientId": "did-ca",
+                                "clusterInfos": [
+                                    {"brokerUrl": "ssl://ca-rtm", "brokerPort": 8883}
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+        if path == INTL_CA_GET_CAR_CONF_FUNC:
+            return httpx.Response(
+                200, json={"data": {"nodes": [{"deviceId": "did-tree"}]}}
+            )
+        return httpx.Response(200, json={})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_sda_broker_config_uses_the_sda_gateway_endpoint():
+    captured: dict[str, Any] = {}
+    client = _client(_sda_bootstrap_handler(captured))
+    client.access_token = "test_token_123"
+
+    try:
+        config = await client.get_sda_broker_config("car-1")
+    finally:
+        await client.close()
+
+    call = captured["calls"][0]
+    assert call["method"] == "GET"
+    assert call["path"] == INTL_SDA_GET_MQTT_SERVER_CONFIG
+    assert call["host"] == "sda-m.iov.changanauto.com.de"
+    assert call["query"] == {"carId": "car-1"}
+    assert config.usable is True
+    assert config.host == "prod-appmq.sda.changanauto.sg"
+    assert config.port == 8883
+    assert config.cluster_name == "APN1"
+    assert config.auth_type == 2
+
+
+@pytest.mark.asyncio
+async def test_sda_auth_token_uses_the_parameter_less_app_call():
+    captured: dict[str, Any] = {}
+    client = _client(_sda_bootstrap_handler(captured))
+    client.access_token = "test_token_123"
+
+    try:
+        token = await client.get_sda_auth_token()
+    finally:
+        await client.close()
+
+    call = captured["calls"][0]
+    assert token == "sda-token-123"
+    assert call["method"] == "GET"
+    assert call["path"] == INTL_SDA_GET_AUTH_TOKEN
+    assert call["host"] == "sda-m.iov.changanauto.com.de"
+    assert call["query"] == {}
+
+
+@pytest.mark.asyncio
+async def test_sda_auth_token_accepts_wrapped_responses():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"authToken": "wrapped-token"}})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    try:
+        token = await client.get_sda_auth_token()
+    finally:
+        await client.close()
+
+    assert token == "wrapped-token"
+
+
+@pytest.mark.asyncio
+async def test_sda_auth_token_raises_without_the_token():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": "0"})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    try:
+        with pytest.raises(DeepalAuthError):
+            await client.get_sda_auth_token()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_open_sda_session_wires_bootstrap_identity_and_topics(monkeypatch):
+    captured_calls: dict[str, Any] = {}
+    captured: dict[str, Any] = {}
+
+    async def fake_session(
+        host, port, *, device_ids, password, topics, seconds, timeout, keepalive,
+        ssl_context, login,
+    ):
+        captured.update(
+            host=host,
+            port=port,
+            device_ids=tuple(device_ids),
+            password=password,
+            topics=tuple(topics),
+            seconds=seconds,
+            timeout=timeout,
+            keepalive=keepalive,
+            ssl_context=ssl_context,
+            login=login,
+        )
+        return SdaSessionResult(connected=True, device_id="did-tree")
+
+    monkeypatch.setattr("deepal.intl.sda_broker_session", fake_session)
+    client = _client(_sda_bootstrap_handler(captured_calls))
+    client.access_token = "test_token_123"
+
+    try:
+        result = await client.open_sda_session("car-1", seconds=0.25)
+    finally:
+        await client.close()
+
+    assert result.connected is True
+    assert result.device_id == "did-tree"
+    assert captured["host"] == "prod-appmq.sda.changanauto.sg"
+    assert captured["port"] == 8883
+    assert captured["device_ids"] == ("did-ca", "did-tree")
+    assert captured["password"] == "sda-token-123"
+    assert "$vdp/did-ca/car-1/server/event" in captured["topics"]
+    assert "$vdp/did-ca/client/loginout" in captured["topics"]
+    assert captured["seconds"] == 0.25
+    assert captured["login"] is False
+    assert captured["ssl_context"] is not None
+
+
+@pytest.mark.asyncio
+async def test_open_sda_session_maps_a_rejection_to_the_auth_error(monkeypatch):
+    async def fake_session(host, port, **kwargs):
+        return SdaSessionResult(
+            connected=False,
+            connack_reason=0x87,
+            attempts=({"device_id": "did-ca", "connack_reason": 0x87},),
+        )
+
+    monkeypatch.setattr("deepal.intl.sda_broker_session", fake_session)
+    client = _client(_sda_bootstrap_handler({}))
+    client.access_token = "test_token_123"
+
+    try:
+        with pytest.raises(DeepalAuthError) as error:
+            await client.open_sda_session("car-1", seconds=0.1)
+    finally:
+        await client.close()
+
+    assert "135" in str(error.value)
+    assert "not authorized" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_open_sda_session_maps_a_transport_failure_to_connection_error(monkeypatch):
+    async def fake_session(host, port, **kwargs):
+        return SdaSessionResult(
+            connected=False,
+            attempts=({"device_id": "did-ca", "error": "OSError"},),
+        )
+
+    monkeypatch.setattr("deepal.intl.sda_broker_session", fake_session)
+    client = _client(_sda_bootstrap_handler({}))
+    client.access_token = "test_token_123"
+
+    try:
+        with pytest.raises(DeepalConnectionError):
+            await client.open_sda_session("car-1", seconds=0.1)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_open_sda_session_requires_a_device_did():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == INTL_SDA_GET_MQTT_SERVER_CONFIG:
+            return httpx.Response(
+                200,
+                json={"code": "0", "data": {"host": "prod-appmq", "port": 8883}},
+            )
+        if request.url.path == INTL_SDA_GET_AUTH_TOKEN:
+            return httpx.Response(
+                200, json={"code": "0", "data": {"authToken": "sda-token-123"}}
+            )
+        return httpx.Response(200, json={"code": "0", "data": {}})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    try:
+        with pytest.raises(DeepalAPIError) as error:
+            await client.open_sda_session("car-1", seconds=0.1)
+    finally:
+        await client.close()
+
+    assert "device DID" in str(error.value)

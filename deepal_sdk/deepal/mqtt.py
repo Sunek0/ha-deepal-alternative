@@ -14,8 +14,9 @@ import gzip
 import hashlib
 import json
 import logging
+import ssl
 import struct
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Optional
@@ -729,6 +730,129 @@ def resolve_mqtt_topics(
     )
 
 
+@dataclass(frozen=True)
+class SdaBrokerConfig:
+    """SDA broker bootstrap parsed from ``get-mqtt-server-config``.
+
+    ``payload`` keeps the flattened response so the capture can confirm the
+    remaining open question (which of the two DEX-confirmed config variants the
+    app calls) without another round trip.
+    """
+
+    host: Optional[str] = None
+    port: Optional[int] = None
+    cluster_name: Optional[str] = None
+    auth_type: Optional[int] = None
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def usable(self) -> bool:
+        """Whether the configuration carries a connectable broker."""
+        return bool(self.host and self.port)
+
+
+def parse_sda_broker_config(raw: Any) -> SdaBrokerConfig:
+    """Pull host, port, cluster and ``authType`` out of the config response.
+
+    The gateway wraps the payload in ``data``/``params`` and the SDA response
+    repeats the CA shape (``mqttConnectionInfos[0]``), so both levels are
+    unwrapped before reading. Field names follow the live E07 response
+    (issue #2, 1-oct-2026).
+    """
+    payload: Any = raw
+    if isinstance(payload, Mapping):
+        for key in ("data", "params"):
+            value = payload.get(key)
+            if isinstance(value, Mapping) and value:
+                payload = value
+                break
+    if not isinstance(payload, Mapping):
+        return SdaBrokerConfig()
+    infos = payload.get("mqttConnectionInfos")
+    if isinstance(infos, list) and infos and isinstance(infos[0], Mapping):
+        payload = {**payload, **infos[0]}
+    port = payload.get("port") or payload.get("mqttPort")
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = None
+    auth_type = payload.get("authType")
+    try:
+        auth_type = int(auth_type)
+    except (TypeError, ValueError):
+        auth_type = None
+    return SdaBrokerConfig(
+        host=payload.get("host") or payload.get("mqttHost"),
+        port=port,
+        cluster_name=payload.get("clusterName"),
+        auth_type=auth_type,
+        payload=dict(payload),
+    )
+
+
+def device_id_candidates(*sources: Any) -> tuple[str, ...]:
+    """Collect unique ``deviceId`` strings from broker configs and function trees.
+
+    The SDA CONNECT identity is the car's device DID, but the sources offer
+    several candidates (CA connection config, function tree) and only the
+    broker knows which one belongs to the MQTT device: the probe tried them in
+    order and the SDK keeps the accepted one (issue #2, 15-oct-2026).
+    """
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if str(key).lower() == "deviceid" and isinstance(item, str):
+                    if item and item not in found:
+                        found.append(item)
+                else:
+                    walk(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                walk(item)
+
+    for source in sources:
+        walk(source)
+    return tuple(found)
+
+
+def sda_session_topics(
+    config: Any, device_id: str, car_id: Optional[str] = None
+) -> tuple[str, ...]:
+    """Return the topics an SDA broker session subscribes to.
+
+    The broker delivers events as ``$vdp/<did>/<car_id>/server/event`` (live
+    probe, 15-oct-2026), so the event filter uses the car id when it is known
+    instead of the CA fallback that repeats the DID. The account's own publish
+    topics are included so the session sees its own login exchange.
+    """
+    topics = resolve_mqtt_topics(config, device_id)
+    did = topics.device_did or device_id
+    subscriptions = list(topics.subscriptions)
+    if car_id:
+        repeated = EVENT_SUB_TOPIC_TEMPLATE % (did, did)
+        event = EVENT_SUB_TOPIC_TEMPLATE % (did, car_id)
+        subscriptions = [topic for topic in subscriptions if topic != repeated]
+        if event not in subscriptions:
+            subscriptions.append(event)
+    for candidate in (
+        topics.login_publish,
+        topics.properties_publish,
+        topics.properties_set_publish,
+    ):
+        if candidate and candidate not in subscriptions:
+            subscriptions.append(candidate)
+    return tuple(dict.fromkeys(subscriptions))
+
+
+def parse_suback(first: int, body: bytes) -> tuple[Optional[int], list[int]]:
+    """Parse a SUBACK into ``(packet_id, reason_codes)``."""
+    if first >> 4 != 9 or len(body) < 3:
+        return None, []
+    return int.from_bytes(body[:2], "big"), list(body[2:])
+
+
 def _b64decode(value: str) -> bytes:
     return base64.b64decode(value + "=" * ((4 - len(value) % 4) % 4))
 
@@ -955,6 +1079,187 @@ def sda_condition_request_payload(
     return payload
 
 
+@dataclass(frozen=True)
+class SdaSessionResult:
+    """Outcome of one read-only SDA broker session.
+
+    ``attempts`` records one entry per CONNECT identity tried; ``messages``
+    keeps the events received during the window (topic, payload, ``qos`` and
+    ``dup``) with QoS 1 already acknowledged; ``secret_key`` is the login
+    ``secretKey`` when the broker sent it.
+    """
+
+    connected: bool = False
+    device_id: Optional[str] = None
+    connack_reason: Optional[int] = None
+    attempts: tuple[dict[str, Any], ...] = ()
+    subscriptions: tuple[dict[str, Any], ...] = ()
+    messages: tuple[dict[str, Any], ...] = ()
+    secret_key: Optional[str] = None
+
+
+async def sda_broker_session(
+    host: str,
+    port: int,
+    *,
+    device_ids: Sequence[str],
+    password: str,
+    topics: Sequence[str] = (),
+    seconds: float = 10.0,
+    timeout: float = 20.0,
+    keepalive: float = MQTT_DEFAULT_KEEPALIVE,
+    ssl_context: Optional[ssl.SSLContext] = None,
+    login: bool = False,
+) -> SdaSessionResult:
+    """Open a read-only session on the SDA broker with the app's identity.
+
+    The app's ``authType 2`` session uses ``clientId`` = device DID,
+    ``username`` = the same DID and ``password`` = the ``vot-auth`` token
+    (issue #2, 15-oct-2026); the DIDs are tried in order and the accepted one is
+    kept in the result. The session subscribes to the event topics and
+    acknowledges QoS 1 deliveries (without the ack the broker retransmits the
+    whole burst), and never publishes a command: ``login`` only opts into the
+    ``client/loginout`` exchange that opens the app's session. The caller owns
+    the broker configuration, the token and the device DID resolution.
+    """
+    candidates = tuple(dict.fromkeys(str(item) for item in device_ids if item))
+    if not candidates:
+        return SdaSessionResult()
+
+    context = ssl_context or ssl.create_default_context()
+    reader: Optional[asyncio.StreamReader] = None
+    writer: Optional[asyncio.StreamWriter] = None
+    accepted: Optional[str] = None
+    reason: Optional[int] = None
+    attempts: list[dict[str, Any]] = []
+
+    for device_id in candidates:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host, port, ssl=context, server_hostname=host
+                ),
+                timeout,
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            attempts.append({"device_id": device_id, "error": type(exc).__name__})
+            continue
+        try:
+            writer.write(
+                build_connect_packet(
+                    device_id, device_id, password, keepalive=keepalive
+                )
+            )
+            await writer.drain()
+            first, body = await asyncio.wait_for(read_packet(reader), timeout)
+            _session_present, reason = parse_connack(first, body)
+        except (OSError, asyncio.TimeoutError, ValueError) as exc:
+            attempts.append({"device_id": device_id, "error": type(exc).__name__})
+            await _close_writer(writer)
+            reader = writer = None
+            continue
+        attempts.append({"device_id": device_id, "connack_reason": reason})
+        if reason == 0:
+            accepted = device_id
+            break
+        await _close_writer(writer)
+        reader = writer = None
+
+    if accepted is None or reader is None or writer is None:
+        return SdaSessionResult(
+            connected=False,
+            connack_reason=reason,
+            attempts=tuple(attempts),
+        )
+
+    subscriptions: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
+    secret_key: Optional[str] = None
+    try:
+        if topics:
+            writer.write(build_subscribe_packet(1, list(topics)))
+            await writer.drain()
+            first, body = await asyncio.wait_for(read_packet(reader), timeout)
+            _packet_id, reasons = parse_suback(first, body)
+            subscriptions = [
+                {"topic": topic, "reason": code}
+                for topic, code in zip(topics, reasons)
+            ]
+        if login:
+            writer.write(
+                build_publish_packet(
+                    LOGIN_PUB_TOPIC_TEMPLATE % accepted,
+                    login_request_payload(
+                        accepted,
+                        new_request_id(accepted),
+                        basic_info=basic_identifiers(ruid=accepted),
+                    ),
+                )
+            )
+            await writer.drain()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, seconds)
+        while loop.time() < deadline:
+            try:
+                first, body = await read_packet_with_keepalive(
+                    reader,
+                    writer,
+                    min(5.0, max(0.1, deadline - loop.time())),
+                    keepalive=keepalive / 2,
+                )
+            except asyncio.TimeoutError:
+                continue
+            except (asyncio.IncompleteReadError, ConnectionError, OSError):
+                break
+            if first >> 4 != 3:
+                continue
+            try:
+                topic, payload, packet_id = parse_publish(first, body)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            qos = (first >> 1) & 0x03
+            if packet_id is not None and qos == 1:
+                writer.write(build_puback_packet(packet_id))
+                await writer.drain()
+            found = secret_from_login_payload(payload)
+            if found and not secret_key:
+                secret_key = found
+            messages.append(
+                {
+                    "topic": topic,
+                    "payload": payload,
+                    "qos": qos,
+                    "dup": bool(first & 0x08),
+                }
+            )
+    finally:
+        await _close_writer(writer)
+
+    return SdaSessionResult(
+        connected=True,
+        device_id=accepted,
+        connack_reason=0,
+        attempts=tuple(attempts),
+        subscriptions=tuple(subscriptions),
+        messages=tuple(messages),
+        secret_key=secret_key,
+    )
+
+
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Send DISCONNECT and close a session writer, tolerating dead sockets."""
+    try:
+        writer.write(build_disconnect_packet())
+        await writer.drain()
+    except (ConnectionError, OSError, ssl.SSLError):
+        pass
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except (ConnectionError, OSError, ssl.SSLError):
+        pass
+
+
 # Vehicle wake service (live-verified 2026-09-30): TxWakeup / Cnr_ReWakeup on
 # the properties/set/req topic makes the car publish a fresh report in ~20 s.
 WAKE_SERVICE_CODE = "TxWakeup"
@@ -1022,6 +1327,10 @@ CHARGE_STATES = (
     CHARGE_STATE_DC_CHARGING,
 )
 CHARGING_STATES = frozenset({CHARGE_STATE_AC_CHARGING, CHARGE_STATE_DC_CHARGING})
+#: States that mean the AC gun is plugged in (charging or only connected).
+AC_GUN_STATES = frozenset({CHARGE_STATE_AC_CONNECTED, CHARGE_STATE_AC_CHARGING})
+#: States that mean the DC gun is plugged in (charging or only connected).
+DC_GUN_STATES = frozenset({CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING})
 
 # No S05 charging current can approach this: the reference car sent 2538 in
 # BattDCChrgInCurr while parked after a DC session whose history showed real
@@ -1174,6 +1483,52 @@ def charge_currents(
     return ac, dc, active
 
 
+def _gun_code_connected(value: Any) -> Optional[bool]:
+    """Return whether a raw gun connection code means connected (None = absent).
+
+    The S05 gun fields use ``0`` and ``1`` for "not connected" and higher values
+    for a plugged gun; an absent value stays unknown, so callers can tell it
+    apart from a reported "not connected".
+    """
+    code = _as_int(value)
+    if code is None:
+        return None
+    return code not in (0, 1)
+
+
+def charge_gun_flags(
+    state_value: Any,
+    *,
+    ac_gun_value: Any = None,
+    dc_gun_value: Any = None,
+) -> tuple[Optional[bool], Optional[bool], Optional[bool]]:
+    """Return the (charger plugged, AC gun, DC gun) flags of one report.
+
+    The S05 charging state identifies the gun (`1`-`4` plugged, `2`/`4` DC,
+    `1`/`3` AC), so a recognized state wins and a stale raw gun field cannot
+    keep the flags on after unplugging. Snapshots without a recognized state
+    fall back to the raw gun fields, which the SDA and REST vehicles use, and
+    the charger is plugged when either reported gun is connected.
+    """
+    state = charge_state(state_value)
+    if state is not None:
+        return (
+            state != CHARGE_STATE_NOT_CHARGING,
+            state in AC_GUN_STATES,
+            state in DC_GUN_STATES,
+        )
+
+    ac_gun = _gun_code_connected(ac_gun_value)
+    dc_gun = _gun_code_connected(dc_gun_value)
+    if ac_gun or dc_gun:
+        plugged: Optional[bool] = True
+    elif ac_gun is False or dc_gun is False:
+        plugged = False
+    else:
+        plugged = None
+    return plugged, ac_gun, dc_gun
+
+
 def _to_millis(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
@@ -1196,6 +1551,11 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         _first(params, "BattACChrgInCurr", "battACChrgInCurr"),
         _first(params, "BattDCChrgInCurr", "battDCChrgInCurr"),
         charge_status,
+    )
+    charge_con_status, ac_gun, dc_gun = charge_gun_flags(
+        charge_status,
+        ac_gun_value=params.get("acChargeGunConnectionState"),
+        dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
     )
     return {
         "lastUpdatedAt": _to_millis(latest),
@@ -1229,12 +1589,13 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         },
         "charge": {
             "chargeStatus": charge_status,
-            "chargeConStatus": _as_int(_first(params, *S05_CHARGE_GUN_KEYS)),
+            "chargeConStatus": charge_con_status,
+            "acChargeGunConnectStatus": ac_gun,
+            "dcChargeGunConnectStatus": dc_gun,
             "acChargeCurrent": ac_current,
             "dcChargeCurrent": dc_current,
             "chargeCurrent": active_current,
             "remainChargeTime": _as_charge_time(params.get("chargDeltMins")),
-            "dcChargeGunConnectStatus": _as_int(_first(params, *S05_DC_GUN_KEYS)),
         },
         "fuel": {
             "leftPercent": _as_int(params.get("remainingFuel")),
@@ -1273,16 +1634,12 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "battery12v": _as_bool(params.get("batt12VLightStatus")),
             "tpms": _as_bool(params.get("tpmsLightStatus")),
             "abs": _as_bool(params.get("absLightStatus")),
-            "airbag": _as_bool(params.get("airBagLightStatus")),
             "brakeFluid": _as_bool(params.get("brakeFluidLightStatus")),
             "brake": _as_bool(params.get("brakeLightStatus")),
             "eps": _as_bool(params.get("epsLightStatus")),
             "powerLimit": _as_bool(params.get("powerLimitLightStatus")),
             "powerSystem": _as_bool(params.get("powerSystemLightStatus")),
             "tractionBatteryLow": _as_bool(params.get("bcuBattSocLightStatus")),
-            "coolantTemperature": _as_bool(
-                params.get("coolanTemperatureLightStatus")
-            ),
         },
         "windowOpenings": {
             "frontLeft": _as_int(params.get("leftAnteriorWindowDegree")),
@@ -1411,14 +1768,12 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "batt12VLightStatus",
         "tpmsLightStatus",
         "absLightStatus",
-        "airBagLightStatus",
         "brakeFluidLightStatus",
         "brakeLightStatus",
         "epsLightStatus",
         "powerLimitLightStatus",
         "powerSystemLightStatus",
         "bcuBattSocLightStatus",
-        "coolanTemperatureLightStatus",
         "keyLowPower",
         # Air recirculation
         "airRecycleStatus",
@@ -1514,6 +1869,11 @@ def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if (ac_connected not in (None, 0) or dc_connected not in (None, 0))
         else 0
     )
+    # The SDA AC connector status follows its own rule (0 = not connected,
+    # anything else = connected), the same one ``connected`` uses above.
+    ac_gun_connected = (
+        None if ac_connected is None else ac_connected != 0
+    )
 
     return {
         "vehicleStatus": {
@@ -1528,6 +1888,7 @@ def normalize_sda_params(params: Mapping[str, Any]) -> dict[str, Any]:
         "charge": {
             "chargeStatus": _as_int(_sda_value(params, "BcuChrgSts")),
             "chargeConStatus": connected,
+            "acChargeGunConnectStatus": ac_gun_connected,
             "dcChargeGunConnectStatus": dc_connected,
             "chargeCurrent": clean_charge_current(
                 _sda_value(params, "BcuBattI"), "BcuBattI"
