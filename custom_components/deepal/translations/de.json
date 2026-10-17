@@ -514,6 +514,9 @@
       "warning_abs": {
         "name": "Warnleuchte ABS"
       },
+      "warning_airbag": {
+        "name": "Warnleuchte Airbag"
+      },
       "warning_brake_fluid": {
         "name": "Warnleuchte Bremsflüssigkeit"
       },
@@ -531,6 +534,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Warnleuchte Antriebsbatterie schwach"
+      },
+      "warning_coolant_temperature": {
+        "name": "Warnleuchte Kühlmitteltemperatur"
       }
     },
     "button": {

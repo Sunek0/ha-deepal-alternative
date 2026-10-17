@@ -1,23 +1,39 @@
-# Deepal Alternative - example dashboard view
+# Deepal Alternative - example dashboard
 #
-# Derived from the reference "Deepal S05 v5" view with every V2C charger
-# element removed (charger tiles, pause switch, session power/energy sensors,
-# the charge-target slider and the charge-to-target script).
+# Prefer the generated dashboard: Settings > Dashboards > Add dashboard >
+# Community dashboards > Deepal creates one view per car with no YAML (it
+# needs Home Assistant 2026.5+; on older versions use the same strategy from
+# a YAML-mode dashboard with `strategy: {type: custom:deepal}`). This file
+# stays as the manual, dependency-free alternative.
 #
-# Prerequisites:
-#   * The Deepal Alternative integration, which serves the car images used
-#     below under /deepal/frontend/assets/s05/.
-#   * The mushroom cards (HACS, piitaya/lovelace-mushroom) for the
-#     navigation, tire and steering-wheel cards.
-#   * The helpers in deepal-dashboard.helpers.yaml (navigation and seats).
+# A copy-ready sections view built only on the integration: the bundled
+# `custom:deepal-card` (available from the card picker, no Lovelace resource
+# to configure) and core Home Assistant cards. It needs no HACS cards, no
+# helpers and no input_select navigation.
 #
-# The entity ids below depend on your vehicle name, area and installation
-# language: replace them with yours (Settings > Devices & services or
-# Developer tools > States). The layout is a single view with four states
-# driven by input_select.deepal_vista.
+# How to use it:
+#   1. Open the dashboard where you want the view and enter the RAW editor
+#      (menu > Edit > menu > Edit in YAML).
+#   2. Paste the contents of this file (its root key is `views:`); if the
+#      dashboard already has views, paste the view dict as another list item.
+#   3. Replace the placeholders with your own ids:
+#      * `<device_id>`: the vehicle the card shows. Add `custom:deepal-card`
+#        once from the card picker: the form lists your Deepal vehicles, and
+#        the id shown there is the one to paste here.
+#      * `garaje_deepal_s05_...`: entity ids depend on the vehicle name, the
+#        area and the installation language (Settings > Devices & services,
+#        or Developer tools > States). The ids below come from a vehicle
+#        named "Garaje Deepal S05".
+#   4. Save.
 #
-# Removed V2C parts are optional: add your charger entities back (or use the
-# bundled card) if you want charging-session controls in this view.
+# Card choices follow the repository's dashboard design system:
+#   * Tier 1: `custom:deepal-card` for the vehicle (layered picture, chips,
+#     controls, climate and charging tabs).
+#   * Core fallbacks: `tile` for the quick controls and tire pressures,
+#     `history-graph` for the trends (one metric per graph; the Tier-1 mini
+#     graph card needs a HACS install, which this example avoids) and
+#     `markdown` for the templated alerts (no Tier-1 card renders a Jinja
+#     sentence).
 
 views:
   - title: Deepal S05
@@ -28,11 +44,11 @@ views:
     badges:
       - type: entity
         entity: sensor.garaje_deepal_s05_battery_level
-        name: Bateria
+        name: Batería
         color: green
       - type: entity
         entity: sensor.garaje_deepal_s05_remaining_range
-        name: Autonomia
+        name: Autonomía
         color: teal
       - type: entity
         entity: binary_sensor.garaje_deepal_s05_doors_lock_state
@@ -43,1031 +59,203 @@ views:
         name: Cargador
         color: amber
     sections:
+      # Full-width wrapper with the bundled card: the vehicle, its picture,
+      # controls, climate and charging tabs, all first-party.
       - type: grid
+        column_span: 2
         cards:
-          - type: heading
-            heading_style: title
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: input_select.deepal_vista
-                state_not: Clima
-              - condition: state
-                entity: input_select.deepal_vista
-                state_not: Estado
-              - condition: state
-                entity: input_select.deepal_vista
-                state_not: Carga
-            card:
-              type: vertical-stack
-              cards:
-                - type: picture-elements
-                  image_entity: image.garaje_deepal_s05_imagen_del_vehiculo
-                  elements:
-                    - type: state-label
-                      entity: sensor.garaje_deepal_s05_total_mileage
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 12%
-                        left: 3%
-                        transform: translate(0, -50%)
-                        font-size: 18px
-                        font-weight: 600
-                    - type: state-label
-                      entity: sensor.garaje_deepal_s05_battery_level
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 12%
-                        right: 3%
-                        transform: translate(0, -50%)
-                        font-size: 30px
-                        font-weight: 700
-                        color: var(--warning-color)
-                    - type: state-label
-                      entity: sensor.garaje_deepal_s05_remaining_range
-                      suffix: ' de autonomia'
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 84%
-                        right: 3%
-                        transform: translate(0, -50%)
-                        font-size: 16px
-                - type: custom:mushroom-template-card
-                  primary: Clima interior
-                  secondary: Volante y asientos
-                  icon: mdi:steering
-                  icon_color: blue
-                  tap_action:
-                    action: perform-action
-                    perform_action: input_select.select_option
-                    target:
-                      entity_id: input_select.deepal_vista
-                    data:
-                      option: Clima
-                - type: custom:mushroom-template-card
-                  primary: Estado del coche
-                  secondary: Puertas, ventanas, luces y neumaticos
-                  icon: mdi:car-info
-                  icon_color: indigo
-                  tap_action:
-                    action: perform-action
-                    perform_action: input_select.select_option
-                    target:
-                      entity_id: input_select.deepal_vista
-                    data:
-                      option: Estado
-                - type: custom:mushroom-template-card
-                  primary: Bateria y carga
-                  secondary: Cable, carga y autonomia
-                  icon: mdi:battery-charging
-                  icon_color: green
-                  tap_action:
-                    action: perform-action
-                    perform_action: input_select.select_option
-                    target:
-                      entity_id: input_select.deepal_vista
-                    data:
-                      option: Carga
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: input_select.deepal_vista
-                state: Estado
-            card:
-              type: vertical-stack
-              cards:
-                - type: picture-elements
-                  image: /deepal/frontend/assets/s05/estado_planta/Ocar1.png
-                  elements:
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_hood
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/Ohood1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/Ohood0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/Ohood0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/Ohood0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_trunk
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/Otrunk1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/Otrunk0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/Otrunk0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/Otrunk0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_front_left_door
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/OLF1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/OLF0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/OLF0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/OLF0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_front_right_door
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/ORF1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/ORF0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/ORF0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/ORF0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_rear_left_door
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/OLB1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/OLB0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/OLB0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/OLB0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: image
-                      entity: binary_sensor.garaje_deepal_s05_s05_rear_right_door
-                      state_image:
-                        'on': /deepal/frontend/assets/s05/estado_planta/ORB1.png
-                        'off': /deepal/frontend/assets/s05/estado_planta/ORB0.png
-                        unknown: /deepal/frontend/assets/s05/estado_planta/ORB0.png
-                        unavailable: /deepal/frontend/assets/s05/estado_planta/ORB0.png
-                      hold_action:
-                        action: none
-                      tap_action:
-                        action: none
-                      style:
-                        top: 50%
-                        left: 50%
-                        width: 100%
-                        transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_front_left_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_front_left_door
-                          state: 'off'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OwindowsLF1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_front_right_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_front_right_door
-                          state: 'off'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OwindowsRF1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_rear_left_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_rear_left_door
-                          state: 'off'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OwindowsLB1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_rear_right_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_rear_right_door
-                          state: 'off'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OwindowsRB1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_front_left_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_front_left_door
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OopenDoor-windowsLF1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_front_right_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_front_right_door
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OopenDoor-windowsRF1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_rear_left_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_rear_left_door
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OopenDoor-windowsLB1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_window_rear_right_open
-                          state: 'on'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_rear_right_door
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OopenDoor-windowsRB1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_low_beam
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OlowBeam1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_high_beam
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OlowBeam1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_position_lamp
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/estado_planta/OlowBeam1.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: custom:mushroom-template-card
-                      entity: sensor.garaje_deepal_s05_tire_front_left_pressure
-                      primary: '{{ states(entity) }} bar'
-                      secondary: Del. izq.
-                      icon: mdi:tire
-                      icon_color: >-
-                        {{ 'red' if
-                        is_state('binary_sensor.garaje_deepal_s05_tire_front_left_alarm',
-                        'on') else 'green' }}
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 28%
-                        left: 23%
-                        transform: translate(-50%, -50%)
-                        width: 140px
-                    - type: custom:mushroom-template-card
-                      entity: sensor.garaje_deepal_s05_tire_front_right_pressure
-                      primary: '{{ states(entity) }} bar'
-                      secondary: Del. der.
-                      icon: mdi:tire
-                      icon_color: >-
-                        {{ 'red' if
-                        is_state('binary_sensor.garaje_deepal_s05_tire_front_right_alarm',
-                        'on') else 'green' }}
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 28%
-                        left: 77%
-                        transform: translate(-50%, -50%)
-                        width: 140px
-                    - type: custom:mushroom-template-card
-                      entity: sensor.garaje_deepal_s05_tire_rear_left_pressure
-                      primary: '{{ states(entity) }} bar'
-                      secondary: Tras. izq.
-                      icon: mdi:tire
-                      icon_color: >-
-                        {{ 'red' if
-                        is_state('binary_sensor.garaje_deepal_s05_tire_rear_left_alarm',
-                        'on') else 'green' }}
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 78%
-                        left: 23%
-                        transform: translate(-50%, -50%)
-                        width: 140px
-                    - type: custom:mushroom-template-card
-                      entity: sensor.garaje_deepal_s05_tire_rear_right_pressure
-                      primary: '{{ states(entity) }} bar'
-                      secondary: Tras. der.
-                      icon: mdi:tire
-                      icon_color: >-
-                        {{ 'red' if
-                        is_state('binary_sensor.garaje_deepal_s05_tire_rear_right_alarm',
-                        'on') else 'green' }}
-                      tap_action:
-                        action: more-info
-                      style:
-                        top: 78%
-                        left: 77%
-                        transform: translate(-50%, -50%)
-                        width: 140px
-                    - type: state-icon
-                      entity: lock.garaje_deepal_s05_s05_doors
-                      tap_action:
-                        action: toggle
-                      style:
-                        top: 58%
-                        left: 49.5%
-                        transform: translate(-50%, -50%)
-                        --mdc-icon-size: 50px
-                    - type: icon
-                      icon: mdi:arrow-left
-                      tap_action:
-                        action: perform-action
-                        perform_action: input_select.select_option
-                        target:
-                          entity_id: input_select.deepal_vista
-                        data:
-                          option: Exterior
-                      style:
-                        top: 6%
-                        left: 6%
-                        transform: translate(-50%, -50%)
-                        color: white
-                        background: rgba(0, 0, 0, 0.45)
-                        border-radius: 50%
-                        padding: 10px
-                - type: grid
-                  columns: 2
-                  square: false
-                  cards:
-                    - type: tile
-                      entity: lock.garaje_deepal_s05_s05_doors
-                      name: Puertas
-                      icon: mdi:car-door-lock
-                      color: red
-                      features:
-                        - type: lock-commands
-                    - type: tile
-                      entity: cover.garaje_deepal_s05_s05_windows
-                      name: Ventanillas
-                      icon: mdi:window-closed-variant
-                      color: cyan
-                    - type: tile
-                      entity: binary_sensor.garaje_deepal_s05_charger_plugged
-                      name: Cable de carga
-                      icon: mdi:ev-plug-type2
-                      color: amber
-                    - type: tile
-                      entity: binary_sensor.garaje_deepal_s05_s05_charging
-                      name: Cargando
-                      icon: mdi:battery-charging
-                      color: green
-                    - type: tile
-                      entity: binary_sensor.garaje_deepal_s05_s05_engine
-                      name: Motor
-                      icon: mdi:engine
-                      color: orange
-                    - type: tile
-                      entity: sensor.garaje_deepal_s05_battery_level
-                      name: Bateria
-                      icon: mdi:car-battery
-                      color: green
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: input_select.deepal_vista
-                state: Clima
-            card:
-              type: vertical-stack
-              cards:
-                - type: grid
-                  columns: 2
-                  square: false
-                  cards:
-                    - type: custom:mushroom-template-card
-                      primary: Climatizacion
-                      secondary: Aire y temperatura
-                      icon: mdi:air-conditioner
-                      icon_color: >-
-                        {{ 'blue' if not
-                        is_state('input_select.deepal_clima_vista', 'Asientos')
-                        else 'grey' }}
-                      tap_action:
-                        action: perform-action
-                        perform_action: input_select.select_option
-                        target:
-                          entity_id: input_select.deepal_clima_vista
-                        data:
-                          option: Climatizacion
-                    - type: custom:mushroom-template-card
-                      primary: Asientos
-                      secondary: Calefaccion y ventilacion
-                      icon: mdi:car-seat
-                      icon_color: >-
-                        {{ 'deep-orange' if
-                        is_state('input_select.deepal_clima_vista', 'Asientos')
-                        else 'grey' }}
-                      tap_action:
-                        action: perform-action
-                        perform_action: input_select.select_option
-                        target:
-                          entity_id: input_select.deepal_clima_vista
-                        data:
-                          option: Asientos
-                - type: conditional
-                  conditions:
-                    - condition: state
-                      entity: input_select.deepal_clima_vista
-                      state_not: Asientos
-                  card:
-                    type: vertical-stack
-                    cards:
-                      - type: picture-elements
-                        image: /deepal/frontend/assets/s05/aa/carAc.png
-                        elements:
-                          - type: conditional
-                            conditions:
-                              - condition: state
-                                entity: climate.garaje_deepal_s05_cabin_climate
-                                state: heat_cool
-                            elements:
-                              - type: image
-                                image: /deepal/frontend/assets/s05/aa/carAcOpen.png
-                                hold_action:
-                                  action: none
-                                tap_action:
-                                  action: none
-                                style:
-                                  top: 50%
-                                  left: 50%
-                                  width: 100%
-                                  transform: translate(-50%, -50%)
-                          - type: icon
-                            icon: mdi:arrow-left
-                            tap_action:
-                              action: perform-action
-                              perform_action: input_select.select_option
-                              target:
-                                entity_id: input_select.deepal_vista
-                              data:
-                                option: Exterior
-                            style:
-                              top: 6%
-                              left: 6%
-                              transform: translate(-50%, -50%)
-                              color: white
-                              background: rgba(0, 0, 0, 0.45)
-                              border-radius: 50%
-                              padding: 10px
-                      - type: tile
-                        entity: climate.garaje_deepal_s05_cabin_climate
-                        name: Habitaculo
-                        icon: mdi:air-conditioner
-                        features:
-                          - type: climate-hvac-modes
-                            hvac_modes:
-                              - heat_cool
-                              - 'off'
-                          - type: target-temperature
-                - type: conditional
-                  conditions:
-                    - condition: state
-                      entity: input_select.deepal_clima_vista
-                      state: Asientos
-                  card:
-                    type: vertical-stack
-                    cards:
-                      - type: picture-elements
-                        image: /deepal/frontend/assets/s05/asientos/carSeat1.png
-                        aspect_ratio: '1:1'
-                        elements:
-                          - type: icon
-                            entity: number.garaje_deepal_s05_s05_front_left_seat_heating_level
-                            icon: mdi:car-seat-heater
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 38%
-                              left: 32%
-                              transform: translate(-50%, -50%)
-                              color: '#ff9800'
-                              background: rgba(0, 0, 0, 0.35)
-                              border-radius: 50%
-                              padding: 8px
-                          - type: state-label
-                            entity: number.garaje_deepal_s05_s05_front_left_seat_heating_level
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 38%
-                              left: 39%
-                              transform: translate(-50%, -50%)
-                              font-size: 16px
-                              font-weight: 700
-                              color: white
-                              text-shadow: 0 0 4px black
-                          - type: icon
-                            entity: number.garaje_deepal_s05_s05_front_left_seat_ventilation_level
-                            icon: mdi:car-seat-cooler
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 49%
-                              left: 32%
-                              transform: translate(-50%, -50%)
-                              color: '#00bcd4'
-                              background: rgba(0, 0, 0, 0.35)
-                              border-radius: 50%
-                              padding: 8px
-                          - type: state-label
-                            entity: number.garaje_deepal_s05_s05_front_left_seat_ventilation_level
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 49%
-                              left: 39%
-                              transform: translate(-50%, -50%)
-                              font-size: 16px
-                              font-weight: 700
-                              color: white
-                              text-shadow: 0 0 4px black
-                          - type: icon
-                            entity: number.garaje_deepal_s05_s05_front_right_seat_heating_level
-                            icon: mdi:car-seat-heater
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 38%
-                              left: 62%
-                              transform: translate(-50%, -50%)
-                              color: '#ff9800'
-                              background: rgba(0, 0, 0, 0.35)
-                              border-radius: 50%
-                              padding: 8px
-                          - type: state-label
-                            entity: number.garaje_deepal_s05_s05_front_right_seat_heating_level
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 38%
-                              left: 69%
-                              transform: translate(-50%, -50%)
-                              font-size: 16px
-                              font-weight: 700
-                              color: white
-                              text-shadow: 0 0 4px black
-                          - type: icon
-                            entity: number.garaje_deepal_s05_s05_front_right_seat_ventilation_level
-                            icon: mdi:car-seat-cooler
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 49%
-                              left: 62%
-                              transform: translate(-50%, -50%)
-                              color: '#00bcd4'
-                              background: rgba(0, 0, 0, 0.35)
-                              border-radius: 50%
-                              padding: 8px
-                          - type: state-label
-                            entity: number.garaje_deepal_s05_s05_front_right_seat_ventilation_level
-                            tap_action:
-                              action: more-info
-                            style:
-                              top: 49%
-                              left: 69%
-                              transform: translate(-50%, -50%)
-                              font-size: 16px
-                              font-weight: 700
-                              color: white
-                              text-shadow: 0 0 4px black
-                          - type: state-icon
-                            entity: switch.garaje_deepal_s05_s05_steering_wheel_heating
-                            tap_action:
-                              action: toggle
-                            style:
-                              top: 28%
-                              left: 35%
-                              transform: translate(-50%, -50%)
-                              --mdc-icon-size: 40px
-                          - type: icon
-                            icon: mdi:arrow-left
-                            tap_action:
-                              action: perform-action
-                              perform_action: input_select.select_option
-                              target:
-                                entity_id: input_select.deepal_vista
-                              data:
-                                option: Exterior
-                            style:
-                              top: 6%
-                              left: 6%
-                              transform: translate(-50%, -50%)
-                              color: white
-                              background: rgba(0, 0, 0, 0.45)
-                              border-radius: 50%
-                              padding: 10px
-                      - type: grid
-                        columns: 2
-                        square: false
-                        cards:
-                          - type: tile
-                            entity: select.clima_asiento_izq_ventilacion
-                            name: Vent. izq.
-                            icon: mdi:car-seat-cooler
-                            color: cyan
-                            features:
-                              - type: select-options
-                                style: buttons
-                          - type: tile
-                            entity: select.clima_asiento_der_ventilacion
-                            name: Vent. der.
-                            icon: mdi:car-seat-cooler
-                            color: cyan
-                            features:
-                              - type: select-options
-                                style: buttons
-                          - type: tile
-                            entity: select.clima_asiento_izq_calefaccion
-                            name: Calef. izq.
-                            icon: mdi:car-seat-heater
-                            color: orange
-                            features:
-                              - type: select-options
-                                style: buttons
-                          - type: tile
-                            entity: select.clima_asiento_der_calefaccion
-                            name: Calef. der.
-                            icon: mdi:car-seat-heater
-                            color: orange
-                            features:
-                              - type: select-options
-                                style: buttons
-                          - type: custom:mushroom-template-card
-                            entity: switch.garaje_deepal_s05_s05_steering_wheel_heating
-                            primary: Volante
-                            secondary: >-
-                              {{ 'Encendida' if is_state(entity, 'on') else
-                              'Apagada' }}
-                            icon: mdi:steering
-                            icon_color: >-
-                              {{ 'deep-orange' if is_state(entity, 'on') else
-                              'grey' }}
-                            tap_action:
-                              action: toggle
-          - type: conditional
-            conditions:
-              - condition: state
-                entity: input_select.deepal_vista
-                state: Carga
-            card:
-              type: vertical-stack
-              cards:
-                - type: picture-elements
-                  image: /deepal/frontend/assets/s05/bateria/carBattery.png
-                  elements:
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_charging
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/bateria/chargingLineOn.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: conditional
-                      conditions:
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_s05_charging
-                          state: 'off'
-                        - condition: state
-                          entity: binary_sensor.garaje_deepal_s05_charger_plugged
-                          state: 'on'
-                      elements:
-                        - type: image
-                          image: /deepal/frontend/assets/s05/bateria/chargingLineOff.png
-                          hold_action:
-                            action: none
-                          tap_action:
-                            action: none
-                          style:
-                            top: 50%
-                            left: 50%
-                            width: 100%
-                            transform: translate(-50%, -50%)
-                    - type: icon
-                      icon: mdi:arrow-left
-                      tap_action:
-                        action: perform-action
-                        perform_action: input_select.select_option
-                        target:
-                          entity_id: input_select.deepal_vista
-                        data:
-                          option: Exterior
-                      style:
-                        top: 6%
-                        left: 6%
-                        transform: translate(-50%, -50%)
-                        color: white
-                        background: rgba(0, 0, 0, 0.45)
-                        border-radius: 50%
-                        padding: 10px
-                - type: grid
-                  columns: 2
-                  square: false
-                  cards:
-                    - type: tile
-                      entity: binary_sensor.garaje_deepal_s05_charger_plugged
-                      name: Cable de carga
-                      icon: mdi:ev-plug-type2
-                      color: amber
-                    - type: tile
-                      entity: binary_sensor.garaje_deepal_s05_s05_charging
-                      name: Cargando
-                      icon: mdi:battery-charging
-                      color: green
-                    - type: tile
-                      entity: sensor.garaje_deepal_s05_s05_charge_current
-                      name: Corriente
-                      icon: mdi:current-ac
-                      color: amber
-                    - type: tile
-                      entity: sensor.garaje_deepal_s05_s05_remaining_charge_time
-                      name: Tiempo restante
-                      icon: mdi:timer-sand
-                    - type: tile
-                      entity: sensor.garaje_deepal_s05_battery_level
-                      name: Bateria
-                      icon: mdi:car-battery
-                      color: green
-                    - type: tile
-                      entity: sensor.garaje_deepal_s05_remaining_range
-                      name: Autonomia
-                      icon: mdi:map-marker-distance
-                      color: teal
-                - type: history-graph
-                  entities:
-                    - entity: sensor.garaje_deepal_s05_battery_level
-                      name: Bateria
-                      color: green
-                  hours_to_show: 24
+          - type: custom:deepal-card
+            device_id: "<device_id>"
+            grid_options:
+              columns: full
+      # Quick controls: the actions you want before opening the card.
       - type: grid
+        column_span: 1
         cards:
           - type: heading
             heading: Controles
             icon: mdi:car-cog
           - type: tile
+            entity: lock.garaje_deepal_s05_s05_doors
+            name: Puertas
+            icon: mdi:car-door-lock
+            color: red
+            features:
+              - type: lock-commands
+            grid_options:
+              columns: 6
+          - type: tile
+            entity: cover.garaje_deepal_s05_s05_windows
+            name: Ventanillas
+            icon: mdi:window-closed-variant
+            color: cyan
+            tap_action:
+              action: toggle
+            grid_options:
+              columns: 6
+          - type: tile
+            entity: cover.garaje_deepal_s05_s05_trunk
+            name: Maletero
+            icon: mdi:car-back
+            color: blue
+            tap_action:
+              action: toggle
+            grid_options:
+              columns: 6
+          - type: tile
             entity: button.garaje_deepal_s05_s05_flash_lights
             name: Destello
             icon: mdi:car-light-alert
             color: amber
-            grid_options:
-              columns: 6
             tap_action:
               action: perform-action
               perform_action: button.press
               target:
                 entity_id: button.garaje_deepal_s05_s05_flash_lights
+            grid_options:
+              columns: 6
           - type: tile
             entity: button.garaje_deepal_s05_s05_honk_horn
             name: Claxon
             icon: mdi:bullhorn
             color: red
-            grid_options:
-              columns: 6
             tap_action:
               action: perform-action
               perform_action: button.press
               target:
                 entity_id: button.garaje_deepal_s05_s05_honk_horn
-          - type: tile
-            entity: binary_sensor.garaje_deepal_s05_doors_lock_state
-            name: Puertas
-            icon: mdi:car-door-lock
-            color: red
             grid_options:
               columns: 6
           - type: tile
-            entity: binary_sensor.garaje_deepal_s05_s05_any_door_open
-            name: Alguna puerta abierta
-            icon: mdi:car-door
+            entity: button.garaje_deepal_s05_s05_flash_and_honk
+            name: Destello y claxon
+            icon: mdi:car-light-alert
             color: orange
-            grid_options:
-              columns: 6
-          - type: tile
-            entity: binary_sensor.garaje_deepal_s05_s05_engine
-            name: Motor
-            icon: mdi:engine
-            color: orange
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.garaje_deepal_s05_s05_flash_and_honk
             grid_options:
               columns: 6
           - type: tile
             entity: button.garaje_deepal_s05_s05_refresh_vehicle_data
             name: Actualizar datos
             icon: mdi:refresh
-            grid_options:
-              columns: 6
             tap_action:
               action: perform-action
               perform_action: button.press
               target:
                 entity_id: button.garaje_deepal_s05_s05_refresh_vehicle_data
+            grid_options:
+              columns: 6
+      # Trends: one metric per graph, a consistent 24 h window.
+      - type: grid
+        column_span: 1
+        cards:
           - type: heading
-            heading: Carga
-            icon: mdi:battery-charging
-            badges:
-              - type: entity
-                entity: binary_sensor.garaje_deepal_s05_s05_charging
+            heading: Batería y autonomía
+            icon: mdi:chart-line
+          - type: history-graph
+            entities:
+              - entity: sensor.garaje_deepal_s05_battery_level
+                name: Batería
                 color: green
+            hours_to_show: 24
+          - type: history-graph
+            entities:
+              - entity: sensor.garaje_deepal_s05_remaining_range
+                name: Autonomía
+                color: teal
+            hours_to_show: 24
+      # Tire pressures: tap opens the entity. Alarms surface in the alerts
+      # card below, because a core tile cannot colour itself by template.
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Neumáticos
+            icon: mdi:tire
           - type: tile
-            entity: binary_sensor.garaje_deepal_s05_charger_plugged
-            name: Cable de carga
-            icon: mdi:ev-plug-type2
-            color: amber
+            entity: sensor.garaje_deepal_s05_tire_front_left_pressure
+            name: Del. izq.
+            icon: mdi:tire
+            tap_action:
+              action: more-info
             grid_options:
               columns: 6
           - type: tile
-            entity: binary_sensor.garaje_deepal_s05_s05_charging
-            name: Cargando
-            icon: mdi:battery-charging
-            color: green
+            entity: sensor.garaje_deepal_s05_tire_front_right_pressure
+            name: Del. der.
+            icon: mdi:tire
+            tap_action:
+              action: more-info
             grid_options:
               columns: 6
           - type: tile
-            entity: sensor.garaje_deepal_s05_s05_charge_current
-            name: Corriente
-            icon: mdi:current-ac
-            color: amber
+            entity: sensor.garaje_deepal_s05_tire_rear_left_pressure
+            name: Tras. izq.
+            icon: mdi:tire
+            tap_action:
+              action: more-info
             grid_options:
               columns: 6
           - type: tile
-            entity: sensor.garaje_deepal_s05_s05_remaining_charge_time
-            name: Tiempo restante
-            icon: mdi:timer-sand
+            entity: sensor.garaje_deepal_s05_tire_rear_right_pressure
+            name: Tras. der.
+            icon: mdi:tire
+            tap_action:
+              action: more-info
             grid_options:
               columns: 6
-          - type: tile
-            entity: sensor.garaje_deepal_s05_battery_level
-            name: Bateria
-            icon: mdi:car-battery
-            color: green
-            grid_options:
-              columns: 6
-          - type: tile
-            entity: sensor.garaje_deepal_s05_remaining_range
-            name: Autonomia
-            icon: mdi:map-marker-distance
-            color: teal
-            grid_options:
-              columns: 6
+      # Alerts: a templated line with everything worth acting on, or a clear
+      # all-is-well message. Replace the entity ids like the rest.
+      - type: grid
+        column_span: 1
+        cards:
+          - type: heading
+            heading: Avisos
+            icon: mdi:alert-circle-outline
+          - type: markdown
+            content: >-
+              {% set ns = namespace(items=[]) %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_s05_any_door_open', 'on') %}
+                {% set ns.items = ns.items + ['- Puertas abiertas'] %}
+              {% endif %}
+              {% if is_state('cover.garaje_deepal_s05_s05_windows', 'open') %}
+                {% set ns.items = ns.items + ['- Ventanillas abiertas'] %}
+              {% endif %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_s05_trunk', 'on') %}
+                {% set ns.items = ns.items + ['- Maletero abierto'] %}
+              {% endif %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_s05_hood', 'on') %}
+                {% set ns.items = ns.items + ['- Capó abierto'] %}
+              {% endif %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_doors_lock_state', 'on') %}
+                {% set ns.items = ns.items + ['- Puertas sin cerrar'] %}
+              {% endif %}
+              {% for label, alarm in [
+                ('Del. izq.', 'binary_sensor.garaje_deepal_s05_tire_front_left_alarm'),
+                ('Del. der.', 'binary_sensor.garaje_deepal_s05_tire_front_right_alarm'),
+                ('Tras. izq.', 'binary_sensor.garaje_deepal_s05_tire_rear_left_alarm'),
+                ('Tras. der.', 'binary_sensor.garaje_deepal_s05_tire_rear_right_alarm')] %}
+                {% if is_state(alarm, 'on') %}
+                  {% set ns.items = ns.items + ['- Presión baja: ' ~ label] %}
+                {% endif %}
+              {% endfor %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_charger_plugged', 'on')
+                    and is_state('binary_sensor.garaje_deepal_s05_s05_charging', 'off') %}
+                {% set ns.items = ns.items + ['- Cable conectado, sin cargar'] %}
+              {% endif %}
+              {% set battery = states('sensor.garaje_deepal_s05_battery_level') | float(100) %}
+              {% if battery < 20 %}
+                {% set ns.items = ns.items + ['- Batería baja (' ~ battery | round(0) | int ~ ' %)'] %}
+              {% endif %}
+              {% if is_state('binary_sensor.garaje_deepal_s05_connected', 'off') %}
+                {% set ns.items = ns.items + ['- Sin conexión con la nube'] %}
+              {% endif %}
+              {% if ns.items %}
+              {{ ns.items | join('\n') }}
+              {% else %}
+              Sin avisos: todo en orden.
+              {% endif %}

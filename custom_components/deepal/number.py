@@ -23,14 +23,19 @@ SEAT_FUNCTIONS = {
 }
 
 
-def supports_charge_limit(vehicle: Any) -> bool:
+def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:
     """Return whether the vehicle supports setting the AC charge limit.
 
-    The S05 does not: its function configuration reports no SOC-set code and
-    the signed charge_max command is accepted without changing the limit on
-    real cars. Only that model is excluded; missing or unknown model data keeps
-    the control, so no other vehicle loses it.
+    Capability-first: a vehicle whose function configuration reports a
+    charge-limit code gets the control even when its model is otherwise
+    excluded (the S05 PHEV). The S05 keeps losing it when the capabilities
+    are unavailable or report no charge-limit code, because the signed
+    charge_max command is accepted without changing the limit on that model
+    (verified on the S05 EV). Every other model keeps the control, so a
+    missing capability list never removes it.
     """
+    if capabilities is not None and getattr(capabilities, "has_charge_limit", False):
+        return True
     return not is_s05(vehicle)
 
 
@@ -39,7 +44,8 @@ def build_control_numbers(
 ) -> list[Any]:
     """Build the charge limit and seat level numbers for one vehicle."""
     entities: list[Any] = []
-    if supports_charge_limit(vehicle):
+    capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
+    if supports_charge_limit(vehicle, capabilities):
         entities.append(DeepalChargeLimitNumber(coordinator, vehicle))
     for seat in SEAT_LABELS:
         for function in SEAT_FUNCTIONS:

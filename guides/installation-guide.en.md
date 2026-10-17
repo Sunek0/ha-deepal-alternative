@@ -27,7 +27,7 @@ on the phone.
 - A compatible Deepal vehicle (S05, S07) linked to a My Changan account.
 - Access to the **My Changan** app with the main account.
 - A different email address or phone number for the secondary account.
-- Home Assistant 2026.3.0 or later.
+- Home Assistant 2026.8.0 or later.
 - [HACS](https://hacs.xyz/docs/use/download/download/) installed. If you do not have it yet, follow
   the official installation instructions at <https://hacs.xyz/docs/use/download/download/>.
 
@@ -136,8 +136,10 @@ The integration ships its own panel, with no dashboard YAML and no extra cards:
 - Door, window and trunk controls only appear when you saved the PIN (step 9); lights, horn,
   climate, seats and steering wheel work without a PIN.
 
-For the example dashboard (without the home charger) and the `deepal-card`, see the
-**[panel, example dashboard and card guide](dashboard-guide.en.md)**.
+For the example dashboard (which needs nothing beyond the integration) and the Deepal cards — the
+complete `deepal-card` (vitals and the panel's three tabs) and the compact `deepal-compact-card`
+(vitals, picture, chips and quick actions) — see the
+**[panel, example dashboard and cards guide](dashboard-guide.en.md)**.
 
 ## Notes and troubleshooting
 

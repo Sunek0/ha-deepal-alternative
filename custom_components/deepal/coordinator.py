@@ -159,16 +159,22 @@ def _overlay_seat_levels(source: Any, target: Any) -> None:
                 setattr(target_seat, field, value)
 
 
-def _retain_seat_levels(previous: Any, condition: Any) -> None:
+def _retain_seat_levels(
+    previous: Any, condition: Any, pending: set[str] | None = None
+) -> None:
     """Keep the last valid seat levels when a report comes back unknown.
 
     The S05 sends its sleep sentinel while a seat module sleeps; the previous
-    valid level is still the car's real state, so it must not be reset.
+    valid level is still the car's real state, so it must not be reset. Levels
+    whose last written value came from an unconfirmed optimistic update are not
+    retained (``pending``): they expire instead of staying frozen.
     """
     for position in _SEAT_POSITIONS:
         previous_seat = getattr(previous, position)
         seat = getattr(condition, position)
         for field in _SEAT_LEVEL_FIELDS:
+            if pending and f"seats.{position}.{field}" in pending:
+                continue
             if getattr(seat, field) is None:
                 setattr(seat, field, getattr(previous_seat, field))
 
@@ -199,7 +205,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._command_locks: dict[str, asyncio.Lock] = {}
         self._command_cooldowns: dict[tuple[str, str], float] = {}
         self._optimistic_holds: dict[str, dict[str, Any]] = {}
+        self._optimistic_pending: dict[str, set[str]] = {}
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
+        self._last_steering_wheel: dict[str, tuple[bool, int | None]] = {}
         self._last_wake_at: dict[str, float] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
@@ -291,18 +299,43 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """Return the cached capabilities of a vehicle, if they were fetched."""
         return self._capabilities.get(car_id)
 
+    def _apply_steering_wheel_state(
+        self, vehicle: Vehicle, condition: VehicleCondition
+    ) -> None:
+        """Apply the last server-authored steering wheel state, if there is one.
+
+        The MQTT ``steeringWheelHeating`` field never follows the real switch, so
+        whenever the app condition cannot author it (an unavailable request or a
+        report without the field) the last state the server reported is kept
+        instead of exposing the unreliable snapshot value. Before the first
+        server-authored state the mapped MQTT value stands as the documented
+        fallback.
+        """
+        remembered = self._last_steering_wheel.get(vehicle.car_id)
+        if remembered is None:
+            return
+        condition.climate.steering_wheel_heater_on = remembered[0]
+        condition.climate.steering_wheel_heater_level = remembered[1]
+
     async def _overlay_app_comfort(
         self, vehicle: Vehicle, condition: VehicleCondition
     ) -> VehicleCondition:
         """Overlay the app's seat, steering and charge state onto an MQTT snapshot.
 
         The S05 seat modules report sentinel values over MQTT while they are
-        asleep, and the MQTT ``steeringWheelHeating`` field does not follow the
-        switch the app shows. The server condition endpoint returns the same
-        report already normalized the way the app displays it. It is also the
-        fallback for the charge connection flags: cars that omit the gun fields
-        over MQTT (a second vehicle of the account does) get the server values
-        for the cable connection and the DC gun.
+        asleep, and the MQTT ``steeringWheelHeating``/``frontDefrostStatus``
+        fields do not follow the switches the app shows. The server condition
+        endpoint returns the same report already normalized the way the app
+        displays it. The steering wheel switch and the front defrost take the
+        server value whenever it carries them, even when its report is older
+        than the snapshot, because the MQTT fields are unreliable by design; the
+        last server-authored steering wheel state is remembered and kept when a
+        later app condition fails or omits the field, with the MQTT fallback
+        only before the first server-authored state.
+        The seat block, the charge connection flags and the fuel block keep the
+        freshness rule (the server condition applies only when its report is
+        not older), so a genuinely newer MQTT snapshot wins; the server
+        condition is also the fallback for the gun fields a car omits over MQTT.
         """
         if not self._uses_mqtt(vehicle):
             return condition
@@ -314,23 +347,37 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _LOGGER.debug(
                 "Deepal app condition overlay failed for %s: %s", vehicle.car_id, err
             )
+            self._apply_steering_wheel_state(vehicle, condition)
             return condition
         mqtt_ts = condition.last_updated_timestamp
         app_ts = app_condition.last_updated_timestamp
-        if mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts:
-            return condition
+        app_is_older = (
+            mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts
+        )
         raw = app_condition.raw_data or {}
-        if raw.get("seat"):
-            _overlay_seat_levels(app_condition.seats, condition.seats)
-        if (raw.get("vehicleStatus") or {}).get("steeringWheelHeater") is not None:
-            condition.climate.steering_wheel_heater_on = (
-                app_condition.climate.steering_wheel_heater_on
+        # The MQTT steering wheel field never follows the real switch: the
+        # server condition authors it whenever it carries the value, and the
+        # last server-authored state is remembered so a later failed or
+        # field-less overlay never exposes the unreliable MQTT value.
+        steering_on = app_condition.climate.steering_wheel_heater_on
+        if (
+            (raw.get("vehicleStatus") or {}).get("steeringWheelHeater") is not None
+            and steering_on is not None
+        ):
+            self._last_steering_wheel[vehicle.car_id] = (
+                steering_on,
+                app_condition.climate.steering_wheel_heater_level,
             )
-            condition.climate.steering_wheel_heater_level = (
-                app_condition.climate.steering_wheel_heater_level
-            )
+        self._apply_steering_wheel_state(vehicle, condition)
         if (raw.get("hvac") or {}).get("defrostStatus") is not None:
             condition.climate.defrost_on = app_condition.climate.defrost_on
+        if app_is_older:
+            # Seats, charge and fuel: a genuinely newer MQTT snapshot is the
+            # better source, so the server condition only fills them when its
+            # report is not older.
+            return condition
+        if raw.get("seat"):
+            _overlay_seat_levels(app_condition.seats, condition.seats)
         app_charge = raw.get("charge") or {}
         mqtt_raw = condition.mqtt_raw_data or {}
         if (
@@ -355,13 +402,19 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     def _register_optimistic_hold(
         self, vehicle_id: str, before: dict[str, Any], after: dict[str, Any]
     ) -> None:
-        """Remember the fields a command changed so reports cannot revert them."""
+        """Remember the fields a command changed so reports cannot revert them.
+
+        The changed paths are also marked as unconfirmed: the merge will not
+        restore them from the previous condition once the hold expires unless a
+        report carried them.
+        """
         changes = _diff_paths(before, after)
         if changes:
             self._optimistic_holds[vehicle_id] = {
                 "expires": time.monotonic() + _OPTIMISTIC_HOLD_SECONDS,
                 "values": changes,
             }
+            self._optimistic_pending.setdefault(vehicle_id, set()).update(changes)
 
     def _apply_optimistic_hold(
         self, vehicle_id: str, condition: VehicleCondition
@@ -370,27 +423,49 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         The car applies commands with a delay (and the account is rate limited),
         so reports generated before the command took effect would otherwise
-        revert the entity to the previous value.
+        revert the entity to the previous value. A value the vehicle never
+        confirms expires when the window closes: its unconfirmed mark keeps the
+        previous-condition merge from restoring it, and a report that carries
+        the field clears the mark.
         """
         hold = self._optimistic_holds.get(vehicle_id)
-        if hold is None:
-            return condition
-        if time.monotonic() >= hold["expires"]:
+        if hold is not None and time.monotonic() >= hold["expires"]:
+            # The window closed: stop overriding. The unconfirmed marks stay so
+            # the merge cannot resurrect the value.
             self._optimistic_holds.pop(vehicle_id, None)
-            return condition
-        remaining: dict[str, Any] = {}
-        for path, value in hold["values"].items():
-            try:
-                if _path_get(condition, path) == value:
+            hold = None
+        masked: set[str] = set()
+        if hold is not None:
+            remaining: dict[str, Any] = {}
+            for path, value in hold["values"].items():
+                try:
+                    if _path_get(condition, path) == value:
+                        continue
+                    _path_set(condition, path, value)
+                except AttributeError:
+                    self._optimistic_pending.get(vehicle_id, set()).discard(path)
                     continue
-                _path_set(condition, path, value)
-            except AttributeError:
-                continue
-            remaining[path] = value
-        if remaining:
-            hold["values"] = remaining
-        else:
-            self._optimistic_holds.pop(vehicle_id, None)
+                self._optimistic_pending.setdefault(vehicle_id, set()).add(path)
+                remaining[path] = value
+            if remaining:
+                hold["values"] = remaining
+                masked = set(remaining)
+            else:
+                self._optimistic_holds.pop(vehicle_id, None)
+        pending = self._optimistic_pending.get(vehicle_id)
+        if pending:
+            # A value that is actually stored (not masked by the hold) and comes
+            # from a report is confirmed: it stops being unconfirmed.
+            for path in list(pending):
+                if path in masked:
+                    continue
+                try:
+                    if _path_get(condition, path) is not None:
+                        pending.discard(path)
+                except AttributeError:
+                    pending.discard(path)
+            if not pending:
+                self._optimistic_pending.pop(vehicle_id, None)
         return condition
 
     async def _async_fetch_condition(self, vehicle_id: str) -> VehicleCondition:
@@ -478,22 +553,37 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         poll, discarding optimistic command feedback. The same applies to the
         seat levels: the sleep sentinel means unknown, and the last valid level
         is still the car's real state.
+
+        A field whose last written value came from an unconfirmed optimistic
+        update must not be restored this way: it expires to unknown when the
+        vehicle stops reporting it, until a report carries it again.
         """
+        pending = self._optimistic_pending.get(vehicle_id)
+
+        def keep(path: str) -> bool:
+            return pending is None or path not in pending
+
         previous = (self.data or {}).get(vehicle_id)
         if previous is not None:
-            if condition.climate.power_on is None:
+            if condition.climate.power_on is None and keep("climate.power_on"):
                 condition.climate.power_on = previous.climate.power_on
-            if condition.climate.steering_wheel_heater_on is None:
+            if condition.climate.steering_wheel_heater_on is None and keep(
+                "climate.steering_wheel_heater_on"
+            ):
                 condition.climate.steering_wheel_heater_on = (
                     previous.climate.steering_wheel_heater_on
                 )
-            if condition.climate.steering_wheel_heater_level is None:
+            if condition.climate.steering_wheel_heater_level is None and keep(
+                "climate.steering_wheel_heater_level"
+            ):
                 condition.climate.steering_wheel_heater_level = (
                     previous.climate.steering_wheel_heater_level
                 )
-            if condition.climate.defrost_on is None:
+            if condition.climate.defrost_on is None and keep(
+                "climate.defrost_on"
+            ):
                 condition.climate.defrost_on = previous.climate.defrost_on
-            _retain_seat_levels(previous.seats, condition.seats)
+            _retain_seat_levels(previous.seats, condition.seats, pending)
         return condition
 
     @staticmethod
@@ -656,23 +746,38 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def _async_wait_for_report(
         self, vehicle_id: str, previous: int | None
     ) -> bool:
-        """Poll the MQTT snapshot until it reports newer than ``previous``."""
+        """Wait for a newer MQTT report through one bounded SDK exchange.
+
+        The SDK opens a single session and re-requests the condition on it, so
+        the wait no longer pays a full MQTT session per poll. A session-level
+        failure is retried with the remaining window, keeping the previous
+        tolerance to per-poll errors.
+        """
         vehicle = self._vehicle(vehicle_id)
         vin = vehicle.vin if vehicle is not None else None
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._wake_report_timeout
         while loop.time() < deadline:
-            await asyncio.sleep(self._wake_poll_interval)
             try:
-                condition = await self.client.s05_mqtt_condition(vehicle_id, vin=vin)
+                condition = await self.client.s05_wait_for_report(
+                    vehicle_id,
+                    previous_timestamp=previous,
+                    interval=self._wake_poll_interval,
+                    timeout=max(0.05, deadline - loop.time()),
+                    vin=vin,
+                )
             except DeepalError as err:
                 _LOGGER.debug(
-                    "Deepal wake poll failed for %s: %s", vehicle_id, err
+                    "Deepal wake report wait failed for %s: %s", vehicle_id, err
                 )
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(min(self._wake_poll_interval, remaining))
                 continue
-            report_ts = condition.last_updated_timestamp
-            if previous is None or (report_ts is not None and report_ts > previous):
+            if condition is not None:
                 return True
+            break
         return False
 
     async def _async_wake_and_wait(
@@ -743,10 +848,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         MQTT vehicles are woken through the app's ``TxWakeup`` service when the
         last report is older than the stale threshold and the per-vehicle wake
         cooldown elapsed; the coordinator waits for a newer report and raises a
-        Home Assistant error when none arrives. The gateway acknowledgement is
-        not required: when the wake request fails, the report wait still
-        decides the outcome. REST vehicles keep the signed condition-inquiry
-        request.
+        Home Assistant error when none arrives. Concurrent refreshes share the
+        per-vehicle wake lock, so a single wake is published per cooldown
+        window. The gateway acknowledgement is not required: when the wake
+        request fails, the report wait still decides the outcome. REST vehicles
+        keep the signed condition-inquiry request.
         """
         vehicle = self._vehicle(vehicle_id)
         current = (self.data or {}).get(vehicle_id)
@@ -758,17 +864,20 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # is not implemented for the SDA architecture, so the refresh
                 # falls through to the normal SDA condition update.
                 return
-            if self._should_wake(vehicle_id, previous) and (
-                await self._async_wake_and_wait(
-                    vehicle_id, wait_when_unconfirmed=True
-                )
-            ) is False:
-                raise HomeAssistantError(
-                    "The vehicle did not report fresh data after the wake "
-                    "request; it may be offline or asleep",
-                    translation_domain=DOMAIN,
-                    translation_key="wake_no_fresh_report",
-                )
+            if self._should_wake(vehicle_id, previous):
+                async with self._vehicle_wake_lock(vehicle_id):
+                    if not self._should_wake(vehicle_id, previous):
+                        return
+                    woke = await self._async_wake_and_wait(
+                        vehicle_id, wait_when_unconfirmed=True
+                    )
+                if woke is False:
+                    raise HomeAssistantError(
+                        "The vehicle did not report fresh data after the wake "
+                        "request; it may be offline or asleep",
+                        translation_domain=DOMAIN,
+                        translation_key="wake_no_fresh_report",
+                    )
         else:
             await self.async_condition_inquiry(vehicle_id)
 
@@ -1102,6 +1211,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         a fresh condition that arrived while polling is never discarded.
         """
         self._optimistic_holds.pop(vehicle_id, None)
+        self._optimistic_pending.pop(vehicle_id, None)
         data = dict(self.data or {})
         current = data.get(vehicle_id)
         if current is None:

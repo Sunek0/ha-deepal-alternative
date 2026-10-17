@@ -1,4 +1,4 @@
-"""Home Assistant integration regression tests (2026.3 baseline).
+"""Home Assistant integration regression tests (2026.8 baseline).
 
 The tests exercise units, device information, unique ids and the
 duplicate-vehicle guard without starting a Home Assistant runtime.
@@ -44,7 +44,7 @@ from custom_components.deepal import (
 from custom_components.deepal import async_remove_config_entry_device
 from custom_components.deepal import time as time_platform
 from custom_components.deepal.charging import ChargingSessionManager
-from custom_components.deepal.const import CONF_CONTROL_PIN
+from custom_components.deepal.const import CONF_CONTROL_PIN, CONF_VEHICLE_ID
 from custom_components.deepal.deepal import (
     DeepalAPIError,
     DeepalAuthError,
@@ -58,7 +58,7 @@ from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.httpx_client import DATA_ASYNC_CLIENT
 from homeassistant.util.ssl import SSL_ALPN_HTTP11
 
@@ -206,7 +206,7 @@ def _entities_by_platform() -> dict[str, list]:
 def test_hacs_metadata_declares_supported_baseline() -> None:
     metadata = json.loads(HACS_METADATA.read_text(encoding="utf-8"))
     assert metadata["name"] == "Deepal Alternative"
-    assert metadata["homeassistant"] == "2026.3.0"
+    assert metadata["homeassistant"] == "2026.8.0"
     assert set(metadata["country"]) == {
         "ES",
         "PT",
@@ -261,6 +261,13 @@ def test_build_client_injects_the_shared_httpx_client(monkeypatch) -> None:
     sda_client = deepal_integration._build_client(hass, sda_entry)
     assert sda_client._client is shared
     assert sda_client._external_client is True
+
+
+def test_build_client_without_access_token_requests_reauth() -> None:
+    entry = SimpleNamespace(data={}, options={})
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        deepal_integration._build_client(SimpleNamespace(), entry)
 
 
 def _patch_issue_registry(monkeypatch) -> tuple[list[dict], list[str]]:
@@ -571,6 +578,53 @@ def test_setup_reconciliation_keeps_current_entities_and_devices(monkeypatch) ->
     assert removed_devices == []
 
 
+def test_setup_reconciliation_keeps_everything_with_empty_vehicle_list(monkeypatch) -> None:
+    """An empty freshly fetched list is an anomaly, never a removal event."""
+    removed_entities: list[str] = []
+    removed_devices: list[str] = []
+
+    class FakeEntityRegistry:
+        def async_remove(self, entity_id):
+            removed_entities.append(entity_id)
+
+    class FakeDeviceRegistry:
+        def async_remove_device(self, device_id):
+            removed_devices.append(device_id)
+
+    monkeypatch.setattr(
+        deepal_integration.er, "async_get", lambda hass: FakeEntityRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.er,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(
+                unique_id="deepal_car-1_battery_soc", entity_id="sensor.keep"
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr, "async_get", lambda hass: FakeDeviceRegistry()
+    )
+    monkeypatch.setattr(
+        deepal_integration.dr,
+        "async_entries_for_config_entry",
+        lambda registry, entry_id: [
+            SimpleNamespace(id="dev-keep", identifiers={("deepal", "car-1")}),
+        ],
+    )
+
+    coordinator = SimpleNamespace(vehicles=[])
+    entry = SimpleNamespace(entry_id="entry-1")
+
+    deepal_integration._remove_stale_vehicle_registry(
+        SimpleNamespace(), entry, coordinator
+    )
+
+    assert removed_entities == []
+    assert removed_devices == []
+
+
 def test_entities_only_expose_allowed_device_info_fields() -> None:
     for platform, entities in _entities_by_platform().items():
         for entity in entities:
@@ -658,10 +712,16 @@ def test_sda_unique_id_falls_back_to_a_vin() -> None:
     )
 
 
-def test_sda_unique_id_falls_back_to_the_token_fragment() -> None:
-    token = "tok123456789"
+def test_sda_unique_id_falls_back_to_an_opaque_token_digest() -> None:
+    import hashlib
 
-    assert config_flow._sda_unique_id("", [], token) == token[:10]
+    token = "tok123456789"
+    expected = "sda_token_" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+    unique_id = config_flow._sda_unique_id("", [], token)
+
+    assert unique_id == expected
+    assert token[:10] not in unique_id
 
 
 def test_odometer_and_mileage_sensor_names() -> None:
@@ -790,9 +850,8 @@ def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
 
 def test_retired_entities_are_removed() -> None:
     keys = {description.key for description in binary_sensor.BINARY_SENSORS}
-    assert {"defrost", "warning_airbag", "warning_coolant_temperature"}.isdisjoint(
-        keys
-    )
+    assert "defrost" not in keys
+    assert {"warning_airbag", "warning_coolant_temperature"} <= keys
 
     removed: list[str] = []
 
@@ -808,11 +867,7 @@ def test_retired_entities_are_removed() -> None:
         _Registry(), SimpleNamespace(car_id="car-1")
     )
 
-    assert sorted(removed) == [
-        "binary_sensor.deepal_car-1_defrost",
-        "binary_sensor.deepal_car-1_warning_airbag",
-        "binary_sensor.deepal_car-1_warning_coolant_temperature",
-    ]
+    assert removed == ["binary_sensor.deepal_car-1_defrost"]
 
 
 def test_ac_gun_binary_sensor_follows_the_model() -> None:
@@ -856,12 +911,14 @@ def test_new_telemetry_entities_are_created() -> None:
         "warning_12v_battery",
         "warning_tpms",
         "warning_abs",
+        "warning_airbag",
         "warning_brake_fluid",
         "warning_brake",
         "warning_eps",
         "warning_power_limit",
         "warning_power_system",
         "warning_traction_battery_low",
+        "warning_coolant_temperature",
         "ac_gun_connected",
         "dc_gun_connected",
     } <= binary_keys
@@ -918,7 +975,7 @@ def _model_vehicle(car_id: str, **fields) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_charge_limit_is_not_offered_on_the_s05() -> None:
+def test_charge_limit_is_not_offered_on_the_s05_without_the_capability() -> None:
     s05 = _model_vehicle(
         "car-1",
         series_name="S05",
@@ -927,20 +984,35 @@ def test_charge_limit_is_not_offered_on_the_s05() -> None:
     )
     s05_by_code = _model_vehicle("car-2", series_code="c857-eu")
     s05_by_name = _model_vehicle("car-3", model_name="Deepal S05")
+    no_code = VehicleCapabilities.from_codes(["#battery", "#chargingInfo"])
 
-    assert number.supports_charge_limit(s05) is False
-    assert number.supports_charge_limit(s05_by_code) is False
-    assert number.supports_charge_limit(s05_by_name) is False
+    assert number.supports_charge_limit(s05, None) is False
+    assert number.supports_charge_limit(s05_by_code, None) is False
+    assert number.supports_charge_limit(s05_by_name, None) is False
+    assert number.supports_charge_limit(s05, no_code) is False
+    assert number.supports_charge_limit(s05_by_code, no_code) is False
+
+
+def test_charge_limit_is_offered_on_the_s05_phev_by_capabilities() -> None:
+    phev = _model_vehicle("car-1", series_name="Deepal S05 PHEV", series_code="C857-EU")
+    phev_by_code = _model_vehicle("car-2", series_code="c857-phev")
+    capabilities = VehicleCapabilities.from_codes(["#oilMileage", "#chargeSet"])
+
+    assert number.supports_charge_limit(phev, capabilities) is True
+    assert number.supports_charge_limit(phev_by_code, capabilities) is True
 
 
 def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
     s07 = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
     unknown = _model_vehicle("car-2", series_name="Deepal X")
     missing = _model_vehicle("car-3")
+    no_code = VehicleCapabilities.from_codes(["#ota"])
 
-    assert number.supports_charge_limit(s07) is True
-    assert number.supports_charge_limit(unknown) is True
-    assert number.supports_charge_limit(missing) is True
+    assert number.supports_charge_limit(s07, None) is True
+    assert number.supports_charge_limit(unknown, None) is True
+    assert number.supports_charge_limit(missing, None) is True
+    assert number.supports_charge_limit(s07, no_code) is True
+    assert number.supports_charge_limit(unknown, no_code) is True
 
 
 def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
@@ -962,6 +1034,22 @@ def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
     assert any(uid.endswith("seat_front_left_heating_control") for uid in s05_ids)
     assert "deepal_car-2_charge_limit" in s07_ids
     assert len(s07_ids) == 5
+
+
+def test_build_control_numbers_include_the_charge_limit_on_the_s05_phev() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(
+        ["#oilMileage", "#chargeSet"]
+    )
+    phev = _model_vehicle("car-1", series_name="Deepal S05 PHEV", series_code="C857-EU")
+
+    phev_ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, phev)
+    ]
+
+    assert "deepal_car-1_charge_limit" in phev_ids
+    assert len(phev_ids) == 5
 
 
 def test_is_s05_matches_name_and_code() -> None:
@@ -1521,6 +1609,7 @@ def _diagnostics_entry(coordinator) -> SimpleNamespace:
             "cac_token": "test-cac-token",
             "user_id": "test-user-1",
             "private_key": "test-private-key",
+            "public_key": "PUBKEY-BODY-BASE64-ABC",
             "phone": "600000000",
             "email": "test.user@example.com",
             "device_id": "test-device-id",
@@ -1616,8 +1705,11 @@ async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
         license_plate="1234-ABC",
         thumbnail_url="https://example.invalid/car.png",
     )
+    condition = _mqtt_condition()
+    condition.raw_data["secretKey"] = "secret-mqtt-token"
+    condition.mqtt_raw_data["smsCode"] = "sms-123456"
     coordinator = _DiagnosticsCoordinator(
-        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
+        [vehicle], {"car-1": condition}, {"car-1": None}
     )
 
     report = await diagnostics.async_get_config_entry_diagnostics(
@@ -1628,12 +1720,18 @@ async def test_diagnostics_report_redacts_credentials_and_locations() -> None:
     assert "VIN-REAL-1" not in serialized
     assert "test-access-token" not in serialized
     assert "test-private-key" not in serialized
+    assert "PUBKEY-BODY-BASE64-ABC" not in serialized
+    assert "secret-mqtt-token" not in serialized
+    assert "sms-123456" not in serialized
     assert "1234" not in json.dumps(report["config_entry_data"])
     assert "600000000" not in serialized
     assert "1234-ABC" not in serialized
     assert report["vehicles"][0]["vin"] == REDACTED
     assert report["vehicles"][0]["license_plate"] == REDACTED
     assert report["config_entry_data"]["access_token"] == REDACTED
+    assert report["config_entry_data"]["public_key"] == REDACTED
+    assert report["raw_rest"]["car-1"]["secretKey"] == REDACTED
+    assert report["raw_mqtt"]["car-1"]["smsCode"] == REDACTED
     assert report["raw_mqtt"]["car-1"]["latitude"] == REDACTED
     assert report["capabilities"]["car-1"] is None
 
@@ -1768,6 +1866,74 @@ def test_options_schema_exposes_the_wake_toggle() -> None:
     assert len(wake_keys) == 1
     assert wake_keys[0].default() == DEFAULT_WAKE
     assert schema({CONF_WAKE: False})[CONF_WAKE] is False
+
+
+@pytest.mark.asyncio
+async def test_options_flow_without_runtime_data_skips_the_pin_check() -> None:
+    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow.handler = "entry-1"
+    flow.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_get_known_entry=lambda entry_id: SimpleNamespace(
+                options={CONF_CONTROL_PIN: "old-pin"},
+                data={},
+            )
+        )
+    )
+
+    errors = await flow._async_validate_control_pin({CONF_CONTROL_PIN: "new-pin"})
+
+    assert errors == {}
+
+
+@pytest.mark.asyncio
+async def test_reauth_accepts_the_configured_vehicle_anywhere_in_the_list() -> None:
+    from homeassistant.config_entries import SOURCE_REAUTH
+
+    flow = object.__new__(config_flow.DeepalConfigFlow)
+    flow.context = {"source": SOURCE_REAUTH}
+    entry = SimpleNamespace(data={CONF_VEHICLE_ID: "car-2"})
+    flow._get_reauth_entry = lambda: entry
+    captured: dict[str, Any] = {}
+
+    def _update_reload_and_abort(entry_arg, *, data_updates, reason):
+        captured["entry"] = entry_arg
+        captured["vehicle_id"] = data_updates[CONF_VEHICLE_ID]
+        captured["reason"] = reason
+        return FlowResultType.ABORT
+
+    flow.async_update_reload_and_abort = _update_reload_and_abort
+
+    class _FlowClient:
+        private_key_pem = "test-private-key"
+        public_key = "test-public-key"
+        device_id = "test-device-id"
+        user_id = "test-user-1"
+
+        async def get_vehicles(self):
+            return [
+                Vehicle(car_id="car-1", vin="VIN-PLACEHOLDER-1"),
+                Vehicle(car_id="car-2", vin="VIN-PLACEHOLDER-2"),
+            ]
+
+        async def close(self):
+            pass
+
+    token = SimpleNamespace(
+        access_token="test-access-token",
+        refresh_token="test-refresh-token",
+        cac_token="test-cac-token",
+        user_id="test-user-1",
+    )
+
+    result = await flow._async_finish_intl_login(
+        _FlowClient(), token, {}, step_id="intl_email_code", errors={}
+    )
+
+    assert result == FlowResultType.ABORT
+    assert captured["entry"] is entry
+    assert captured["vehicle_id"] == "car-2"
+    assert captured["reason"] == "reauth_successful"
 
 
 def test_config_flow_defaults_to_the_international_platform() -> None:

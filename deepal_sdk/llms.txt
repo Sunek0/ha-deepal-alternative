@@ -1,0 +1,29 @@
+# Deepal SDK
+
+> Async Python SDK for the Changan Deepal connected-vehicle platforms: the international My Changan gateway (REST, MQTT and signed remote commands) and the SDA platform (China).
+
+Start with the README for installation and a runnable quickstart. Each guide is a step-by-step walkthrough for one developer task; each reference is the exhaustive protocol contract the guides link into.
+
+## Overview
+
+- [Overview and quickstart](README.md): installation, quickstarts and the documentation index
+
+## Guides
+
+- [Authentication](docs/guides/authentication.md): login flows, session persistence and restore, refresh and logout
+- [Telemetry](docs/guides/telemetry.md): vehicles, condition, capabilities, digital key and REST/MQTT routing
+- [Remote commands](docs/guides/remote-commands.md): control PIN and token, signing, every command family and result polling
+- [MQTT telemetry](docs/guides/mqtt-telemetry.md): when MQTT applies and the single-use condition exchange
+- [Errors and diagnostics](docs/guides/errors-and-diagnostics.md): exception taxonomy in practice and redacted API logging
+
+## Reference
+
+- [International platform API](docs/reference/intl-api.md): gateways, authentication, telemetry, commands, errors
+- [SDA (China) platform API](docs/reference/sda-api.md): access-token client and its limitations
+- [MQTT telemetry protocol](docs/reference/mqtt-telemetry.md): bootstrap, connection options, exchange and parameter mapping
+- [Data models](docs/reference/models.md): every exported Pydantic model with its fields and unknown semantics
+
+## Optional
+
+- [Full documentation, one file](llms-full.txt): the README, guides and references concatenated verbatim
+- [Runnable examples](examples/): login, telemetry and digital-key scripts

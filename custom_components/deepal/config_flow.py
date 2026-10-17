@@ -1,5 +1,6 @@
 """Config flow for the Deepal Alternative integration."""
 
+import hashlib
 import logging
 from typing import Any
 
@@ -199,8 +200,9 @@ def _sda_unique_id(phone: str, vehicles: list[Vehicle], token: str) -> str:
     """Return the stable unique id for an SDA entry.
 
     The account phone (digits only) is the preferred identifier, followed by a
-    vehicle VIN. The access-token fragment is the last resort for accounts
-    with neither, preserving the historical behavior.
+    vehicle VIN. Accounts with neither fall back to an opaque digest of the
+    access token: it cannot be replayed as a credential and no readable token
+    fragment lands in the config entry or entity registries.
     """
     digits = "".join(character for character in phone if character.isdigit())
     if digits:
@@ -208,7 +210,8 @@ def _sda_unique_id(phone: str, vehicles: list[Vehicle], token: str) -> str:
     vin = next((vehicle.vin for vehicle in vehicles if vehicle.vin), "")
     if vin:
         return f"sda_vin_{vin}"
-    return token[:10]
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return f"sda_token_{digest[:16]}"
 
 
 def _panel_schema() -> vol.Schema:
@@ -634,6 +637,21 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return self.async_abort(reason="already_configured")
 
         vehicle: Vehicle = vehicles[0]
+        configured_vehicle_id: str | None = None
+        if self.source == config_entries.SOURCE_REAUTH:
+            configured_vehicle_id = self._get_reauth_entry().data.get(
+                CONF_VEHICLE_ID
+            )
+            matched = next(
+                (
+                    candidate
+                    for candidate in vehicles
+                    if candidate.car_id == configured_vehicle_id
+                ),
+                None,
+            )
+            if matched is not None:
+                vehicle = matched
         data_updates = {
             CONF_ACCESS_TOKEN: token.access_token,
             CONF_REFRESH_TOKEN: token.refresh_token or "",
@@ -652,8 +670,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if self.source == config_entries.SOURCE_REAUTH:
             entry = self._get_reauth_entry()
-            configured = entry.data.get(CONF_VEHICLE_ID)
-            if configured and vehicle.car_id != configured:
+            if configured_vehicle_id and vehicle.car_id != configured_vehicle_id:
                 return self.async_show_form(
                     step_id=step_id,
                     data_schema=vol.Schema({vol.Required("auth_code"): str}),
@@ -761,11 +778,18 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
     async def _async_validate_control_pin(
         self, user_input: dict[str, Any]
     ) -> dict[str, str]:
-        """Verify a changed control PIN against the account before storing it."""
+        """Verify a changed control PIN against the account before storing it.
+
+        The check needs the loaded entry's client; an entry without runtime data
+        (not set up, or already unloaded) cannot verify the PIN, so the options
+        are accepted without the exchange and the command flow surfaces a wrong
+        PIN with its own translated error.
+        """
+        runtime_data = getattr(self.config_entry, "runtime_data", None)
         return await _control_pin_validation_error(
             self.config_entry.options.get(CONF_CONTROL_PIN, ""),
             user_input,
-            self.config_entry.runtime_data.coordinator.client,
+            runtime_data.coordinator.client if runtime_data else None,
         )
 
     def _options_schema(self, options: Any) -> vol.Schema:

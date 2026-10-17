@@ -39,12 +39,63 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+/** Upper-case alphanumerics of the vehicle model, for containment checks. */
+function normalizeModelText(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+/** Whether the vehicle exposes the integration's fuel sensors. */
+function hasFuelEntities(vehicle) {
+  return PANEL_FUEL_ENTITY_KEYS.some((key) =>
+    Boolean(entityFor(vehicle, "sensor", key)),
+  );
+}
+
+/**
+ * Model profile of a vehicle: S05 EV, S05 PHEV, S07 or generic.
+ *
+ * The registry model carries the integration's series name; inside the S05
+ * family the fuel sensors (created only for fuel vehicles) split EV and PHEV,
+ * the same discriminator the integration uses.
+ */
+function detectProfile(vehicle) {
+  const model = normalizeModelText(vehicle && vehicle.model);
+  if (PANEL_S05_MODEL_TOKENS.some((token) => model.includes(token))) {
+    return hasFuelEntities(vehicle)
+      ? PANEL_PROFILE_S05_PHEV
+      : PANEL_PROFILE_S05_EV;
+  }
+  if (PANEL_S07_MODEL_TOKENS.some((token) => model.includes(token))) {
+    return PANEL_PROFILE_S07;
+  }
+  return PANEL_PROFILE_GENERIC;
+}
+
+/**
+ * Artwork and layout of a vehicle's model, or null when the model has none:
+ * the vehicle image entity and the entity-driven sections are the fallback.
+ */
+function layoutFor(vehicle) {
+  if (!vehicle) return null;
+  if (vehicle.profile === PANEL_PROFILE_S07) return PANEL_MODEL_LAYOUTS.s07;
+  if (
+    vehicle.profile === PANEL_PROFILE_S05_EV ||
+    vehicle.profile === PANEL_PROFILE_S05_PHEV
+  ) {
+    return PANEL_MODEL_LAYOUTS.s05;
+  }
+  return null;
+}
+
 /**
  * Group the integration entities into vehicles by device id.
  *
  * Reads the frontend registries only: `hass.entities` carries the platform,
  * device and translation key of every entity, and `hass.devices` the vehicle
  * names. No entity id is assumed, so the panel works on any installation.
+ * Every vehicle also carries its detected model profile.
  */
 function discoverVehicles(hass) {
   const vehicles = new Map();
@@ -62,12 +113,16 @@ function discoverVehicles(hass) {
         deviceId: entry.device_id,
         name: device.name_by_user || device.name || "Deepal",
         model: device.model || "",
+        profile: null,
         entities: {},
       };
       vehicles.set(entry.device_id, vehicle);
     }
     vehicle.entities[domain] = vehicle.entities[domain] || {};
     vehicle.entities[domain][entry.translation_key] = entry.entity_id;
+  }
+  for (const vehicle of vehicles.values()) {
+    vehicle.profile = detectProfile(vehicle);
   }
   return [...vehicles.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
@@ -134,4 +189,41 @@ function formatDateTime(language, value) {
   } catch (error) {
     return String(value);
   }
+}
+
+/** Relative age of an ISO timestamp ("3 min ago"), or null when unreadable. */
+function formatRelativeTime(language, value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  const steps = [
+    { limit: 60, unit: "second" },
+    { limit: 3600, unit: "minute", div: 60 },
+    { limit: 86400, unit: "hour", div: 3600 },
+    { limit: 2592000, unit: "day", div: 86400 },
+    { limit: Infinity, unit: "month", div: 2592000 },
+  ];
+  for (const step of steps) {
+    if (Math.abs(seconds) < step.limit) {
+      const amount = step.div ? Math.round(seconds / step.div) : seconds;
+      try {
+        return new Intl.RelativeTimeFormat(language, {
+          numeric: "auto",
+          style: "short",
+        }).format(-amount, step.unit);
+      } catch (error) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/** Value of a time entity as HH:MM, or null when it has no usable state. */
+function formatTime(hass, entityId) {
+  const state = stateFor(hass, entityId);
+  if (!state) return null;
+  const raw = String(state.state);
+  return /^\d{1,2}:\d{2}/.test(raw) ? raw.slice(0, 5).padStart(5, "0") : raw;
 }

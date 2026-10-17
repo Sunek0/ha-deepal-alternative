@@ -78,6 +78,30 @@ class _FakeIntlClient(DeepalIntlClient):
             return self.mqtt_condition
         return await self.get_vehicle_condition(vehicle_id, vin=vin)
 
+    async def s05_wait_for_report(
+        self,
+        vehicle_id: str,
+        *,
+        previous_timestamp: int | None = None,
+        interval: float = 5.0,
+        timeout: float = 60.0,
+        vin: str | None = None,
+    ) -> VehicleCondition | None:
+        self.events.append("mqtt_wait")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            condition = await self.get_vehicle_condition(vehicle_id, vin=vin)
+            timestamp = condition.last_updated_timestamp
+            if previous_timestamp is None or (
+                timestamp is not None and timestamp > previous_timestamp
+            ):
+                return condition
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            await asyncio.sleep(min(interval, remaining))
+
     async def get_sda_vehicle_condition(
         self, vehicle_id: str, vin: str | None = None
     ) -> VehicleCondition:
@@ -146,6 +170,8 @@ def _coordinator(
     coordinator._command_locks = {}
     coordinator._command_cooldowns = {}
     coordinator._optimistic_holds = {}
+    coordinator._optimistic_pending = {}
+    coordinator._last_steering_wheel = {}
     coordinator._background_tasks = []
     coordinator._last_wake_at = {}
     coordinator._wake_locks = {}
@@ -1018,6 +1044,108 @@ async def test_app_comfort_overlay_uses_server_condition():
     assert merged.seats.front_left.ventilation_level is None
 
 
+@pytest.mark.asyncio
+async def test_app_comfort_overlay_prioritizes_rest_and_remembers_steering():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.climate.steering_wheel_heater_on = False
+    app_condition.raw_data = {"vehicleStatus": {"steeringWheelHeater": 0}}
+    client.http_condition = app_condition
+
+    mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    mqtt_condition.climate.steering_wheel_heater_on = True
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+    assert merged.climate.steering_wheel_heater_on is False
+
+    # A later failed overlay keeps the remembered server state instead of
+    # exposing the unreliable MQTT flicker.
+    client.condition_error = DeepalAPIError("app condition unavailable")
+    flicker = VehicleCondition(car_id="car-1", vin="VIN")
+    flicker.climate.steering_wheel_heater_on = True
+
+    merged = await coordinator._overlay_app_comfort(vehicle, flicker)
+    assert merged.climate.steering_wheel_heater_on is False
+
+
+@pytest.mark.asyncio
+async def test_steering_wheel_falls_back_to_mqtt_before_the_first_server_value():
+    client = _FakeIntlClient([])
+    client.condition_error = DeepalAPIError("app condition unavailable")
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+
+    mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    mqtt_condition.climate.steering_wheel_heater_on = True
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+    assert merged.climate.steering_wheel_heater_on is True
+
+
+@pytest.mark.asyncio
+async def test_steering_wheel_keeps_remembered_state_when_the_field_is_missing():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.climate.steering_wheel_heater_on = False
+    app_condition.raw_data = {"vehicleStatus": {"steeringWheelHeater": 0}}
+    client.http_condition = app_condition
+
+    first = VehicleCondition(car_id="car-1", vin="VIN")
+    first.climate.steering_wheel_heater_on = True
+    merged = await coordinator._overlay_app_comfort(vehicle, first)
+    assert merged.climate.steering_wheel_heater_on is False
+
+    # A successful server report without the field keeps the remembered state.
+    client.http_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    flicker = VehicleCondition(car_id="car-1", vin="VIN")
+    flicker.climate.steering_wheel_heater_on = True
+    merged = await coordinator._overlay_app_comfort(vehicle, flicker)
+    assert merged.climate.steering_wheel_heater_on is False
+
+
+@pytest.mark.asyncio
+async def test_app_condition_overlay_keeps_steering_and_defrost_when_stale():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.climate.steering_wheel_heater_on = False
+    app_condition.climate.defrost_on = False
+    app_condition.seats.front_left.ventilation_level = 2
+    app_condition.raw_data = {
+        "vehicleStatus": {"steeringWheelHeater": 0},
+        "hvac": {"defrostStatus": 0},
+        "seat": {"leftFront": {"ventStatus": 2}},
+    }
+    app_condition.last_updated_timestamp = 1000
+    client.http_condition = app_condition
+
+    mqtt_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    mqtt_condition.climate.steering_wheel_heater_on = True
+    mqtt_condition.climate.defrost_on = True
+    mqtt_condition.seats.front_left.ventilation_level = 3
+    mqtt_condition.last_updated_timestamp = 2000
+
+    merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+    # The unreliable MQTT fields never win over the app condition.
+    assert merged.climate.steering_wheel_heater_on is False
+    assert merged.climate.defrost_on is False
+    # The seat block keeps the freshness rule: the newer snapshot wins.
+    assert merged.seats.front_left.ventilation_level == 3
+
+
 def _charge_overlay_pair() -> tuple[VehicleCondition, VehicleCondition]:
     """Return an app condition with connection data and an empty MQTT snapshot."""
     app_condition = VehicleCondition(car_id="car-1", vin="VIN")
@@ -1458,9 +1586,32 @@ async def test_refresh_wakes_stale_mqtt_vehicle():
 
     await coordinator.async_refresh_vehicle("car-1")
 
-    assert client.events == ["wake", "mqtt_condition", "condition"]
+    assert client.events == ["wake", "mqtt_wait", "condition"]
     assert client.wake_calls == 1
     assert "car-1" in coordinator._last_wake_at
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_publish_a_single_wake():
+    client = _FakeIntlClient([])
+    stale = int(time.time()) - 3600
+    coordinator, _ = _coordinator(
+        client,
+        data={
+            "car-1": VehicleCondition(
+                car_id="car-1", vin="", last_updated_timestamp=stale
+            )
+        },
+    )
+    coordinator.vehicles = [_mqtt_vehicle()]
+    client.condition_timestamps = [stale + 30, stale + 30]
+
+    await asyncio.gather(
+        coordinator.async_refresh_vehicle("car-1"),
+        coordinator.async_refresh_vehicle("car-1"),
+    )
+
+    assert client.wake_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1590,7 +1741,7 @@ async def test_refresh_wake_failure_without_report_raises():
     assert err.value.translation_key == "wake_no_fresh_report"
     assert client.wake_calls == 1
     assert client.events[0] == "wake"
-    assert "mqtt_condition" in client.events
+    assert "mqtt_wait" in client.events
     assert "car-1" not in coordinator._last_wake_at
 
 
@@ -1613,7 +1764,7 @@ async def test_refresh_wake_failure_with_report_succeeds():
     await coordinator.async_refresh_vehicle("car-1")
 
     assert client.wake_calls == 1
-    assert client.events == ["wake", "mqtt_condition", "condition"]
+    assert client.events == ["wake", "mqtt_wait", "condition"]
     assert "car-1" not in coordinator._last_wake_at
 
 
@@ -1653,7 +1804,7 @@ async def test_rate_limited_update_defers_the_next_refresh():
     with pytest.raises(UpdateFailed) as err:
         await coordinator._async_update_data()
 
-    assert err.value.retry_after == 120.0
+    assert err.value.retry_after == 300.0
 
 
 @pytest.mark.asyncio
@@ -1682,7 +1833,7 @@ async def test_short_scan_interval_does_not_tighten_the_backoff():
     with pytest.raises(UpdateFailed) as err:
         await coordinator._async_update_data()
 
-    assert err.value.retry_after == 120.0
+    assert err.value.retry_after == 300.0
 
 
 @pytest.mark.asyncio
@@ -2125,3 +2276,88 @@ async def test_other_command_rejections_keep_the_api_error():
         await coordinator.async_execute_command("car-1", send_command)
 
     assert err.value.code == "COMMON_1_1_01_008"
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_optimistic_value_expires_instead_of_freezing():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client, data={"car-1": VehicleCondition(car_id="car-1", vin="")})
+
+    current = coordinator.data["car-1"]
+    before = current.model_dump()
+    after = current.model_copy(deep=True)
+    after.climate.power_on = True
+    coordinator._register_optimistic_hold("car-1", before, after.model_dump())
+
+    shown = coordinator._apply_optimistic_hold(
+        "car-1", VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    )
+    assert shown.climate.power_on is True
+    coordinator.async_set_updated_data({"car-1": shown})
+    coordinator._optimistic_holds["car-1"]["expires"] = 0
+
+    fetched = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=3000)
+    merged = coordinator._merge_condition("car-1", fetched)
+    assert merged.climate.power_on is None
+    applied = coordinator._apply_optimistic_hold("car-1", merged)
+    assert applied.climate.power_on is None
+    assert "car-1" not in coordinator._optimistic_holds
+    coordinator.async_set_updated_data({"car-1": applied})
+
+    reported = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        climate=ClimateCondition(power_on=False),
+        last_updated_timestamp=4000,
+    )
+    merged = coordinator._merge_condition("car-1", reported)
+    applied = coordinator._apply_optimistic_hold("car-1", merged)
+    assert applied.climate.power_on is False
+    coordinator.async_set_updated_data({"car-1": applied})
+
+    silent = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=5000)
+    merged = coordinator._merge_condition("car-1", silent)
+    assert merged.climate.power_on is False
+    assert "car-1" not in coordinator._optimistic_pending
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_optimistic_seat_level_expires_without_retention():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client, data={"car-1": VehicleCondition(car_id="car-1", vin="")})
+
+    current = coordinator.data["car-1"]
+    before = current.model_dump()
+    after = current.model_copy(deep=True)
+    after.seats.front_left.ventilation_level = 2
+    coordinator._register_optimistic_hold("car-1", before, after.model_dump())
+
+    shown = coordinator._apply_optimistic_hold(
+        "car-1", VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    )
+    assert shown.seats.front_left.ventilation_level == 2
+    coordinator.async_set_updated_data({"car-1": shown})
+    coordinator._optimistic_holds["car-1"]["expires"] = 0
+
+    fetched = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=3000)
+    merged = coordinator._merge_condition("car-1", fetched)
+    applied = coordinator._apply_optimistic_hold("car-1", merged)
+    assert applied.seats.front_left.ventilation_level is None
+
+
+@pytest.mark.asyncio
+async def test_failed_command_clears_unconfirmed_marks():
+    client = _FakeIntlClient([])
+    current = _current_condition()
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    before = current.model_dump()
+    after = current.model_copy(deep=True)
+    after.climate.power_on = True
+    coordinator._register_optimistic_hold("car-1", before, after.model_dump())
+    assert coordinator._optimistic_pending["car-1"]
+
+    coordinator._restore_condition("car-1", current)
+
+    assert "car-1" not in coordinator._optimistic_holds
+    assert "car-1" not in coordinator._optimistic_pending

@@ -28,7 +28,7 @@ funcionar normalmente no telemóvel.
 - Um veículo Deepal compatível (S05, S07) associado a uma conta My Changan.
 - Acesso à app **My Changan** com a conta principal.
 - Um email ou número de telemóvel diferente para a conta secundária.
-- Home Assistant 2026.3.0 ou superior.
+- Home Assistant 2026.8.0 ou superior.
 - [HACS](https://hacs.xyz/docs/use/download/download/) instalado. Se ainda não o tens, segue as
   instruções oficiais de instalação em <https://hacs.xyz/docs/use/download/download/>.
 
@@ -140,7 +140,9 @@ A integração inclui o seu próprio painel, sem YAML de dashboard e sem cartõe
 - Os controlos de portas, janelas e mala só aparecem se guardou o PIN (passo 9); luzes, buzina,
   clima, bancos e volante funcionam sem PIN.
 
-Para o dashboard de exemplo (sem o carregador doméstico) e o cartão `deepal-card`, consulta o guia
+Para o dashboard de exemplo (que não precisa de nada além da integração) e os cartões Deepal — o
+completo `deepal-card` (faixa de indicadores e os três separadores do painel) e o compacto
+`deepal-compact-card` (faixa de indicadores, imagem, chips e ações rápidas) — consulta o guia
 completo em inglês e espanhol: [dashboard-guide.en.md](dashboard-guide.en.md) ·
 [dashboard-guide.es.md](dashboard-guide.es.md).
 

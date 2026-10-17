@@ -169,8 +169,15 @@ class DeepalClient:
             )
         return vehicles
 
-    async def get_vehicle_condition(self, car_id: str) -> VehicleCondition:
-        """Fetch full telemetry condition of a vehicle (battery, doors, mileage, etc.)."""
+    async def get_vehicle_condition(
+        self, car_id: str, vin: Optional[str] = None
+    ) -> VehicleCondition:
+        """Fetch full telemetry condition of a vehicle (battery, doors, mileage, etc.).
+
+        ``vin`` is accepted for call compatibility with the international client
+        (the coordinator passes it for every platform) and ignored: the SDA
+        condition endpoint addresses vehicles by car id.
+        """
         params = {"carId": car_id}
         res = await self._request("GET", GET_CAR_FULL_CONDITION, params=params)
         raw_data = res.get("data", {})

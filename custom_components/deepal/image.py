@@ -11,6 +11,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from homeassistant.components.image import (
@@ -158,20 +159,29 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
     async def _async_fetch_api_image(self) -> None:
         """Fetch the API image once, with a shorter timeout than the proxy's.
 
-        Any failure is non-fatal: the bundled asset covers it and the fetch is
-        not retried for this entity, so a slow or dead URL never costs every
-        image request the whole timeout.
+        Only `https` URLs are fetched and redirects are not followed, so the
+        account payload cannot point the shared Home Assistant client at a
+        local or plain-http address. Any failure is non-fatal: the bundled
+        asset covers it and the fetch is not retried for this entity, so a
+        slow or dead URL never costs every image request the whole timeout.
         """
         self._api_fetch_done = True
         url = self.vehicle.thumbnail_url
         if not url:
+            return
+        if urlsplit(url).scheme != "https":
+            _LOGGER.debug(
+                "Deepal vehicle image URL for %s is not https; using the "
+                "bundled asset",
+                self._car_id,
+            )
             return
 
         try:
             response = await self._client.get(
                 url,
                 timeout=API_IMAGE_TIMEOUT,
-                follow_redirects=True,
+                follow_redirects=False,
             )
             response.raise_for_status()
             content_type = valid_image_content_type(

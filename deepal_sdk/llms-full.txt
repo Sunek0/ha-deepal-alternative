@@ -1,0 +1,2175 @@
+# Deepal SDK — full documentation
+
+> Generated file: do not edit by hand. Regenerate with
+> `python scripts/generate-llms-docs.py --sdk deepal`.
+
+Async Python SDK for the Changan Deepal connected-vehicle platforms: the international My Changan gateway (REST, MQTT and signed remote commands) and the SDA platform (China).
+
+This file concatenates every published document of the package verbatim, in reading
+order. Each section is preceded by an HTML comment with its source path.
+
+<!-- source: README.md -->
+
+# Deepal SDK
+
+Asynchronous Python SDK for the **Changan Deepal / My Changan** connected-vehicle platforms.
+It signs in, reads telemetry and sends remote commands to Deepal vehicles (S05, S07, SL03, L07)
+through the official mobile-app APIs.
+
+> Unofficial project, not affiliated with Changan Automobile. Use it at your own risk. Remote
+> commands act on a real vehicle: make sure it is safe before locking doors, moving windows or
+> starting the climate control.
+
+## Platforms
+
+The SDK speaks to two different Changan platforms, each with its own client:
+
+| Client | Platform | Base host | Login | Reference |
+| --- | --- | --- | --- | --- |
+| `DeepalIntlClient` | International (My Changan app, Europe/LatAm) | `m.iov.changanauto.com.de` | Email or SMS verification code | [`docs/reference/intl-api.md`](docs/reference/intl-api.md) |
+| `DeepalClient` | SDA (mainland China) | `pre-acenter.sda.changan.com.cn` | SMS code or a pasted access token | [`docs/reference/sda-api.md`](docs/reference/sda-api.md) |
+
+The international platform is the fully implemented path: REST telemetry, remote commands signed
+with the account keypair, S05 MQTT telemetry (`docs/reference/mqtt-telemetry.md`) and read-only
+digital key checks. The SDA client is a thin access-token client for the Chinese platform; its
+commands are recovered from the app but not verified live.
+
+## Requirements
+
+- Python 3.10 or newer.
+- Runtime dependencies: `httpx`, `pydantic` v2 and `cryptography`.
+
+## Installation
+
+The package is distributed from the repository (it is not on PyPI):
+
+```bash
+pip install -e deepal_sdk
+```
+
+For the test dependencies:
+
+```bash
+pip install -e "deepal_sdk[dev]"
+```
+
+The examples under `deepal_sdk/examples/` make the SDK importable from their own location, so they
+also run from a clean checkout with any interpreter that has the runtime dependencies.
+
+## Quickstart: international platform
+
+```python
+import asyncio
+
+from deepal import DeepalIntlClient
+
+
+async def main() -> None:
+    async with DeepalIntlClient(country="ES", language="es_ES") as client:
+        await client.request_email_code("you@example.com")
+        code = input("Verification code: ").strip()
+        token = await client.login_with_email_code("you@example.com", code)
+
+        vehicles = await client.get_vehicles()
+        for vehicle in vehicles:
+            condition = await client.get_vehicle_condition(vehicle.car_id)
+            print(
+                vehicle.series_name,
+                condition.battery.soc_percentage,
+                condition.total_odometer_km,
+            )
+
+        print("Logged in:", bool(token.access_token))
+
+
+asyncio.run(main())
+```
+
+SMS login is equivalent: `request_sms_code(phone, country_code)` followed by
+`login_with_sms_code(phone, code, country_code)`. The phone number is national (no `+` prefix) and
+the dial code is passed separately.
+
+### Persist the session
+
+The access token, the command-signing keypair and the device id are account credentials. Persist
+them so a restart does not force a new login (the app treats the keypair as a stable identity):
+
+```python
+# Save after login
+access_token = token.access_token
+refresh_token = token.refresh_token
+cac_token = token.cac_token
+user_id = client.user_id
+private_key_pem = client.private_key_pem
+public_key = client.public_key
+device_id = client.device_id
+
+# Restore later
+client = DeepalIntlClient(country="ES", device_id=device_id)
+client.access_token = access_token
+client.refresh_token = refresh_token
+client.cac_token = cac_token
+client.user_id = user_id
+client.set_login_keypair(private_key_pem, public_key)
+```
+
+Store these values as secrets (for example in an OS keyring or the password manager of your
+application), never in source control.
+
+### Send a remote command
+
+Commands are signed with the login private key. Door, window and trunk commands additionally
+require the remote-control PIN created with the account, which the SDK exchanges for a short-lived
+control token:
+
+```python
+client.control_pin = "123456"
+
+command_id = await client.control_air_conditioner(
+    vehicle.car_id, enabled=True, target_temp_c=22.0
+)
+result = await client.control_result_status(vehicle.car_id, command_id)
+print(result.status)
+```
+
+See [`docs/reference/intl-api.md`](docs/reference/intl-api.md#10-remote-commands) for the complete
+command list, the signature construction, the PIN/token rules and the command result codes.
+
+### MQTT telemetry (S05)
+
+Vehicles that report `protocol_type == "MQTT"` do not refresh their state over REST; the SDK
+performs the app's single-use MQTT exchange instead:
+
+```python
+if DeepalIntlClient.is_mqtt_vehicle(vehicle):
+    condition = await client.s05_mqtt_condition(vehicle.car_id)
+else:
+    condition = await client.get_vehicle_condition(vehicle.car_id)
+```
+
+The bootstrap, the connection options and the parameter mapping are documented in
+[`docs/reference/mqtt-telemetry.md`](docs/reference/mqtt-telemetry.md).
+
+## Quickstart: SDA (China) platform
+
+```python
+import asyncio
+
+from deepal import DeepalClient
+
+
+async def main() -> None:
+    async with DeepalClient(access_token="sda_access_token") as client:
+        vehicles = await client.get_vehicles()
+        condition = await client.get_vehicle_condition(vehicles[0].car_id)
+        print(condition.battery.soc_percentage, condition.doors.locked)
+
+
+asyncio.run(main())
+```
+
+The SMS login flow (`request_sms_code` / `login_with_code`) is implemented but the recommended path
+is an access token issued by the SDA platform. See
+[`docs/reference/sda-api.md`](docs/reference/sda-api.md) for the headers, the telemetry mapping and
+the unverified caveats.
+
+## Error handling
+
+All errors derive from `DeepalError`, so a single `except` can cover the SDK:
+
+```python
+from deepal import (
+    DeepalAPIError,
+    DeepalAuthError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
+    DeepalConnectionError,
+    DeepalRateLimitError,
+)
+
+try:
+    condition = await client.get_vehicle_condition(vehicle.car_id)
+except DeepalAuthError:
+    ...  # the session is gone: log in again (or refresh the tokens)
+except DeepalConnectionError:
+    ...  # network or timeout: retry later
+except DeepalAPIError as err:
+    ...  # gateway rejected the call; err.code and err.status_code carry the detail
+```
+
+- `DeepalAuthError`: missing, expired or rejected session (HTTP 401/403 and the app kick-out codes).
+- `DeepalRateLimitError`: the gateway rate-limits the request or the control PIN has no attempts
+  left.
+- `DeepalCommandAuthError`: the command-signing material was rejected, or the PIN is expired/not
+  set.
+- `DeepalCommandNotReady`: a signed command was attempted without the private key or the PIN.
+- `DeepalAPIError`: any other gateway or HTTP failure, with `code` and `status_code`.
+- `DeepalConnectionError`: transport failure (`httpx.RequestError`).
+
+The full code-to-exception mapping is in
+[`docs/reference/intl-api.md`](docs/reference/intl-api.md#11-errors). For the SDA client only
+`DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError` are raised.
+
+## Diagnostics
+
+`DeepalIntlClient(enable_api_logging=True)` logs every request and response at `WARNING` level with
+tokens, keys, VINs, emails, phones, PINs and serial numbers redacted, and truncates long strings.
+Payload parsing never fails on missing groups: absent telemetry is reported as `None`, `False` or
+`0` according to [`docs/reference/models.md`](docs/reference/models.md).
+
+## Documentation
+
+Task guides (step-by-step walkthroughs):
+
+| Guide | Contents |
+| --- | --- |
+| [`docs/guides/authentication.md`](docs/guides/authentication.md) | Login flows, session persistence and restore, refresh and logout |
+| [`docs/guides/telemetry.md`](docs/guides/telemetry.md) | Vehicles, condition, capabilities, digital key and the REST/MQTT routing decision |
+| [`docs/guides/remote-commands.md`](docs/guides/remote-commands.md) | Control PIN, signing prerequisites, command families and result polling |
+| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies and the single-use condition exchange |
+| [`docs/guides/errors-and-diagnostics.md`](docs/guides/errors-and-diagnostics.md) | Error taxonomy in practice and redacted API logging |
+
+Reference (protocol and models):
+
+| Document | Contents |
+| --- | --- |
+| [`docs/reference/intl-api.md`](docs/reference/intl-api.md) | International platform: environments, headers, login, session refresh, telemetry, capabilities, digital key, signed commands, errors, diagnostics |
+| [`docs/reference/sda-api.md`](docs/reference/sda-api.md) | SDA (China) platform: access token, headers, methods, telemetry mapping, limitations |
+| [`docs/reference/mqtt-telemetry.md`](docs/reference/mqtt-telemetry.md) | MQTT bootstrap, connection options, exchange and parameter mapping, SDA-MQTT beta |
+| [`docs/reference/models.md`](docs/reference/models.md) | Every public Pydantic model, its fields and their semantics |
+
+LLM-friendly entry points:
+
+| File | Contents |
+| --- | --- |
+| [`llms.txt`](llms.txt) | Index of every document with one-line descriptions (llmstxt.org shape) |
+| [`llms-full.txt`](llms-full.txt) | Every document concatenated verbatim for ingestion |
+
+Regenerate them after changing any document with
+`python scripts/generate-llms-docs.py --sdk deepal`; the SDK suite fails when they go stale.
+
+Runnable examples:
+
+| Example | Shows |
+| --- | --- |
+| [`examples/email_login_example.py`](examples/email_login_example.py) | Email-code login against the international platform |
+| [`examples/sms_login_example.py`](examples/sms_login_example.py) | SMS-code login against the international platform |
+| [`examples/basic_status.py`](examples/basic_status.py) | Vehicle list and telemetry over the SDA client |
+| [`examples/login_example.py`](examples/login_example.py) | SMS login against the SDA platform |
+| [`examples/digital_key_status.py`](examples/digital_key_status.py) | Read-only digital key and authorization checks |
+
+## Development
+
+```bash
+.venv/bin/python -m pytest deepal_sdk/tests -q
+```
+
+The test suite uses `httpx.MockTransport` and fake clients; it never contacts the real API. When
+changing the SDK, update the reference document for the affected platform in the same change.
+
+## Home Assistant integration
+
+The repository also ships a Home Assistant integration that consumes the SDK; its user
+documentation is in the [root README](../README.md).
+
+---
+
+<!-- source: docs/guides/authentication.md -->
+
+# Authentication guide
+
+How to establish and keep a `DeepalIntlClient` session: the email and SMS code logins, the
+signing keypair, the values to persist, and how to restore, refresh or end a session.
+
+> Protocol detail (endpoints, headers, encryption) lives in the
+> [international platform reference](../reference/intl-api.md#5-authentication).
+> The China SDA client uses a plain access token instead: see the
+> [SDA platform reference](../reference/sda-api.md#3-authentication).
+
+## 1. Create the client
+
+The client is an async context manager and creates its HTTP client lazily, so constructing one per
+process is cheap:
+
+```python
+import asyncio
+
+from deepal import DeepalIntlClient
+
+
+async def main() -> None:
+    async with DeepalIntlClient(country="ES", language="es_ES") as client:
+        ...  # log in, then read telemetry or send commands
+```
+
+- `country` is the sales country sent as `selectcountry` and used by the login flows.
+- `environment` selects the regional gateway set (`release_eu` for Europe, `release_znm` for Latin
+  America; see [Environments](../reference/intl-api.md#2-environments)).
+- `device_id` is a persistent client fingerprint. When you omit it, the SDK generates a random one;
+  persist it and reuse it across restarts so the account sees a stable device.
+
+## 2. Log in with an email code
+
+Two calls: request the code, then exchange it.
+
+```python
+await client.request_email_code("you@example.com")
+code = input("Verification code: ").strip()
+token = await client.login_with_email_code("you@example.com", code)
+print("Logged in:", bool(token.access_token))
+```
+
+The email address is RSA-encrypted with the app's public key before it leaves the process. The
+login stores the session on the client (`access_token`, `refresh_token`, `cac_token`, `user_id`,
+`ca_user_id`, `cac_user_id`) and returns the same values as an `AuthToken`.
+
+Both calls accept optional arguments:
+
+| Argument | Effect |
+| --- | --- |
+| `sales_country="ES"` | Overrides the client `country` for this call |
+| `pub_key="..."` | Registers an explicit public key instead of the stored or generated one |
+
+Wrong or expired codes raise `DeepalAuthError`; rate limits raise `DeepalRateLimitError` with the
+gateway wait when it is known.
+
+## 3. Log in with an SMS code
+
+The SMS flow is equivalent, with local input validation before any HTTP call:
+
+```python
+await client.request_sms_code("600000000", "34")   # national number + dial code
+token = await client.login_with_sms_code("600000000", code, "34")
+```
+
+- `phone` is the **national** number without the `+` prefix; a leading `+` raises `ValueError`.
+- `country_code` is digits only; a leading `+` is stripped (`+34` becomes `34`).
+- Empty values raise `ValueError`.
+
+## 4. Password logins (unverified)
+
+`login_with_email_password(email, password)` and
+`login_with_password(phone, password, country_code)` exist and follow the app's recovered routes,
+but their field names were extracted from the app without live traffic and are **not verified**.
+Prefer the verification-code flows.
+
+## 5. The signing keypair
+
+Remote commands are signed with the RSA keypair the login registers as `pubKey`. Treat it as part
+of the account identity:
+
+- A login without key material generates a pair and exposes it as `client.private_key_pem` and
+  `client.public_key`.
+- A stored pair is never replaced, and a login never registers a second public key while one is
+  available.
+- If only `pub_key` is provided (no private key), signed commands raise `DeepalCommandNotReady`.
+
+Utilities:
+
+```python
+private_key_pem, public_key = DeepalIntlClient.generate_login_keypair()  # once, then persist
+body = DeepalIntlClient.public_key_body_from_private(private_key_pem)    # derive the pubKey body
+client.set_login_keypair(private_key_pem, public_key)                    # restore a persisted pair
+```
+
+## 6. What to persist
+
+Store these values as secrets (OS keyring or the password manager of your application), never in
+source control:
+
+| Value | Attribute | Why |
+| --- | --- | --- |
+| Access token | `client.access_token` | Authenticates every request |
+| Refresh token | `client.refresh_token` | Required by `refresh_tokens()` |
+| CAC token | `client.cac_token` | Appended to `authorization` and used by the CA/MQTT path |
+| Account user id | `client.user_id` | Required by MQTT telemetry and the digital-key checks |
+| CA / CAC user ids | `client.ca_user_id`, `client.cac_user_id` | Kept for completeness and diagnostics |
+| Device id | `client.device_id` | Stable client fingerprint |
+| Private key | `client.private_key_pem` | Signs remote commands |
+| Public key | `client.public_key` | Registered at login, reused on restore |
+
+The remote-control PIN is a separate secret: set `client.control_pin = "000000"` (your own 6-digit
+PIN) before sending PIN-gated commands; see the [remote commands guide](remote-commands.md).
+
+## 7. Restore a session
+
+A restored client skips the login and keeps signing commands:
+
+```python
+client = DeepalIntlClient(
+    country="ES",
+    device_id=device_id,
+    private_key_pem=private_key_pem,
+    public_key=public_key,
+)
+client.access_token = access_token
+client.refresh_token = refresh_token
+client.cac_token = cac_token
+client.user_id = user_id
+client.ca_user_id = ca_user_id
+client.cac_user_id = cac_user_id
+```
+
+`set_login_keypair(private_key_pem)` is the alternative when you did not persist the public half;
+it derives it from the private key.
+
+## 8. Keep the session fresh
+
+```python
+if client.access_token_expires_soon():          # JWT exp within five minutes
+    await client.refresh_tokens()
+await client.refresh_tokens(force=True)         # after an authentication rejection
+```
+
+- `access_token_expires_soon(margin_seconds=300)` parses the JWT exp claim lazily, so it works on
+  restored sessions.
+- `refresh_tokens()` is throttled with a monotonic 30-minute window matching the app: a throttled
+  call returns the current session without sending a request or raising.
+- A refresh is single-flight (concurrent callers share one outcome) and runs proactively when the
+  access token is about to expire.
+- `force=True` bypasses the window after a `DeepalAuthError`.
+- Omitted fields in the refresh response keep their previous values; when the response carries no
+  new CAC token the SDK logs a warning and the CA/MQTT path keeps the old one.
+
+## 9. Log out
+
+```python
+await client.logout()
+```
+
+The local session (`access_token`, `refresh_token`, `cac_token`, `rc_token`, expiry) is cleared
+even when the remote call fails. Without an access token the call is a no-op. The logout body is
+recovered from the app and **not verified live**.
+
+## 10. When things fail
+
+| Symptom | Exception | Action |
+| --- | --- | --- |
+| Missing, expired or rejected session | `DeepalAuthError` | Restore or re-run a login; refresh if you have `refresh_token` |
+| Gateway rate limit | `DeepalRateLimitError` | Wait `retry_after` seconds when set, then retry |
+| Transport failure or timeout | `DeepalConnectionError` | Retry later; the request never reached the gateway |
+
+The complete mapping is in the [errors guide](errors-and-diagnostics.md) and the
+[error section](../reference/intl-api.md#11-errors) of the reference.
+
+## Next steps
+
+- [Telemetry guide](telemetry.md): list vehicles and read their condition.
+- [Remote commands guide](remote-commands.md): use the session to control the car.
+- [Errors and diagnostics guide](errors-and-diagnostics.md): handle failures and log safely.
+
+---
+
+<!-- source: docs/guides/telemetry.md -->
+
+# Telemetry guide
+
+How to list an account's vehicles, read their condition, learn what each car supports and pick the
+right telemetry path. Everything here assumes a logged-in `DeepalIntlClient` (see the
+[authentication guide](authentication.md)).
+
+> Field-level mapping and unknown-value semantics live in the
+> [REST telemetry section](../reference/intl-api.md#7-rest-telemetry) and the
+> [models reference](../reference/models.md).
+
+## 1. List the vehicles
+
+```python
+vehicles = await client.get_vehicles()
+for vehicle in vehicles:
+    print(vehicle.car_id, vehicle.series_name, vehicle.vin, vehicle.protocol_type)
+```
+
+Every `Vehicle` carries the ids used by the rest of the API (`car_id`, `vin`), the model identity
+(`series_name`, `series_code`, `model_name`, `model_code`), the account nickname
+(`car_name`), the plate (`license_plate`), a thumbnail URL and `protocol_type`, which decides how
+telemetry is read (see [step 3](#3-choose-the-telemetry-path)).
+
+## 2. Read a condition over REST
+
+```python
+condition = await client.get_vehicle_condition(vehicle.car_id, vin=vehicle.vin)
+print(
+    condition.battery.soc_percentage,
+    condition.battery.remaining_range_km,
+    condition.total_odometer_km,
+    condition.doors.locked,
+)
+```
+
+- The SDK requests the app's condition sections (seats, doors, climate, charge, lamps, windows,
+  tires, vehicle status, fuel) and maps the response into `VehicleCondition`.
+- A partial payload is valid: absent groups stay at their defaults (`None`, `False` or `0`), so
+  check for `None` when a field matters.
+- `condition.raw_data` keeps the untouched payload for diagnostics.
+- To map a raw payload you already have (for example one captured from the app), use
+  `client.parse_condition(raw, vehicle_id, vin=vehicle.vin)`.
+
+Units and semantics per field are in the [models reference](../reference/models.md); the mapping
+from wire names is in the [reference table](../reference/intl-api.md#7-rest-telemetry).
+
+## 3. Choose the telemetry path
+
+Some vehicles do not refresh their REST condition — it is a frozen snapshot. The API tells you
+through `protocol_type`, and the client offers two static helpers:
+
+```python
+if DeepalIntlClient.is_mqtt_vehicle(vehicle):
+    if DeepalIntlClient.is_sda_mqtt_vehicle(vehicle):
+        ...  # SDA-MQTT vehicle (for example an E07)
+    else:
+        ...  # legacy MQTT vehicle (for example an S05)
+else:
+    ...  # REST vehicle
+```
+
+| `protocol_type` | Telemetry path |
+| --- | --- |
+| `MQTT` | Single-use MQTT exchange; see the [MQTT guide](mqtt-telemetry.md) |
+| `SDA-MQTT` | SDA/VOT MQTT exchange (beta) with an SDA REST fallback; see the [MQTT guide](mqtt-telemetry.md) |
+| anything else | REST condition, as in step 2 |
+
+Sending commands works the same way for every protocol: the signed-command flow is independent of
+how telemetry is read (see the [remote commands guide](remote-commands.md)).
+
+## 4. Discover what the car supports
+
+```python
+capabilities = await client.get_vehicle_capabilities(vehicle.car_id, vin=vehicle.vin)
+if capabilities is None:
+    ...  # unavailable for this vehicle or region
+else:
+    print(capabilities.trim_hint, capabilities.has_fuel, capabilities.seats)
+```
+
+`get_vehicle_capabilities()` reads the per-vehicle function configuration the app uses to decide
+which controls to offer. It is **non-fatal**: authentication failures, rate limits and unavailable
+endpoints return `None` instead of raising, and the request body candidates are tried in order
+because the app key was not recovered. The returned `VehicleCapabilities` exposes the raw function
+codes (`raw_codes`), per-seat heating and ventilation (`seats`), `has_fuel` (derived from the
+`#oilMileage` function code) and `trim_hint` (`max`, `pro` or `unknown`).
+
+## 5. Read-only digital key checks
+
+```python
+support = await client.get_digital_key_support(vehicle.car_id)
+authorizations = await client.get_vehicle_authorizations(vehicle.car_id)
+```
+
+Two non-fatal checks against the regional SDA gateway:
+
+| Method | Returns |
+| --- | --- |
+| `get_digital_key_support(vehicle_id=None)` | `DigitalKeySupport` with the phone-key scheme (`ca`, `icce`, `honor` or `unknown`) |
+| `get_vehicle_authorizations(car_id)` | The function codes the account may use (`DigitalKey` flags the digital key service) |
+
+Both return `None` on any failure, never provision or download keys and never touch BLE. The
+authorizations service is not deployed in every region (the European gateway answers 404).
+
+## 6. Freshness and unknown values
+
+- `condition.last_updated_timestamp` is the report time in Unix seconds; treat a snapshot as stale
+  when it does not move.
+- Comfort states are tri-state: `climate.power_on` is `None` when the report omits it, which means
+  **unknown**, not off.
+- Sleeping modules report sentinel values (for example seat level `6`); out-of-range comfort levels
+  map to `None`, never to a made-up level. Keep the last valid value in your application until a
+  good report arrives.
+- Mileage and charge fields follow the same rule: a missing or invalid value is `None` (or a model
+  default), not an error.
+
+## Next steps
+
+- [MQTT guide](mqtt-telemetry.md): read live state from MQTT-backed vehicles.
+- [Remote commands guide](remote-commands.md): act on the vehicle.
+- [Errors and diagnostics guide](errors-and-diagnostics.md): handle failures and log safely.
+
+---
+
+<!-- source: docs/guides/remote-commands.md -->
+
+# Remote commands guide
+
+How to send signed remote commands with `DeepalIntlClient`: the prerequisites, the control PIN
+exchange, every command family and how command results are polled.
+
+> The full command reference — payloads, endpoints, serial-number family per command and the
+> verified/recovered status of each one — lives in the
+> [remote commands section](../reference/intl-api.md#10-remote-commands) of the reference.
+
+## 1. Prerequisites
+
+Three ingredients, in this order:
+
+| Requirement | Where it comes from | What fails without it |
+| --- | --- | --- |
+| Login private key (`client.private_key_pem`) | The login keypair (see the [authentication guide](authentication.md#5-the-signing-keypair)) | `DeepalCommandNotReady` |
+| Remote-control PIN (`client.control_pin`) | Created with the account in the official app | `DeepalCommandNotReady` on PIN-gated commands |
+| Serial number | Fetched and decrypted by the SDK per command family | `DeepalCommandAuthError` when it cannot be fetched or decrypted |
+
+Every command returns a **`commandId` string**; the vehicle executes asynchronously and the result
+is polled (see [step 4](#4-poll-the-result)).
+
+## 2. Provide the control PIN
+
+```python
+client.control_pin = "000000"  # the account's remote-control PIN
+```
+
+The PIN gates the door lock, the windows and the trunk. The SDK exchanges it automatically the
+first time a PIN-gated command runs: it asks `get_security_code_status()` for the remaining
+attempts, encrypts the PIN and stores the returned short-lived `rc_token` in `client.rc_token`.
+When a command reuses a stale token the server rejects it once, and the SDK re-exchanges the PIN
+and retries that command a single time.
+
+You can also drive the exchange yourself:
+
+```python
+status = await client.get_security_code_status()   # retryQuantity and PIN state
+await client.check_control_code("000000")           # stores and returns the rc_token
+```
+
+- No remaining attempts ⇒ `DeepalRateLimitError`, and no exchange is attempted.
+- Expired (`HW_1_1_01_073`) or not-set (`HW_1_1_01_074`) PIN ⇒ `DeepalCommandAuthError`; create or
+  reset the PIN in the app with the same account.
+
+## 3. Send a command
+
+```python
+command_id = await client.control_air_conditioner(
+    vehicle.car_id, enabled=True, target_temp_c=22.0
+)
+```
+
+Families and entry points:
+
+| Family | Methods | PIN |
+| --- | --- | --- |
+| Climate | `control_air_conditioner`, `control_defrost` | No |
+| Refresh | `control_condition_inquiry` | No |
+| Locks | `control_doors`, `control_windows`, `control_trunk` | **Yes** |
+| Lights and horn | `control_flashing_honking` (`FLASH_HONK_FLASH`, `FLASH_HONK_BEE`, `FLASH_HONK_FLASH_BEE`, `FLASH_HONK_OFF`) | No |
+| Seats and wheel | `control_seats_heat`, `control_seats_wind`, `control_steering_wheel_heat` | No (optional `require_rc_token`) |
+| Charging | `control_charge_limit`, `control_charge_schedule` | No |
+| Plans | `control_charge_plan_add/delete/validity`, `control_departure_plan_add/modify/delete/validity/enabled` | No |
+| Vehicle | `control_fota_plan` | No |
+
+Details that matter:
+
+- Seat commands serialize only the positions you pass; turning a seat off sends `switch: 0`
+  without a level because a zero level is rejected by the gateway.
+- Flash and horn codes are the `FLASH_HONK_*` constants exported by the package.
+- The optional families accept `serial_type` and `require_rc_token` overrides; the defaults come
+  from the app constants and are pending full live validation.
+
+## 4. Poll the result
+
+```python
+import asyncio
+
+from deepal import CommandResultStatus
+
+while True:
+    result = await client.control_result_status(vehicle.car_id, command_id)
+    if result.status is not CommandResultStatus.PENDING:
+        break
+    await asyncio.sleep(2)
+
+print(result.status, result.error_message)
+```
+
+`control_result(vehicle_id, command_id)` returns the raw gateway dictionary;
+`control_result_status(...)` classifies it into a `CommandResult`:
+
+| `resultCode` | `status` | Meaning |
+| --- | --- | --- |
+| absent, `-100` | `pending` | The vehicle has not answered yet |
+| `0`, `1201` | `success` | Executed |
+| `1015` | `already_done` | The state was already the requested one |
+| `-1`, `-2`, unknown | `failed` | Refused or failed; `error_message` carries `errorMsg` |
+
+There is no SDK-side timeout: poll at your own cadence and stop when the status is no longer
+`pending`.
+
+## 5. Repeating physical commands
+
+Flash and horn drive a real physical cycle on the car: a new request is refused until the cycle
+finishes (about 30 seconds for flash and 6 seconds for horn). When you repeat one too soon, wait
+for the cycle instead of hammering the gateway — the vehicle would reject the repeats anyway.
+
+## 6. The signature (what the SDK does for you)
+
+Every command body is signed with the login private key:
+
+- `sign_payload(payload, omit_keys=None)` builds the canonical string (alphabetically sorted
+  `key=value` pairs joined with `&`), signs it with RSA PKCS#1 v1.5 + SHA-256 and base64-MIME
+  encodes it.
+- The default `app` policy excludes exactly `sign`, `class` and `command`; per-command omission
+  sets are only used by the `legacy` policy (`signing_policy="legacy"`).
+- `rc_token` is serialized only by the PIN-gated commands; an empty token is rejected by the
+  gateway with `COMMON_1_1_01_008`.
+
+The construction is documented in detail in the
+[signature section](../reference/intl-api.md#103-signature) of the reference.
+
+## 7. Command-specific errors
+
+| Situation | Exception |
+| --- | --- |
+| Signed command without a private key or required PIN | `DeepalCommandNotReady` |
+| PIN expired or not set | `DeepalCommandAuthError` |
+| Serial fetch/decrypt failure (`COMMON_1_1_01_001`) or rejected `rcToken` | `DeepalCommandAuthError` |
+| PIN attempts exhausted (`HW_1_1_01_047`) | `DeepalRateLimitError` |
+| Any other gateway code | `DeepalAPIError` with `code` |
+
+## 8. End-to-end example
+
+```python
+import asyncio
+
+from deepal import (
+    CommandResultStatus,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
+    DeepalIntlClient,
+)
+
+
+async def main() -> None:
+    async with DeepalIntlClient(country="ES", device_id="restored-device-id") as client:
+        # ... restore the session (authentication guide, step 7) ...
+        client.control_pin = "000000"
+
+        try:
+            command_id = await client.control_doors("CAR_ID", open_value=False)
+        except DeepalCommandNotReady as err:
+            print("Missing key or PIN:", err)
+            return
+        except DeepalCommandAuthError as err:
+            print("PIN problem:", err)
+            return
+
+        while True:
+            result = await client.control_result_status("CAR_ID", command_id)
+            if result.status is not CommandResultStatus.PENDING:
+                break
+            await asyncio.sleep(2)
+        print("Lock:", result.status, result.error_message)
+
+
+asyncio.run(main())
+```
+
+## Next steps
+
+- [Errors and diagnostics guide](errors-and-diagnostics.md): the complete failure taxonomy.
+- [International platform reference](../reference/intl-api.md#10-remote-commands): endpoints,
+  payloads and the verified/recovered status of every command.
+
+---
+
+<!-- source: docs/guides/mqtt-telemetry.md -->
+
+# MQTT telemetry guide
+
+How to read live state from vehicles that report over MQTT, which client values are required and
+which options matter. The protocol-level tables (endpoints, connection options, parameter mapping)
+stay in the [MQTT telemetry reference](../reference/mqtt-telemetry.md).
+
+## 1. Check whether the vehicle needs it
+
+```python
+if DeepalIntlClient.is_mqtt_vehicle(vehicle):
+    ...  # read over MQTT instead of REST
+```
+
+- `protocol_type == "MQTT"` (for example the S05): the REST condition is a frozen snapshot; only
+  the MQTT exchange reflects live state.
+- `protocol_type == "SDA-MQTT"` (for example the E07): same broker, but the condition is read
+  through the SDA/VOT services (beta).
+- Anything else: use `get_vehicle_condition()` as described in the
+  [telemetry guide](telemetry.md).
+
+## 2. Read a legacy MQTT condition
+
+One call performs the whole bootstrap/connect/read/close cycle:
+
+```python
+condition = await client.s05_mqtt_condition(vehicle.car_id, vin=vehicle.vin)
+print(condition.battery.soc_percentage, condition.doors.locked)
+```
+
+Under the hood the SDK fetches the CA connection configuration and the account MQTT token,
+connects over TLS, publishes the `loginout` exchange, requests the `car_condition` properties,
+decrypts the response and maps the parameters into the same `VehicleCondition` model used by REST.
+
+Requirements: a logged-in client (`user_id`) and a stable `device_id` — both already handled by the
+[authentication guide](authentication.md).
+
+## 3. Read an SDA-MQTT condition (beta)
+
+```python
+if DeepalIntlClient.is_sda_mqtt_vehicle(vehicle):
+    try:
+        condition = await client.s05_mqtt_condition(
+            vehicle.car_id, vin=vehicle.vin, sda=True
+        )
+    except DeepalAPIError:
+        condition = await client.get_sda_vehicle_condition(
+            vehicle.car_id, vin=vehicle.vin
+        )
+```
+
+- `sda=True` selects the SDA `Get_CarCondition` service; the SDK probes the function-tree device
+  and signal codes within `mqtt_sda_probe_grace` seconds and falls back to the legacy request.
+- `get_sda_vehicle_condition()` reads the flat SDA REST condition on the SDA gateway as a
+  fallback when the broker path is unavailable.
+- For read-only diagnostics, `open_sda_session(...)` connects and subscribes without ever
+  publishing a control command.
+
+This path is **beta**: recovered from the app and verified read-only against a live vehicle, but
+SDA command publishing is not implemented yet. Details and endpoints are in the
+[SDA-MQTT section of the reference](../reference/mqtt-telemetry.md#8-sda-mqtt-telemetry-and-wake-beta).
+
+## 4. Wake a sleeping vehicle
+
+```python
+await client.wake_vehicle(vehicle.car_id)
+condition = await client.s05_mqtt_condition(vehicle.car_id, vin=vehicle.vin)
+```
+
+`wake_vehicle()` publishes the app's wake service over MQTT and returns once the gateway
+acknowledges it; the car then reports fresh data within a few seconds. The wait is bounded by
+`mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
+
+## 5. Options that matter
+
+| Constructor option | Default | When to touch it |
+| --- | --- | --- |
+| `mqtt_keepalive` | `60` | Broker drops long idle waits; the SDK sends `PINGREQ` while waiting |
+| `mqtt_clean_start` | `True` | MQTT 5.0 clean-start flag, like the app |
+| `mqtt_config_fallback`, `mqtt_token_fallback` | `True` | Allow the recovered fallback endpoints when the primary CA route fails |
+| `mqtt_exchange_timeout` | `max(timeout, 20)` | Slow vehicles that need a longer read window |
+| `mqtt_token_ttl` | `60.0` | Reuse window of the account MQTT token across several vehicles |
+| `mqtt_tls_insecure` | `False` | **Diagnostics only**: disables certificate verification and logs a warning |
+| `mqtt_client_id`, `mqtt_username` | `None` | Override the broker identity resolved from the connection config |
+
+Authentication errors and rate limits are never masked by the fallbacks.
+
+## 6. Reading the result
+
+- The returned `VehicleCondition` is the same model as the REST path, so downstream code does not
+  branch on the protocol.
+- `condition.condition_source` tells you which service produced the snapshot (`sda-mqtt`,
+  `sda-mqtt-signal-list`, `legacy-mqtt` or `rest`).
+- `condition.mqtt_raw_data` keeps the decrypted parameters, `mqtt_variants` every variant
+  attempted and `sda_plan` the derived SDA plan; all three are diagnostics-only.
+- Sleeping modules report sentinel values: out-of-range comfort levels (for example seat level `6`)
+  map to `None` (unknown). Retain the last valid value in your application.
+
+## 7. Limitations
+
+- One connection/read/close cycle per call: there is no background session or automatic reconnect.
+  Poll at your own cadence.
+- The broker identity and topics come from the server configuration; the app templates are only a
+  fallback.
+- The CA gateway can reject the account; the call fails and the REST condition remains available.
+- The SDA-MQTT path is beta (see step 3).
+
+## Next steps
+
+- [MQTT telemetry reference](../reference/mqtt-telemetry.md): endpoints, options and the full
+  parameter mapping.
+- [Errors and diagnostics guide](errors-and-diagnostics.md): how MQTT failures surface.
+
+---
+
+<!-- source: docs/guides/errors-and-diagnostics.md -->
+
+# Errors and diagnostics guide
+
+How the SDK reports failures, how to react to each class and how to log traffic without leaking
+credentials.
+
+> The exact gateway code lists live in the [error section](../reference/intl-api.md#11-errors) of
+> the reference; this guide is about handling them in an application.
+
+## 1. The taxonomy
+
+```
+DeepalError
+├── DeepalAuthError
+│   ├── DeepalCommandAuthError    # signing material rejected, PIN expired or not set
+│   └── DeepalCommandNotReady     # private key or PIN missing before signing
+├── DeepalAPIError                # any other gateway or HTTP failure (code, status_code)
+│   └── DeepalRateLimitError      # 429 or business rate limit (retry_after)
+└── DeepalConnectionError         # transport failure (httpx.RequestError)
+```
+
+Every error derives from `DeepalError`, so one `except` can cover the SDK. The SDA (China) client
+raises only `DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError`
+([SDA errors](../reference/sda-api.md#7-errors)).
+
+## 2. React to each class
+
+| Situation | Exception | What to do |
+| --- | --- | --- |
+| HTTP 401/403 or an app kick-out code | `DeepalAuthError` | Restore or re-login; `refresh_tokens(force=True)` first when you have a refresh token |
+| HTTP 429 or a business rate limit | `DeepalRateLimitError` | Wait `retry_after` seconds when set, then retry |
+| PIN attempts exhausted (`HW_1_1_01_047`) | `DeepalRateLimitError` | Reset the PIN in the app; there is no SDK-side unlock |
+| PIN expired (`HW_1_1_01_073`) or not set (`HW_1_1_01_074`) | `DeepalCommandAuthError` | Create or reset the PIN with the account used by your application |
+| Serial fetch/decrypt failure, rejected `rcToken` | `DeepalCommandAuthError` | Check the keypair and retry; the SDK re-exchanges the PIN once automatically |
+| Signed command without key or PIN | `DeepalCommandNotReady` | Fix the prerequisites before retrying (see the [commands guide](remote-commands.md#1-prerequisites)) |
+| Any other `success: false` code or non-2xx HTTP status | `DeepalAPIError` | Inspect `code` / `status_code`; usually not retryable without a change |
+| Transport failure or timeout | `DeepalConnectionError` | Retry later; the request never reached the gateway |
+
+## 3. Retry pattern
+
+```python
+import asyncio
+
+from deepal import DeepalAuthError, DeepalConnectionError, DeepalRateLimitError
+
+async def read_condition(client, car_id):
+    try:
+        return await client.get_vehicle_condition(car_id)
+    except DeepalRateLimitError as err:
+        await asyncio.sleep(err.retry_after or 60)
+        return await client.get_vehicle_condition(car_id)
+    except DeepalAuthError:
+        await client.refresh_tokens(force=True)
+        return await client.get_vehicle_condition(car_id)
+    except DeepalConnectionError:
+        raise  # let the caller decide how to back off
+```
+
+- `retry_after` carries the gateway's `Retry-After` value when it sent a positive one, and is
+  `None` for business rate limits without a wait.
+- A forced refresh is single-flight, so concurrent failures do not storm the gateway.
+- Avoid unbounded retry loops: a second `DeepalAuthError` after a refresh means the session is
+  gone and a new login is required.
+
+## 4. Redacted diagnostics
+
+Pass `enable_api_logging=True` to log every request and response at `WARNING` level:
+
+```python
+client = DeepalIntlClient(country="ES", enable_api_logging=True)
+```
+
+- Tokens, keys, VINs, emails, phones, PINs, serial numbers and user ids are masked; strings longer
+  than 500 characters are truncated (`deepal/redact.py`).
+- Only non-sensitive headers are logged as-is: `selectcountry`, `appversion`, `language`,
+  `x-os-version`, `x-tsp-timestamp`, `x-vcs-timestamp`.
+- Logins and refreshes log **booleans** for whether `cacToken`, `userId`, `caUserId` and
+  `cacUserId` arrived, never the values.
+- Unmapped MQTT parameters can be surfaced by enabling `DEBUG` on the `deepal_sdk` logger:
+
+```python
+import logging
+
+logging.getLogger("deepal_sdk").setLevel(logging.DEBUG)
+```
+
+## 5. Keeping secrets out of your logs
+
+- The SDK never logs credential values itself, but your application can: catch the exceptions and
+  log `err.code` / `err.status_code`, not the payloads you passed in.
+- Store tokens, the signing keypair and the control PIN in a secret store; never in source control
+  or plain-text config files (see [what to persist](authentication.md#6-what-to-persist)).
+
+## Next steps
+
+- [International platform reference](../reference/intl-api.md#11-errors): the complete
+  code-to-exception mapping.
+- [Remote commands guide](remote-commands.md#7-command-specific-errors): command-specific failures.
+
+---
+
+<!-- source: docs/reference/intl-api.md -->
+
+# International platform API reference
+
+Reference for `DeepalIntlClient`, the client for the **My Changan / Deepal international**
+platform (Europe and Latin America). It documents the behaviour implemented in
+`deepal_sdk/deepal/intl.py`, `endpoints.py` and `models/`.
+
+> All requests are **POST** with a compact JSON body, including reads. There is no GET.
+
+## Contents
+
+1. [Architecture and gateways](#1-architecture-and-gateways)
+2. [Environments](#2-environments)
+3. [Client construction](#3-client-construction)
+4. [Request headers](#4-request-headers)
+5. [Authentication](#5-authentication)
+6. [Vehicles](#6-vehicles)
+7. [REST telemetry](#7-rest-telemetry)
+8. [Vehicle capabilities](#8-vehicle-capabilities)
+9. [Digital key (read-only)](#9-digital-key-read-only)
+10. [Remote commands](#10-remote-commands)
+11. [Errors](#11-errors)
+12. [Diagnostics and redaction](#12-diagnostics-and-redaction)
+13. [Public method index](#13-public-method-index)
+
+## 1. Architecture and gateways
+
+The international platform is reached through three hosts:
+
+| Gateway | Purpose | Path prefix |
+| --- | --- | --- |
+| International | Login, vehicles, REST telemetry, signed commands | `/intl-app-gw/...` |
+| CA (`ca_base_url`) | MQTT bootstrap: connection config and auth token | `/user-apigw/...` and `/app-apigw/...` |
+| Regional SDA (`sda_base_url`) | Read-only digital key checks | `/app-apigw/...` |
+
+Response envelope:
+
+```json
+{ "success": true, "code": "0", "msg": "", "data": {} }
+```
+
+`DeepalIntlClient` returns the `data` field. A `success: false` response raises a typed exception
+(see [Errors](#11-errors)).
+
+## 2. Environments
+
+`DeepalIntlClient(environment=...)` resolves all three hosts plus the `appid` value from
+`deepal/endpoints.py::INTL_ENVIRONMENTS`, reconstructed from the app's `LocalEnvironments`:
+
+| `environment` | Region | International | CA | Regional SDA | `appid` |
+| --- | --- | --- | --- | --- | --- |
+| `release_eu` (default) | Europe | `https://m.iov.changanauto.com.de` | `https://ca-m.iov.changanauto.com.de` | `https://sda-m.iov.changanauto.com.de` | `ca` |
+| `release_znm` | Latin America | `https://m.mx.changanauto.link` | `https://m.mx.changanauto.link` | `https://sda-m.mx.changanauto.link` | `ca` |
+
+Retired identifiers (`release_eu_mix`, `preprod_eu`, `release_ase`, `release_ase_connect`,
+`release_dlt`, `release_st`, `release_alq`) resolve to `release_eu` so stored configurations do not
+break; an account from those regions must select the correct environment explicitly. Unknown
+values raise `ValueError`. `base_url`, `ca_base_url` and `sda_base_url` override the hosts
+individually (diagnostics or tests).
+
+## 3. Client construction
+
+```python
+DeepalIntlClient(
+    country="GB",
+    language="en_US",
+    app_version="V1.12.0",
+    app_type="Android",
+    device_type="samsung",
+    os_version="9",
+    tsp_token_source="access",
+    environment="release_eu",
+    mqtt_config_fallback=True,
+    mqtt_token_fallback=True,
+    mqtt_client_id=None,
+    mqtt_username=None,
+    mqtt_keepalive=60,
+    mqtt_clean_start=True,
+    mqtt_tls_insecure=False,
+    mqtt_sda_probe_grace=3.0,
+    mqtt_exchange_timeout=None,
+    mqtt_wake_timeout=None,
+    mqtt_token_ttl=60.0,
+    device_id=None,
+    private_key_pem=None,
+    public_key=None,
+    base_url=None,
+    ca_base_url=None,
+    sda_base_url=None,
+    timeout=15.0,
+    enable_api_logging=False,
+    signing_policy="app",
+    httpx_client=None,
+)
+```
+
+| Parameter | Description |
+| --- | --- |
+| `country` | Sales country sent as `selectcountry` and used by the login flows (`GB` default). |
+| `language` | Sent as `language` and `accept-language` (`en_US` default). |
+| `app_version`, `app_type`, `device_type`, `os_version` | Declared app identity; defaults match the 1.12.0 app capture. Overridable for diagnostics. |
+| `tsp_token_source` | Which session value is sent as `X-Tsp-User-Token`/`X-VCS-User-Token`: `access` (default, verified live), `cac`, `cac_user_id` or `ca_user_id`. Diagnostic only. |
+| `environment` | Regional gateway set (see [Environments](#2-environments)). |
+| `mqtt_config_fallback`, `mqtt_token_fallback` | Allow the app's fallback endpoints when the CA bootstrap fails (see `mqtt-telemetry.md`). |
+| `mqtt_client_id`, `mqtt_username` | MQTT identity overrides; otherwise resolved from the connection config. |
+| `mqtt_keepalive` | MQTT keepalive seconds (default 60). |
+| `mqtt_clean_start` | MQTT clean-start flag (default `True`). |
+| `mqtt_tls_insecure` | Disables MQTT certificate and hostname verification (diagnostic; logs a warning). |
+| `mqtt_sda_probe_grace` | Seconds an SDA-MQTT session may probe condition variants and signals before falling back (default 3.0). |
+| `mqtt_exchange_timeout` | Timeout for one MQTT condition exchange; default `max(timeout, 20)` seconds. |
+| `mqtt_wake_timeout` | Timeout waiting for the gateway to acknowledge a `wake_vehicle` request; default `max(timeout, 20)` seconds. |
+| `mqtt_token_ttl` | Reuse window of the account MQTT auth token before it is fetched again (default 60.0 seconds). |
+| `device_id` | Persistent client fingerprint; generated as 32 lowercase hex characters when omitted. Reuse the same value across restarts. |
+| `private_key_pem`, `public_key` | Command-signing keypair to reuse; see [Login keypair](#52-login-keypair). |
+| `timeout` | HTTP timeout in seconds (default 15). |
+| `enable_api_logging` | Log redacted requests and responses at `WARNING` level. |
+| `signing_policy` | `app` (default) or `legacy`; see [Signature](#103-signature). |
+| `httpx_client` | Inject an `httpx.AsyncClient`; the SDK uses it as-is and never closes it. |
+
+`base_url`, `ca_base_url` and `sda_base_url` default to the selected environment. The managed HTTP
+client is created lazily on the first request (TLS setup off the event loop); `close()` tolerates a
+client that was never created. The client is an async context manager.
+
+## 4. Request headers
+
+Every request carries the declared app identity:
+
+| Header | Value |
+| --- | --- |
+| `appid` | Environment app id (`ca`) |
+| `apptype` | `Android` |
+| `appversion` | `V1.12.0` |
+| `devicetype` | `samsung` |
+| `deviceid` | Persistent client id (32 hex chars) |
+| `selectcountry` | `country` |
+| `language` / `accept-language` | `language` |
+| `x-os-version` | `os_version` (`9` by default) |
+| `content-type` | `application/json; charset=UTF-8` |
+| `user-agent` | `okhttp/4.12.0` |
+
+With a session, authenticated requests add:
+
+| Header | Value |
+| --- | --- |
+| `authorization` | `access_token`, or `access_token\|cac_token` when a CAC token is present |
+| `X-Tsp-User-Token` / `X-VCS-User-Token` | Access token (verified against the production CA gateway on 2026-09-19; the CAC token is rejected with `APIGW_-1_7_01_004` and an empty header with `APIGW_1_7_02_001`) |
+
+`X-Tsp-Timestamp` and `X-VCS-Timestamp` are never sent.
+
+## 5. Authentication
+
+### 5.1 Sensitive value encryption
+
+Email, phone, password and PIN are encrypted with the app's RSA public key
+(`endpoints.REQUEST_ENCRYPTION_PUBLIC_KEY`, DER/SPKI in base64) using **RSA PKCS#1 v1.5** and sent
+base64-encoded:
+
+```python
+encrypted = DeepalIntlClient.encrypt_request_value("you@example.com")
+```
+
+### 5.2 Login keypair
+
+The login registers a public key (`pubKey`) that later signs remote commands. It is an RSA 1024-bit
+identity, like the app's persisted `SP_KEY_SELF_PUBKEY`/`SP_KEY_SELF_PRIKEY`:
+
+- `generate_login_keypair()` returns `(private_key_pem, public_key_body)`.
+- `public_key_body_from_private(private_key_pem)` derives the app `pubKey` body (base64 DER without
+  PEM headers) from a stored private key.
+- `set_login_keypair(private_key_pem, public_key=None)` restores a persisted pair; the public key
+  is derived when omitted.
+- When a login runs without any key material, the SDK generates a pair and exposes
+  `client.private_key_pem` and `client.public_key`.
+- A stored keypair is never replaced while only the public half is missing; a login does not
+  register a new public key when one is already available.
+
+If a login only provides `pub_key` (no private key), commands cannot be signed: signed command
+methods raise `DeepalCommandNotReady`.
+
+### 5.3 Email verification code
+
+```python
+await client.request_email_code("you@example.com")
+token = await client.login_with_email_code("you@example.com", code)
+```
+
+Optional `sales_country` and `pub_key` arguments override the client `country` and the stored
+keypair for that login.
+
+### 5.4 SMS verification code
+
+```python
+await client.request_sms_code("600000000", "34")
+token = await client.login_with_sms_code("600000000", code, "34")
+```
+
+Input rules (validated locally before any HTTP call):
+
+- `phone` is the **national** number without the country prefix; a leading `+` raises `ValueError`.
+- `country_code` must contain digits only; a leading `+` is stripped (`+34` becomes `34`).
+- Empty values raise `ValueError`.
+
+### 5.5 Password logins (unverified)
+
+`login_with_email_password(email, password, ...)` and
+`login_with_password(phone, password, country_code, ...)` call the routes recovered from the 1.12.0
+app (`email-pass-in` and `login-by-pwd`). The app method bodies are VMP-extracted, so the field
+names are modelled on the code flows and **have not been verified against live traffic**. The
+verification-code flows remain the supported path.
+
+### 5.6 Session and tokens
+
+A successful login stores, and returns as `AuthToken`:
+
+| Attribute | `AuthToken` field | Description |
+| --- | --- | --- |
+| `client.access_token` | `access_token` | Bearer token |
+| `client.refresh_token` | `refresh_token` | Refresh token (exchanged at `auth/refresh-token`) |
+| `client.cac_token` | `cac_token` | CAC/TSP token; when present, `authorization` becomes `access\|cac` |
+| `client.user_id` | `user_id` | Account user id (required by MQTT and digital key checks) |
+| `client.ca_user_id` | `ca_user_id` | CA user id |
+| `client.cac_user_id` | `cac_user_id` | CAC user id |
+
+`access_token_expires_soon(margin_seconds=300)` reports whether the JWT `exp` claim is within the
+margin, parsing the token lazily when the session was restored without parsing it.
+
+### 5.7 Token refresh
+
+`await client.refresh_tokens(force=False)`:
+
+- **Throttled** with a monotonic 30-minute window (`INTL_REFRESH_THROTTLE_SECONDS = 1800.0`),
+  matching the app's `tokenExpireTime = 1800000`. A throttled call returns the current session
+  without raising or sending a request.
+- **Single-flight**: an internal lock serializes attempts; concurrent callers share the outcome.
+- **Proactive**: a refresh bypasses the window when the access token expires within five minutes.
+- **Forced**: `force=True` bypasses the window after an authentication rejection.
+- The response may omit fields: omitted `refreshToken`, `cacToken`, `userId`, `caUserId` and
+  `cacUserId` keep their previous values.
+
+The CAC token is not guaranteed to be renewed by a refresh; when the response does not carry a new
+one, the SDK logs a warning and the CA/MQTT bootstrap keeps the previous token. Requires a stored
+`refresh_token`, otherwise `DeepalAuthError`.
+
+### 5.8 Logout (unverified)
+
+`await client.logout()` posts to the logout route with the session headers and clears
+`access_token`, `refresh_token`, `cac_token`, `rc_token` and `access_token_expires_at` even when
+the remote call fails. Without an access token it does nothing. The body was not verified against
+live traffic.
+
+## 6. Vehicles
+
+`await client.get_vehicles()` returns the account vehicles as `Vehicle` models:
+
+| API field | Model field |
+| --- | --- |
+| `carId` | `car_id` |
+| `vin` | `vin` |
+| `seriesName` | `series_name` |
+| `seriesCode` | `series_code` |
+| `modelName` / `modelCode` | `model_name` / `model_code` |
+| `nickName` | `car_name` |
+| `licensePlate` | `license_plate` |
+| `imgUrl` (and image aliases) | `thumbnail_url` |
+| `protocolType` | `protocol_type` (`MQTT` marks MQTT-backed telemetry) |
+
+`data` is a list or a `{ "list": [...] }` object. `is_mqtt_vehicle(vehicle)` is a static helper
+returning whether the vehicle reports over MQTT (the legacy `MQTT` protocol, for example the S05,
+or the SDA `SDA-MQTT` protocol, for example the E07); `is_sda_mqtt_vehicle(vehicle)` narrows that
+to `SDA-MQTT`.
+
+## 7. REST telemetry
+
+`await client.get_vehicle_condition(vehicle_id, vin=None)` requests the app's condition sections
+(`seat`, `door`, `hvac`, `charge`, `lamp`, `window`, `tire`, `vehicleStatus`, `fuel`; the API field
+is the intentional typo `vechileCriteria`) and maps the response into `VehicleCondition`.
+`parse_condition(raw, vehicle_id, vin=None)` applies the same mapping to a raw payload (used by the
+MQTT path).
+
+Mapping:
+
+| API field | Meaning | Model property |
+| --- | --- | --- |
+| `vin` | VIN | `vin` |
+| `lastUpdatedAt` (root or `vehicleStatus`) | Unix ms or ISO-8601 | `last_updated_timestamp` (seconds) |
+| `vehicleStatus.soc` | State of charge (%) | `battery.soc_percentage` |
+| `vehicleStatus.drvMileage` | Estimated range (km) | `battery.remaining_range_km` |
+| `vehicleStatus.totalMileage` | Total odometer (km) | `total_odometer_km` |
+| `vehicleStatus.totalMeterYesterday` | Mileage yesterday (km) | `mileage_yesterday_km` |
+| `vehicleStatus.igniteCumulativeMileage` | Mileage since ignition (km) | `trip_mileage_km` |
+| `vehicleStatus.speed` | Speed (km/h) | `speed_kmh` |
+| `vehicleStatus.gearSignal` | Raw gear signal | `gear` (string) |
+| `vehicleStatus.epbSts` / `powerStatus` / `status` | Raw states | `epb_status` / `power_status` / `vehicle_status` |
+| `vehicleStatus.engineSts` | Engine running (`!= 0`) | `engine_on` |
+| `vehicleStatus.connectStatus` | Cloud connection (`== 1`) | `connected` |
+| `vehicleStatus.steeringWheelHeater` | Steering wheel heater (`!= 0`) | `climate.steering_wheel_heater_on` |
+| `vehicleStatus.steeringWheelHeaterLevel` | Heater level | `climate.steering_wheel_heater_level` |
+| `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging; anything else unknown) | `battery.charging_status` (raw string) |
+| `charge.chargeConStatus` | Cable state (`0`/`1` disconnected) | `battery.charger_connected` fallback |
+| `charge.dcChargeGunConnectStatus` | DC gun (`0`/`1` disconnected) | `battery.dc_gun_connected` |
+| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated to `0-600 A`; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
+| `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
+| `charge.maxSocPercent` | Charge limit (%) | `battery.charge_limit_percent` |
+| `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
+| `fuel.leftPercent` | Fuel level (%) | `fuel.level_percent` |
+| `fuel.leftVolume` / `tankVolume` | Fuel volume / tank capacity (L) | `fuel.volume_l` / `fuel.tank_capacity_l` |
+| `fuel.temperature` | Fuel temperature (C) | `fuel.temperature_c` |
+| `fuel.*RemainingMileage` | Fuel range (km), WLTC preferred | `fuel.remaining_range_km` |
+| `door.doors[0..3]` | Driver, passenger, rear left, rear right | `doors.*_door_open` |
+| `door.trunk` / `door.hood` | Boot / hood | `doors.trunk_open` / `doors.hood_open` |
+| `door.driverLock` / `passengerLock` | `0` = locked | `doors.locked` (driver preferred, else passenger, else `True`) and `doors.driver_locked` / `passenger_locked` |
+| `hvac.acStatus` | AC (`!= 0` on; absent stays unknown) | `climate.power_on` |
+| `hvac.remoteTemp` | Target temperature (tenths of degree) | `climate.target_temperature_c` |
+| `hvac.insideTemp` / `outsideTemp` | Cabin / outside temperature (tenths) | `climate.inside_temperature_c` / `outside_temperature_c` |
+| `hvac.insideHumidity` / `insidePm25` / `insideAirQualityLevel` | Air quality | `climate.humidity` / `inside_pm25` / `air_quality_level` |
+| `hvac.defrostStatus` / `fanLevel` | Defrost / fan | `climate.defrost_on` / `fan_level` |
+| `lamp.highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `leftTurn`, `rightTurn` | Exterior lamps | `lamps.*` |
+| `window.windows[0..3]` | Front left, front right, rear left, rear right | `windows.*_open` |
+| `seat.leftFront` / `rightFront` | `heatStatus`, `ventStatus` | `seats.front_left` / `front_right` |
+| `seat.leftBack` / `rightBack` | `level` (heating) | `seats.rear_left` / `rear_right` |
+| `tire.leftFront`, `rightFront`, `leftBack`, `rightBack` | `pressure` (kPa), `temperature`, `alarm`/`status` | `tires.*` (`pressure_bar` = kPa / 100) |
+
+Notes:
+
+- Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
+  valid snapshot.
+- `hvac.insideHumidity` from the S05 arrives either as a percentage (`61`) or as tenths of a
+  percent (`453`); values above 100 are divided by ten and anything outside 0-100 becomes unknown.
+- Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
+  `None` ("unknown"), never to a made-up level.
+- `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.
+- The original payload is kept in `VehicleCondition.raw_data`.
+
+## 8. Vehicle capabilities
+
+`await client.get_vehicle_capabilities(vehicle_id, vin=None)` queries the per-vehicle function
+configuration the app uses to decide which controls to offer. The request body key was not
+recovered from the DEX, so the known candidates are tried in order (`carId`, `vehicleId`, `vin`).
+
+Returns `VehicleCapabilities` built from the response `confList`, or `None` when unavailable. The
+function is non-fatal: authentication failures, rate limits and unavailable endpoints return
+`None`; rejected body candidates are tried in turn.
+
+`VehicleCapabilities` exposes `raw_codes`, per-seat `seats` (`heating`/`ventilation`), `has_fuel`
+(the `#oilMileage` function code) and `trim_hint` (`max` when a front seat has ventilation, else
+`pro`, else `unknown`).
+
+## 9. Digital key (read-only)
+
+Two non-fatal, read-only checks against the regional SDA gateway. They never provision, download
+or share keys and never touch BLE; any failure logs and returns `None`.
+
+| Method | Purpose |
+| --- | --- |
+| `await client.get_digital_key_support(vehicle_id=None)` | Phone key scheme: `flag` 0 = `ca`, 1 = `icce`, 2 = `honor`, anything else `unknown` (`DigitalKeySupport.supported`) |
+| `await client.get_vehicle_authorizations(car_id)` | Function codes the account may use on the vehicle (`DigitalKey` flags the digital key); the service is not deployed in every region (the European gateway answers 404) |
+
+## 10. Remote commands
+
+All commands send a signed JSON body and return a `commandId` string that is polled through the
+command-result endpoint.
+
+### 10.1 Prerequisites
+
+- `private_key_pem`: signs the payload (`DeepalCommandNotReady` otherwise).
+- `rc_token`: required by PIN-gated commands (doors, windows, trunk). Obtained once with the
+  remote-control PIN and cached; the server rejects it only when a command reuses it, at which
+  point the SDK re-exchanges the PIN and retries once.
+- `control_pin`: the account PIN, used to obtain `rc_token` automatically when the first
+  PIN-gated command runs.
+- Serial number: fetched per command family (`type: "1"` or `"2"`) and decrypted with the private
+  key.
+
+### 10.2 Control code exchange
+
+| Method | Behaviour |
+| --- | --- |
+| `await client.get_security_code_status()` | Fetches `retryQuantity` and PIN state; called before every exchange |
+| `await client.check_control_code(pin)` | Encrypts the PIN, exchanges it for `rcToken`, stores it in `client.rc_token` and returns it |
+
+When `get-status` reports no remaining attempts, `DeepalRateLimitError` is raised and no exchange
+is attempted. `HW_1_1_01_073` (expired) and `HW_1_1_01_074` (not set) raise
+`DeepalCommandAuthError` with guidance to set or reset the PIN in the app.
+
+### 10.3 Signature
+
+`sign_payload(payload, omit_keys=None)` builds the canonical string and signs it:
+
+- Keys sorted alphabetically, `key=value` pairs joined with `&`.
+- The `app` policy (default) excludes exactly `sign`, `class` and `command`; per-command
+  `omit_keys` are ignored. `APP_SIGN_EXCLUDED_KEYS` exposes the set.
+- The `legacy` policy keeps the previous per-command omission sets for rollback and A/B checks.
+  `SIGNING_POLICY_APP` (`"app"`), `SIGNING_POLICY_LEGACY` (`"legacy"`) and `SIGNING_POLICIES`
+  expose the supported values.
+- Booleans become lowercase `true`/`false`; `None` becomes `null`.
+- Signature: **RSA PKCS#1 v1.5 + SHA-256** with the login private key, base64 **MIME** encoded
+  (with line breaks), like the app.
+
+Example canonical string for the air conditioner with the `app` policy and no cached `rcToken`:
+
+```
+enabled=true&runTime=30&seriralNo=SN123&targetTemp=220&vehicleId=car-1&windMode=1
+```
+
+`rc_token` is serialized into the body only by the PIN-gated commands; every other family omits it
+even when a cached token exists. An empty `rcToken` is rejected with `COMMON_1_1_01_008`.
+
+### 10.4 Command reference
+
+`serial_type` is the serial-number family fetched before signing. "PIN" marks commands that
+require and send `rc_token`.
+
+| Method | Endpoint | Payload | PIN | `serial_type` | Status |
+| --- | --- | --- | --- | --- | --- |
+| `control_air_conditioner(vehicle_id, enabled, target_temp_c, run_time=30, wind_mode=1)` | `/control/air-conditioner` | `command="air"`, `enabled`, `runTime`, `targetTemp` (tenths), `windMode` | No | `1` | Verified live |
+| `control_condition_inquiry(vehicle_id)` | `/control/condition-inquiry` | `command="COMMAND_GET_NEW_CONDITION"` | No | `1` | Verified live |
+| `control_doors(vehicle_id, open_value)` | `/control/doors` | `command="lock"`, `open` | Yes | `1` | Verified live |
+| `control_windows(vehicle_id, open_value, open_type=10)` | `/control/windows` | `command="window"`, `open`, `openType` | Yes | `1` | Verified live |
+| `control_trunk(vehicle_id, open_value)` | `/control/trunk` | `command="trunk"`, `open` | Yes | `1` | Verified live |
+| `control_charge_limit(vehicle_id, percentage)` | `/charge/percentage` | `command="charge_max"`, `chargePercentageMax` | No | `2` | Verified live |
+| `control_charge_schedule(vehicle_id, plan_id, start_time, end_time, enabled, plan_type=1, time_format=1, time_zone="GMT+08:00")` | `/charge/modify-plan` | `command="modify-plan"`, `planId`, `startTime`, `endTime`, `endSwitch`, `planType`, `timeFormat`, `timeZone` | No | `2` | Verified live |
+| `control_flashing_honking(vehicle_id, action_type)` | `/control/flashing-honking` | `command="flash_bee"`, `type` | No | `1` | Verified live |
+| `control_defrost(vehicle_id, enabled, serial_type="1", require_rc_token=False)` | `/control/defrost` | `command="defrost"`, `enabled` | Optional | `1` | Recovered; the car did not act on it |
+| `control_seats_heat(vehicle_id, master_switch=None, master_level=None, copilot_switch=None, copilot_level=None, ...)` | `/control/seats/heat` | `command="seats_heat"` plus only the provided positions | Optional | `1` | Verified live |
+| `control_seats_wind(...)` | `/control/seats/wind` | `command="seats_wind"` plus only the provided positions | Optional | `1` | Verified live |
+| `control_steering_wheel_heat(vehicle_id, open_value, ...)` | `/control/steering-wheel/heat` | `command="steering_wheel_heating"`, `open` | Optional | `1` | Verified live |
+| `control_charge_plan_add(vehicle_id, start_time, end_time, end_switch, ...)` | `/charge/add-plan` | `command="add_charge_plan"`, `startTime`, `endTime`, `endSwitch`, `planType`, `timeFormat`, `timeZone` | Optional | `2` | Recovered |
+| `control_charge_plan_delete(vehicle_id, plan_id, ...)` | `/charge/delete-plan` | `command="delete_charge_plan"`, `planId` | Optional | `2` | Recovered |
+| `control_charge_plan_validity(vehicle_id, plan_id, enabled, ...)` | `/charge/validity` | `command="COMMAND_VALID_CHARGE_PLAN"`, `enabled`, `planId` | Optional | `2` | Recovered |
+| `control_departure_plan_add(vehicle_id, start_time, weeks, ...)` | `/departure-plans/add-plan` | `command="COMMAND_TRAVELPLAN_ADD"`, `isValid`, `planType`, `startTime`, `type`, `weeks` | Optional | `1` | Recovered |
+| `control_departure_plan_modify(vehicle_id, plan_id, start_time, weeks, ...)` | `/departure-plans/modify-plan` | `command="COMMAND_TRAVELPLAN_MODIFY_PLAN"`, `planId`, `isValid`, `planType`, `startTime`, `type`, `weeks` | Optional | `1` | Recovered |
+| `control_departure_plan_delete(vehicle_id, plan_id, ...)` | `/departure-plans/delete` | `command="COMMAND_TRAVELPLAN_DELETE"`, `planId` | Optional | `1` | Recovered |
+| `control_departure_plan_validity(vehicle_id, plan_id, enabled, ...)` | `/departure-plans/validity` | `command="COMMAND_TRAVELPLAN_MODIFY_VALIDITY"`, `planId`, `enabled` | Optional | `1` | Recovered |
+| `control_departure_plan_enabled(vehicle_id, plan_id, enabled, ...)` | `/departure-plans/enabled` | `command="COMMAND_TRAVELPLAN_STARTSTOPPINGPLANNOW"`, `planId`, `enabled` | Optional | `1` | Recovered |
+| `control_fota_plan(vehicle_id, appointment, timestamp, ...)` | `/control/fota-plan` | `command="COMMAND_APPOINT_UPGRADE"`, `appointment`, `timestamp` | Optional | `1` | Recovered |
+
+Flash/horn action codes: `FLASH_HONK_OFF = 0`, `FLASH_HONK_FLASH = 1`, `FLASH_HONK_BEE = 2`,
+`FLASH_HONK_FLASH_BEE = 3`.
+
+Seat commands serialize only the provided positions. Turning a seat off sends `switch: 0` without a
+level, because a zero level is rejected with `COMMON_1_1_01_005`.
+
+The optional families expose `serial_type` and `require_rc_token`; their defaults (`"1"`/`"2"` and
+`False`) come from the app constants and are pending full live validation.
+
+### 10.5 Command results
+
+```python
+raw = await client.control_result(vehicle_id, command_id)          # dict
+result = await client.control_result_status(vehicle_id, command_id)  # CommandResult
+```
+
+`CommandResult` classifies `resultCode`:
+
+| `resultCode` | `status` |
+| --- | --- |
+| absent, `-100` | `pending` |
+| `0`, `1201` | `success` |
+| `1015` | `already_done` |
+| `-1`, `-2`, unknown | `failed` |
+
+`error_message` carries `errorMsg` when present and `raw` keeps the original payload.
+
+## 11. Errors
+
+| Situation | Exception |
+| --- | --- |
+| HTTP 401/403 | `DeepalAuthError` |
+| `success: false` with `AUTH*`, `401*` or an app kick-out code (`APP_1_1_02_003/004/005/006`, `CAC_1_1_01_045`, `46000`) | `DeepalAuthError` |
+| Rate limit (`CAC_1_1_01_033`) or exhausted PIN attempts (`HW_1_1_01_047`) | `DeepalRateLimitError` |
+| PIN expired (`HW_1_1_01_073`) or not set (`HW_1_1_01_074`) | `DeepalCommandAuthError` |
+| `COMMON_1_1_01_001` on `serial-no/get`, serial decryption failure or rejected `rcToken` | `DeepalCommandAuthError` |
+| Signed command without a private key or required PIN | `DeepalCommandNotReady` |
+| Any other `success: false` code | `DeepalAPIError` (with `code`) |
+| Non-2xx HTTP status | `DeepalAPIError` (with `status_code`) |
+| Invalid JSON or unexpected payload type | `DeepalAPIError` |
+| Transport failure or timeout (`httpx.RequestError`) | `DeepalConnectionError` |
+
+The specific errors inherit from `DeepalAuthError`/`DeepalAPIError`, so existing `except` clauses
+keep working. Error messages include the gateway code when one is available.
+
+## 12. Diagnostics and redaction
+
+`enable_api_logging=True` logs each request path, safe headers and redacted payload at `WARNING`
+level, and each response status and redacted body. Redaction masks tokens, keys, VINs, emails,
+phones, PINs, serial numbers and user ids, and truncates strings longer than 500 characters
+(`deepal/redact.py`). Only the non-sensitive headers are logged as-is: `selectcountry`,
+`appversion`, `language`, `x-os-version`, `x-tsp-timestamp`, `x-vcs-timestamp`.
+
+The SDK also logs whether a login/refresh produced `cacToken`, `userId`, `caUserId` and
+`cacUserId` (booleans only, never values).
+
+## 13. Public method index
+
+Authentication and session:
+
+| Method | Summary |
+| --- | --- |
+| `close()` | Close the managed HTTP client |
+| `request_email_code(email)` | Send an email code |
+| `login_with_email_code(email, code, sales_country=None, pub_key=None)` | Email-code login |
+| `login_with_email_password(email, password, sales_country=None, pub_key=None)` | Email/password login (unverified) |
+| `request_sms_code(phone, country_code)` | Send an SMS code |
+| `login_with_sms_code(phone, code, country_code, sales_country=None, pub_key=None)` | SMS-code login |
+| `login_with_password(phone, password, country_code, sales_country=None, pub_key=None)` | Mobile/password login (unverified) |
+| `refresh_tokens(force=False)` | Refresh the session tokens |
+| `access_token_expires_soon(margin_seconds=300)` | JWT expiry check |
+| `logout()` | Clear the session (unverified remote call) |
+| `generate_login_keypair()` | Static: generate the signing keypair |
+| `public_key_body_from_private(private_key_pem)` | Static: derive the `pubKey` body |
+| `set_login_keypair(private_key_pem, public_key=None)` | Restore a persisted keypair |
+| `encrypt_request_value(value)` | Static: RSA-encrypt a sensitive value |
+
+Vehicles and telemetry:
+
+| Method | Summary |
+| --- | --- |
+| `get_vehicles()` | List the account vehicles |
+| `get_vehicle_condition(vehicle_id, vin=None)` | Full REST condition |
+| `parse_condition(raw, vehicle_id, vin=None)` | Map a raw condition payload |
+| `get_vehicle_capabilities(vehicle_id, vin=None)` | Function configuration or `None` |
+| `is_mqtt_vehicle(vehicle)` | Static: whether the vehicle reports over MQTT (`MQTT` or `SDA-MQTT`) |
+| `is_sda_mqtt_vehicle(vehicle)` | Static: whether the vehicle uses the SDA `SDA-MQTT` protocol |
+| `get_mqtt_config(vehicle_id)` | CA MQTT connection configuration |
+| `get_mqtt_token(force=False)` | MQTT auth token, reused within `mqtt_token_ttl` |
+| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service) |
+| `get_sda_broker_config(vehicle_id)` | SDA broker configuration (SDA-MQTT, beta) |
+| `get_sda_auth_token()` | SDA `vot-auth` broker token (SDA-MQTT, beta) |
+| `open_sda_session(vehicle_id, *, device_ids=None, topics=None, seconds=10.0, login=False)` | Read-only SDA broker session (SDA-MQTT, beta) |
+| `get_sda_vehicle_condition(vehicle_id, vin=None)` | SDA REST condition snapshot (SDA-MQTT, beta) |
+| `get_car_function_config(vehicle_id)` | Per-function VOT tree used to build the SDA plan (beta) |
+| `wake_vehicle(vehicle_id)` | Wake an MQTT-backed vehicle so it publishes fresh data |
+| `get_digital_key_support(vehicle_id=None)` | Phone digital key scheme or `None` |
+| `get_vehicle_authorizations(car_id)` | Function codes or `None` |
+
+Commands and results:
+
+| Method | Summary |
+| --- | --- |
+| `sign_payload(payload, omit_keys=None)` | Build and sign the canonical payload |
+| `get_serial_data(serial_type="1")` | Fetch the encrypted vehicle serial |
+| `decrypt_serial_no(serial_data)` | Decrypt the serial with the private key |
+| `get_security_code_status()` | Control PIN state (`retryQuantity`) |
+| `check_control_code(control_pin)` | Exchange the PIN for an `rcToken` |
+| `control_air_conditioner(...)`, `control_condition_inquiry(...)`, `control_doors(...)`, `control_windows(...)`, `control_trunk(...)`, `control_charge_limit(...)`, `control_charge_schedule(...)`, `control_flashing_honking(...)`, `control_defrost(...)`, `control_seats_heat(...)`, `control_seats_wind(...)`, `control_steering_wheel_heat(...)`, `control_charge_plan_add/delete/validity(...)`, `control_departure_plan_add/modify/delete/validity/enabled(...)`, `control_fota_plan(...)` | Signed commands, returning the `commandId` (see [Command reference](#104-command-reference)) |
+| `control_result(vehicle_id, command_id)` | Raw command status |
+| `control_result_status(vehicle_id, command_id)` | Classified `CommandResult` |
+
+---
+
+<!-- source: docs/reference/sda-api.md -->
+
+# SDA (China) platform API reference
+
+Reference for `DeepalClient`, the client for the **SDA platform** used by mainland-China Changan
+accounts. It documents the behaviour implemented in `deepal_sdk/deepal/client.py` and
+`endpoints.py`.
+
+> Scope: this is a thin access-token client. It lists vehicles, reads a condition snapshot and
+> exposes two control commands. It has no token refresh, no signed commands and no MQTT support.
+> Most flows are recovered from the app protocol but are **not verified against the live platform**;
+> the recommended path is an access token issued by the SDA platform.
+
+## Contents
+
+1. [Base URL and headers](#1-base-url-and-headers)
+2. [Client construction](#2-client-construction)
+3. [Authentication](#3-authentication)
+4. [Vehicles](#4-vehicles)
+5. [Telemetry](#5-telemetry)
+6. [Remote commands (unverified)](#6-remote-commands-unverified)
+7. [Errors](#7-errors)
+8. [Public method index](#8-public-method-index)
+9. [Limitations](#9-limitations)
+
+## 1. Base URL and headers
+
+The default host is `https://pre-acenter.sda.changan.com.cn` (`DEFAULT_BASE_URL`); pass
+`base_url` to target another SDA deployment. Requests are GET or POST depending on the method, and
+authenticated calls carry:
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json;charset=utf-8` |
+| `Timestamp` | Current Unix time in **seconds** |
+| `Version` | `1.12.0` |
+| `User-Agent` | `MyChangan/1.12.0 (Android; Deepal S05)` |
+| `Authorization` | `Bearer <access_token>` (only with a session) |
+| `token` | `<access_token>` (same value, sent alongside `Authorization`) |
+
+## 2. Client construction
+
+```python
+DeepalClient(
+    access_token=None,
+    base_url="https://pre-acenter.sda.changan.com.cn",
+    timeout=15.0,
+    httpx_client=None,
+)
+```
+
+- `access_token` may be provided at construction or assigned later; authenticated calls without
+  one raise `DeepalAuthError` before any request.
+- `httpx_client` injects an `httpx.AsyncClient`; the SDK uses it as-is and never closes it.
+  Otherwise the client is created in the constructor and `close()` releases it.
+- The client is an async context manager (`async with DeepalClient(...) as client:`).
+
+## 3. Authentication
+
+### 3.1 SMS verification code (unverified)
+
+```python
+success = await client.request_sms_code("13800000000")
+token = await client.login_with_code("13800000000", code)
+```
+
+| Method | Request | Result |
+| --- | --- | --- |
+| `request_sms_code(phone)` | `POST /appauth/sda-app/api/user/login/code` with `{"phone": phone}` | `True` when the response code is `0`/`200` |
+| `login_with_code(phone, code)` | `POST /appauth/sda-app/api/v2/oauth2-login/token/bind` with `{"phone": phone, "code": code}` | `AuthToken`; stores `client.access_token` |
+
+The login reads `data.token` (or `data.access_token`), `data.expires_in` and `data.user_id`, and
+raises `DeepalAuthError` when no token is returned. The request/response field names follow the app
+protocol and **have not been verified live**; the integration obtains the token from the SDA
+platform and validates it through [`get_vehicles()`](#4-vehicles).
+
+### 3.2 Access token
+
+The token is long-lived; the client never refreshes it. An HTTP 401/403 raises `DeepalAuthError`,
+which for the integration means the token must be replaced.
+
+## 4. Vehicles
+
+`await client.get_vehicles()` calls `GET /dae-terminal-mobile/api/v1/car/my-cars` and maps each
+entry, accepting the SDA and international field spellings:
+
+| API field candidates | Model field |
+| --- | --- |
+| `car_id`, `carId`, `id` | `car_id` |
+| `vin` | `vin` |
+| `series_name`, `carModelName` (default `Deepal S05`) | `series_name` |
+| `car_name`, `nickName` | `car_name` |
+| `car_num`, `licensePlate` | `license_plate` |
+| `car_pic`, `thumbnailUrl` | `thumbnail_url` |
+
+## 5. Telemetry
+
+`await client.get_vehicle_condition(car_id)` calls
+`GET /dae-terminal-mobile/api/v1/car/full-condition?carId=<car_id>` and maps the raw parameters.
+The method also accepts an optional `vin` keyword for call compatibility with the international
+client (the coordinator passes the VIN for every platform); the SDA endpoint ignores it because it
+addresses vehicles by car id:
+
+| API field | Meaning | Model property |
+| --- | --- | --- |
+| `vin` | VIN | `vin` |
+| `CdcTotMilg`, `total_odometer` | Total odometer (km) | `total_odometer_km` |
+| `BatterySoc`, `battery_level` | State of charge (%) | `battery.soc_percentage` |
+| `RemainingRange`, `battery_range` | Estimated range (km) | `battery.remaining_range_km` |
+| `ChargingState` | Charging state (raw) | `battery.charging_status` |
+| `ChargerPlugged` | Charging cable plugged in | `battery.charger_connected` |
+| `DoorsLocked` (default `True`) | Doors locked | `doors.locked` |
+| `DoorFLOpen`, `DoorFROpen`, `DoorRLOpen`, `DoorRROpen` | Open doors | `doors.driver_door_open`, `passenger_door_open`, `rear_left_door_open`, `rear_right_door_open` |
+| `TrunkOpen` / `HoodOpen` | Boot / hood | `doors.trunk_open` / `doors.hood_open` |
+| `AcPowerOn` | Climate on | `climate.power_on` |
+| `AcTargetTemp` | Target temperature (raw) | `climate.target_temperature_c` |
+
+`last_updated_timestamp` is set to the local time of the response because the payload does not
+report a reliable timestamp. The untouched payload is available in `raw_data`; only the fields in
+the table are parsed, so the rest of the condition groups stay at their model defaults.
+
+## 6. Remote commands (unverified)
+
+Two commands are implemented from the app protocol; neither is exercised by the Home Assistant
+integration and neither has been verified against a live vehicle.
+
+| Method | Request | Result |
+| --- | --- | --- |
+| `set_climate_control(car_id, power_on, target_temp_c=None)` | `POST /dae-terminal-mobile/api/v1/control/climate` with `{"carId", "acPower": 1/0, "targetTemp"}` | `True` on a success code |
+| `set_door_lock(car_id, lock)` | `POST /dae-terminal-mobile/api/v1/control/lock` with `{"carId", "action": "lock"/"unlock"}` | `True` on a success code |
+
+Both return a boolean derived from the response `code` and raise `DeepalAPIError` when the gateway
+rejects the request. Do not rely on them without testing against the target account and vehicle.
+
+## 7. Errors
+
+| Situation | Exception |
+| --- | --- |
+| Missing access token on an authenticated call | `DeepalAuthError` |
+| HTTP 401/403 | `DeepalAuthError` |
+| Invalid JSON response | `DeepalAPIError` |
+| Response code outside `0`/`200` | `DeepalAPIError` (with `code` and `status_code`) |
+| Non-2xx HTTP status | `DeepalAPIError` (with `status_code`) |
+| Transport failure or timeout (`httpx.RequestError`) | `DeepalConnectionError` |
+
+## 8. Public method index
+
+| Method | Summary |
+| --- | --- |
+| `close()` | Close the managed HTTP client |
+| `request_sms_code(phone)` | Request an SMS login code (unverified) |
+| `login_with_code(phone, code)` | Exchange the code for an access token (unverified) |
+| `get_vehicles()` | List the account vehicles |
+| `get_vehicle_condition(car_id, vin=None)` | Condition snapshot (`vin` accepted for call compatibility and ignored) |
+| `set_climate_control(car_id, power_on, target_temp_c=None)` | Climate command (unverified) |
+| `set_door_lock(car_id, lock)` | Door lock/unlock command (unverified) |
+
+## 9. Limitations
+
+- No token refresh, token expiry tracking or logout; replace the token when the API rejects it.
+- No signed remote commands, no control PIN and no command-result polling.
+- No MQTT telemetry; the S05 path and the `SDA-MQTT` beta are international-client features.
+- Only the endpoints listed above are implemented. `endpoints.py` also declares constants for car
+  status, settings, home charger, charge history and parking commands that no client method uses.
+- The default base URL points at a pre-production host; production integrations should pass an
+  explicit `base_url` only after confirming it with the account.
+
+---
+
+<!-- source: docs/reference/mqtt-telemetry.md -->
+
+# MQTT telemetry reference
+
+Vehicles whose API reports `protocolType: MQTT` (for example the S05) do not refresh their state
+over REST: the REST condition returns a frozen snapshot. The app keeps a foreground MQTT session
+with the CA gateway, and the SDK replicates the same one-shot exchange to fetch a live condition.
+
+`SDA-MQTT` vehicles (for example the E07) share the broker but read the condition through the
+SDA/VOT services instead; that path is documented in
+[SDA-MQTT telemetry and wake](#8-sda-mqtt-telemetry-and-wake-beta) and is still in **beta**.
+
+## Contents
+
+1. [Requirements](#1-requirements)
+2. [Bootstrap on the CA gateway](#2-bootstrap-on-the-ca-gateway)
+3. [Connection options](#3-connection-options)
+4. [The exchange](#4-the-exchange)
+5. [Parameter mapping](#5-parameter-mapping)
+6. [Unknown and sleep semantics](#6-unknown-and-sleep-semantics)
+7. [Methods](#7-methods)
+8. [SDA-MQTT telemetry and wake (beta)](#8-sda-mqtt-telemetry-and-wake-beta)
+9. [Limitations](#9-limitations)
+
+## 1. Requirements
+
+- A logged-in `DeepalIntlClient` with `user_id` (returned by the login) and a stable `device_id`.
+- The vehicle's `protocol_type` must be `MQTT` or `SDA-MQTT`; use
+  `DeepalIntlClient.is_mqtt_vehicle(vehicle)` to check it and `is_sda_mqtt_vehicle(vehicle)` to
+  select the SDA service.
+- Network access to the environment's CA gateway and MQTT broker.
+
+## 2. Bootstrap on the CA gateway
+
+The CA host (`ca_base_url`, see [Environments](intl-api.md#2-environments)) serves the connection
+configuration and the MQTT password. All requests are POST with the same session headers and
+`authorization` as the international gateway.
+
+| Method | Endpoint | Body | Response |
+| --- | --- | --- | --- |
+| `get_mqtt_config(vehicle_id)` | `/user-apigw/vot-connect-conf-center/api/device/getConnConf` | `deviceId`, `carId`, `deviceType: 1`, `confTimestamp: 0`, `deviceTimestamp` (ms) | `mqttConnectionInfos[0]` with the broker URL/port and the topic maps |
+| `get_mqtt_token()` | `/user-apigw/vot-connect-auth-center/api/auth/getAuthTokenByUserId` | `userId` | `authToken`, used as the MQTT password |
+
+Fallbacks (recovered from the 1.12.0 app; on by default):
+
+- If `getConnConf` fails with a non-authentication, non-rate-limit API error and
+  `mqtt_config_fallback=True`, the SDK retries
+  `/user-apigw/vot-connect-conf-center/api/device/appGetCarConfFunc` with the same body.
+- If `getAuthTokenByUserId` fails with an API error and `mqtt_token_fallback=True`, the SDK retries
+  `/app-apigw/vot-auth/api/token/getAuthTokenByUserId`.
+
+Authentication errors and rate limits are never masked by the fallbacks; both are re-raised.
+`get_mqtt_token()` requires `user_id` and raises `DeepalAPIError` without it.
+
+The `X-Tsp-User-Token`/`X-VCS-User-Token` headers must carry the **access token**; the CA gateway
+rejects the CAC token with `APIGW_-1_7_01_004` and an empty header with `APIGW_1_7_02_001`
+(verified against the production EU gateway on 2026-09-19).
+
+## 3. Connection options
+
+| Constructor option | Default | Purpose |
+| --- | --- | --- |
+| `mqtt_config_fallback` | `True` | Allow the connection-config fallback endpoint |
+| `mqtt_token_fallback` | `True` | Allow the auth-token fallback endpoint |
+| `mqtt_client_id` | `None` | Override the MQTT client id; otherwise resolved from the connection config with a fallback to the login DID |
+| `mqtt_username` | `None` | Override the MQTT username; otherwise resolved from the connection config with a fallback to the login DID |
+| `mqtt_keepalive` | `60` | Keepalive seconds (`PINGREQ` is sent while waiting) |
+| `mqtt_clean_start` | `True` | MQTT 5.0 clean-start flag |
+| `mqtt_tls_insecure` | `False` | Disables TLS certificate and hostname verification (diagnostic; logs a warning on every connection) |
+
+TLS uses `ssl.create_default_context()` by default. The SDK speaks MQTT 5.0 (protocol level 5) with
+an empty properties block, like the app's Paho client.
+
+## 4. The exchange
+
+`s05_mqtt_condition(vehicle_id, vin=None)` runs one connection/read/close cycle:
+
+1. Fetch the connection config and the auth token.
+2. Connect over TLS to the broker (`ssl://host`, default port `8883`) with the resolved client id
+   and username and the auth token as password. A non-zero CONNACK reason code raises
+   `DeepalAPIError` with the MQTT 5.0 reason description.
+3. Subscribe to the configured topics; command topics (`/commands/`, `/set/`, `/client/action` and
+   the app `msgType` command values) are excluded. When the config omits the login or event
+   topics, they are derived from the app templates (`$vdp/<did>/client/loginout`,
+   `$vdp/<did>/server/loginout`, `$vdp/<did>/<did>/server/event`).
+4. Publish the `loginout` message with the `ReqPayLoad` envelope (`did`, `r`, `v`, `mt`, `e`, `z`,
+   `tf`, `dt`, `sers` and `b` with the known `vin`/`sc`/`mc`/`uid`/`cid`/`ruid` identifiers).
+5. The response carries a `secretKey`. Publish the `car_condition` properties request, with the
+   payload AES-CBC encrypted (key = `secretKey`, IV = MD5 of the request id) over
+   `base64 + gzip + JSON`.
+6. Decrypt the `rs`/`sers` fields of the responses and accumulate the parameters of the
+   `car_condition`, `BDC_Service`, `BMS_Service`, `OBC_Service` and `THU_Service` services.
+7. Send `PINGREQ` when the keepalive expires while waiting, and `DISCONNECT` (reason code `0`)
+   before closing.
+
+The exchange returns as soon as a `/properties/get/res` message carries more than 10 parameters, or
+once the accumulated partial set exceeds 30 parameters after the request, or at the timeout
+(`max(timeout, 20)` seconds) with whatever was collected. The raw decrypted parameters are kept in
+`VehicleCondition.mqtt_raw_data` for diagnostics; `raw_data` holds the normalized payload that
+`parse_condition` maps into the shared model.
+
+## 5. Parameter mapping
+
+`normalize_s05_params()` translates the S05 parameter names into the international condition shape;
+the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchanged.
+
+| S05 parameter | Normalized field | Model property |
+| --- | --- | --- |
+| `lastUpdatedTime`, `lastUpdatedAt`, `latestDate` | `lastUpdatedAt` | `last_updated_timestamp` (seconds) |
+| `soc`, `socDsp`, `remainPower` | `vehicleStatus.soc` | `battery.soc_percentage` |
+| `remainedPowerMile`, `totalResidualMileage` | `vehicleStatus.drvMileage` | `battery.remaining_range_km` |
+| `totalOdometer` | `vehicleStatus.totalMileage` | `total_odometer_km` |
+| `totalMeterYesterday` | `vehicleStatus.totalMeterYesterday` | `mileage_yesterday_km` |
+| `igniteCumulativeMileage` | `vehicleStatus.igniteCumulativeMileage` | `trip_mileage_km` |
+| `engineStatus` / `powerStatusFeedBack` / `electronichandbrakeStatus` | `vehicleStatus.engineSts` / `powerStatus` / `epbSts` | `engine_on` / `power_status` / `epb_status` |
+| `vehicleTemperature` | `hvac.insideTemp` (x10) | `climate.inside_temperature_c` |
+| `innerHumidity` | `hvac.insideHumidity` | `climate.humidity` |
+| `airConditioningSetTemperature` | `hvac.remoteTemp` (x10) | `climate.target_temperature_c` |
+| `airStatus` | `hvac.acStatus` | `climate.power_on` |
+| `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
+| `airPurifierStatus` | `hvac.insideAirQualityLevel` | `climate.air_quality_level` |
+| `airConditioningHairRatings` | `hvac.fanLevel` | `climate.fan_level` |
+| `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging; anything else unknown) | `battery.charging_status` |
+| `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` | `battery.charger_connected` |
+| `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings outside `0-600 A` become unknown) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
+| `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |
+| `remainingFuel` / `remainedOilMile` | `fuel.leftPercent` / `fuel.remainingRange` | `fuel.level_percent` / `fuel.remaining_range_km` |
+| `driverDoor`, `passengerDoor`, `leftRearDoor`, `rightRearDoor` | `door.doors[0..3]` | `doors.*_door_open` |
+| `trunk` | `door.trunk` | `doors.trunk_open` |
+| `hood`, `hoodStatus` | `door.hood` | `doors.hood_open` |
+| `driverDoorLock`, `passengerDoorLock` | `door.driverLock`, `door.passengerLock` | `doors.locked`, `doors.driver_locked`, `doors.passenger_locked` |
+| `diverWindow`, `passengerWindow`, `leftRearWindow`, `rightRearWindow` | `window.windows[0..3]` | `windows.*_open` |
+| `highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `turnLndicatorLeft`, `turnLndicatorRight` | `lamp.*` | `lamps.*` |
+| `lfTyrePressure`, `rfTyrePressure`, `lrTyrePressure`, `rrTyrePressure` | `tire.*.pressure` (kPa) | `tires.*.pressure_bar` (kPa / 100) |
+| `leftFrontTireTemperature`, `rightFrontTireTemperature`, `leftRearTireTemperature`, `rightRearTireTemperature` | `tire.*.temperature` | `tires.*.temperature_c` |
+| `lfPressureWarning`, `rfPressureWarning`, `lrPressureWarning`, `rrPressureWarning` | `tire.*.alarm` | `tires.*.alarm` |
+| `driverSeatHeatStatus` / `driverSeatAirStatus` | `seat.leftFront.heatStatus` / `ventStatus` | `seats.front_left.heating_level` / `ventilation_level` |
+| `passengerSeatHeatStatus` / `passengerSeatAirStatus` | `seat.rightFront.heatStatus` / `ventStatus` | `seats.front_right.*` |
+| `leftBackSeatHeatStatus` / `leftBackSeatVentilateStatus` | `seat.leftBack.heatStatus` / `ventStatus` | `seats.rear_left.*` |
+| `rightBackSeatHeatStatus` / `rightBackSeatVentilateStatus` | `seat.rightBack.heatStatus` / `ventStatus` | `seats.rear_right.*` |
+
+`steeringWheelHeating` is intentionally **not mapped**: it reads `1` even with the wheel heater
+off. The real steering-wheel heater switch and level come from the REST condition
+(`vehicleStatus.steeringWheelHeater` / `steeringWheelHeaterLevel`).
+
+Every S05 parameter not listed above is currently unmapped. Debug logging of unmapped keys is
+available through `logging.getLogger("deepal_sdk")` at `DEBUG` level.
+
+## 6. Unknown and sleep semantics
+
+Seat heating and ventilation levels are only trusted in the `0-3` range. A sleeping module reports
+the sentinel `6`, and out-of-range values are mapped to `None` (unknown) instead of a level;
+callers that keep state should retain the last valid level until a good report arrives. The same
+applies to `climate.defrost_on`, `steering_wheel_heater_on` and `steering_wheel_heater_level`,
+which are exposed as unknown when the report omits them.
+
+## 7. Methods
+
+| Method | Purpose |
+| --- | --- |
+| `is_mqtt_vehicle(vehicle)` | Static: `protocol_type` is `MQTT` or `SDA-MQTT` |
+| `is_sda_mqtt_vehicle(vehicle)` | Static: `protocol_type` is `SDA-MQTT` |
+| `get_mqtt_config(vehicle_id)` | CA connection configuration (with fallback) |
+| `get_mqtt_token(force=False)` | MQTT auth token from the account user id: reused within `mqtt_token_ttl` (one minute by default), `force` bypasses the cache after a rejection |
+| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Full single-use exchange returning a `VehicleCondition`; `sda=True` selects the SDA `Get_CarCondition` service |
+| `wake_vehicle(vehicle_id)` | Wake a sleeping MQTT-backed vehicle (see [SDA-MQTT telemetry and wake](#8-sda-mqtt-telemetry-and-wake-beta)) |
+
+Errors: a refused CONNACK, missing topics, a missing `authToken`, and timeouts/EOF/TLS failures
+surface as `DeepalAPIError`; transport errors on the CA requests use the standard taxonomy
+(`DeepalConnectionError`, `DeepalAuthError`, `DeepalRateLimitError`).
+
+## 8. SDA-MQTT telemetry and wake (beta)
+
+> The SDA-MQTT path is recovered from the 1.12.0 app and was verified read-only against a live E07
+> (bootstrap, connect, subscribe and login exchange); publishing SDA control commands is not
+> implemented yet. Treat this section as **beta**.
+
+`SDA-MQTT` vehicles bootstrap the broker through the **SDA gateway** (`sda_base_url`) instead of the
+CA host:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `get_sda_broker_config(vehicle_id)` | `GET /app-apigw/sda-app-control/api/v1/sda-app/car-ctrl/get-mqtt-server-config?carId=<vehicle_id>` | Broker host/port and topic template; the `vot-app-conf` alternate exists in the app but is unconfirmed |
+| `get_sda_auth_token()` | `GET /app-apigw/vot-auth/api/token/getAuthTokenByUserId` (no parameters; the account travels in the session headers) | Broker password (`authToken`) |
+| `get_car_function_config(vehicle_id)` | `appGetCarConfFunc` on the CA gateway, then the SDA `get-function-config` routes | Per-function VOT tree used to derive the condition device and signals when the configuration omits them |
+
+`open_sda_session(vehicle_id, device_ids=None, topics=None, seconds=10.0, login=False)` connects
+read-only with the app's confirmed `authType 2` identity (`clientId` and `username` are a device
+DID, the password is the `vot-auth` token; the DID candidates found in the CA configuration and the
+function tree are tried in order), subscribes to the configured or derived topics and never
+publishes a control command. `login=True` opts into the app's `client/loginout` exchange. It
+returns an `SdaSessionResult`; a CONNACK rejection raises `DeepalAuthError` and an unreachable
+broker `DeepalConnectionError`.
+
+Condition reads have two paths:
+
+- `s05_mqtt_condition(vehicle_id, sda=True)` requests the SDA condition service
+  (`Get_CarCondition`) over the broker session, probing the function-tree device and signal codes
+  within `mqtt_sda_probe_grace` seconds before falling back to the legacy `car_condition` request.
+- `get_sda_vehicle_condition(vehicle_id, vin=None)` reads the flat SDA REST condition
+  (`GET .../car-ctrl/getCarConditionByCarId` with the snake_case `car_id` query; camelCase
+  candidates are tried after it) on the SDA gateway.
+- `VehicleCondition.condition_source` reports which service produced the snapshot (`sda-mqtt`,
+  `sda-mqtt-signal-list`, `legacy-mqtt` or `rest`); `sda_plan` and `mqtt_variants` keep the derived
+  plan and every raw variant attempted, for diagnostics.
+
+`wake_vehicle(vehicle_id)` publishes the app's `TxWakeup`/`Cnr_ReWakeup` service on the
+`properties/set` topic with QoS 1 and returns once the gateway acknowledges it (`000000`); the car
+then publishes fresh data within a few seconds and the caller reads the condition again. The wait
+is bounded by `mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
+
+## 9. Limitations
+
+- One connection/read/close cycle per call; there is no background session or reconnect. Callers
+  poll at their own cadence.
+- The REST condition of a legacy `MQTT` vehicle is a frozen snapshot; only the MQTT exchange
+  reflects live state. The SDA REST condition of an `SDA-MQTT` vehicle is also a snapshot.
+- The CA gateway can reject the account (TSP/VCS headers); the call fails and the REST condition
+  remains the fallback.
+- The broker identity and topic layout come from the server configuration; the app templates are
+  only used when the configuration omits them.
+- The SDA-MQTT path is beta: publishing SDA control commands is not implemented, the
+  `vot-app-conf` bootstrap variant is unconfirmed, and the condition plan depends on the function
+  tree the gateway returns.
+- `mqtt_tls_insecure=True` disables certificate verification and is meant for diagnostics only.
+
+---
+
+<!-- source: docs/reference/models.md -->
+
+# Data models reference
+
+The SDK exposes its data as **Pydantic v2** models with snake_case fields; raw API payloads are
+parsed into these models and never returned directly (except where a method documents a `dict`
+result). Unknown fields in a response are ignored, and absent fields keep their documented default,
+so a partial payload is always a valid model.
+
+All models listed here are importable from the `deepal` package and from `deepal.models`.
+
+## Contents
+
+1. [Authentication](#1-authentication)
+2. [Vehicles and capabilities](#2-vehicles-and-capabilities)
+3. [Telemetry](#3-telemetry)
+4. [Commands](#4-commands)
+5. [Digital key](#5-digital-key)
+6. [Module constants](#6-module-constants)
+
+## 1. Authentication
+
+### `AuthToken`
+
+Result of a successful login or refresh.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `access_token` | `str` | required | API bearer token |
+| `token_type` | `str` | `"Bearer"` | Token type |
+| `expires_in` | `int?` | `None` | Lifetime in seconds when the API reports it |
+| `refresh_token` | `str?` | `None` | Refresh token |
+| `cac_token` | `str?` | `None` | CAC/TSP token of the international session |
+| `ca_user_id` | `str?` | `None` | International CA user id |
+| `cac_user_id` | `str?` | `None` | International CAC user id |
+| `user_id` | `str?` | `None` | Account user id |
+
+### `UserProfile`
+
+Account profile placeholder (`user_id`, `phone`, `nickname`, `avatar_url`). The current client flows
+do not return it; it is exported for applications that persist account metadata.
+
+## 2. Vehicles and capabilities
+
+### `Vehicle`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `car_id` | `str` | required | Unique vehicle id used by every call |
+| `vin` | `str` | required | Vehicle identification number |
+| `series_name` | `str?` | `"Deepal S05"` | Series/model name |
+| `series_code` | `str?` | `None` | Series code (for example `CD701`) |
+| `model_name` | `str?` | `None` | Model name |
+| `model_code` | `str?` | `None` | Model code |
+| `car_name` | `str?` | `None` | Custom nickname |
+| `license_plate` | `str?` | `None` | Plate |
+| `thumbnail_url` | `str?` | `None` | Vehicle image URL |
+| `protocol_type` | `str?` | `None` | Backend telemetry protocol; `MQTT` marks MQTT-backed vehicles |
+
+### `SeatCapabilities` and `VehicleCapabilities`
+
+`SeatCapabilities` holds `heating` and `ventilation` booleans for one seat position.
+
+`VehicleCapabilities` is built from the per-vehicle function configuration:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `raw_codes` | `list[str]` | `[]` | Raw function codes |
+| `seats` | `dict[str, SeatCapabilities]` | `{}` | Capabilities per position (`front_left`, `front_right`, `rear_left`, `rear_right`) |
+| `has_fuel` | `bool` | `False` | The vehicle declares the `#oilMileage` code (PHEV / range extender) |
+| `trim_hint` | `"max" \| "pro" \| "unknown"` | `"unknown"` | S05 trim derived from front-seat ventilation |
+
+`VehicleCapabilities.from_codes(codes)` performs the derivation.
+
+## 3. Telemetry
+
+### `VehicleCondition`
+
+Full telemetry snapshot shared by the REST and MQTT paths.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `car_id` | `str` | required | Vehicle id |
+| `vin` | `str` | `""` | VIN |
+| `total_odometer_km` | `float?` | `None` | Total odometer (km) |
+| `mileage_yesterday_km` | `float?` | `None` | Mileage yesterday (km) |
+| `trip_mileage_km` | `float?` | `None` | Mileage since the current ignition cycle (km) |
+| `speed_kmh` | `float?` | `None` | Speed (km/h) |
+| `gear` | `str?` | `None` | Raw gear signal |
+| `epb_status` | `int?` | `None` | Raw electronic parking brake status |
+| `power_status` | `int?` | `None` | Raw power status |
+| `vehicle_status` | `int?` | `None` | Raw vehicle status |
+| `engine_on` | `bool` | `False` | Drivetrain running |
+| `connected` | `bool?` | `None` | Cloud connection (`None` when not reported) |
+| `battery` | `BatteryCondition` | empty | Battery and charging |
+| `fuel` | `FuelCondition` | empty | Fuel (PHEV / range extender) |
+| `doors` | `DoorsCondition` | empty | Doors, trunk and hood |
+| `windows` | `WindowsCondition` | empty | Window positions |
+| `seats` | `SeatsCondition` | empty | Seat comfort levels |
+| `climate` | `ClimateCondition` | empty | Climate and air quality |
+| `tires` | `TiresCondition` | empty | Tire pressure and temperature |
+| `lamps` | `LampsCondition` | empty | Exterior lamps |
+| `last_updated_timestamp` | `int?` | `None` | Report time, Unix seconds |
+| `raw_data` | `dict?` | `None` | Normalized payload for diagnostics |
+| `mqtt_raw_data` | `dict?` | `None` | Original decrypted MQTT parameters |
+| `condition_source` | `str?` | `None` | Service that produced the snapshot: `sda-mqtt`, `sda-mqtt-signal-list`, `legacy-mqtt` or `rest` |
+| `mqtt_variants` | `dict?` | `None` | Raw parameters of every MQTT condition variant attempted in the last exchange (diagnostics) |
+| `sda_plan` | `dict?` | `None` | SDA condition plan derived from the function tree: device DID, service/command codes and probe codes |
+
+### `BatteryCondition`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `soc_percentage` | `int?` (0-100) | `None` | State of charge (%) |
+| `remaining_range_km` | `int?` | `None` | Estimated range (km) |
+| `charging_status` | `str?` | `None` | Raw charging/discharging state |
+| `charger_connected` | `bool` | `False` | Charging cable plugged in |
+| `dc_gun_connected` | `bool` | `False` | DC charging gun connected |
+| `charge_current_a` | `float?` | `None` | Charging current (A) |
+| `ac_charge_current_a` | `float?` | `None` | AC charging current (A) |
+| `dc_charge_current_a` | `float?` | `None` | DC charging current (A) |
+| `remaining_charge_time_min` | `int?` | `None` | Remaining charge time (min); the `8191` sentinel becomes `None` |
+| `charge_limit_percent` | `int?` (0-100) | `None` | Charge limit (%) |
+| `charge_schedule_enabled` | `bool` | `False` | Both schedule switches are on |
+| `charge_schedule_start` / `charge_schedule_end` | `str?` | `None` | Schedule window |
+| `charge_plan_id` / `charge_plan_type` / `charge_plan_time_format` / `charge_plan_time_zone` | `str?` / `int?` / `int?` / `str?` | `None` | Raw plan metadata |
+
+### `FuelCondition`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `level_percent` | `int?` | `None` | Fuel level (%) |
+| `volume_l` | `float?` | `None` | Fuel volume (L) |
+| `tank_capacity_l` | `float?` | `None` | Tank capacity (L) |
+| `remaining_range_km` | `int?` | `None` | Fuel range (km) |
+| `temperature_c` | `float?` | `None` | Fuel temperature (C) |
+
+A BEV reports no fuel block and every field stays `None`.
+
+### `DoorsCondition`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `locked` | `bool` | `True` | Doors locked (driver lock preferred, else passenger, else `True`) |
+| `driver_locked` / `passenger_locked` | `bool?` | `None` | Individual lock states when reported |
+| `driver_door_open`, `passenger_door_open`, `rear_left_door_open`, `rear_right_door_open` | `bool` | `False` | Open doors |
+| `trunk_open` / `hood_open` | `bool` | `False` | Boot / hood |
+
+### `WindowsCondition`
+
+`front_left_open`, `front_right_open`, `rear_left_open`, `rear_right_open` (all `bool`, default
+`False`).
+
+### `SeatStatus` and `SeatsCondition`
+
+`SeatStatus` holds `heating_level` and `ventilation_level`, both `int?` in the `0-3` range; `None`
+means unknown (missing or out-of-range, including the sleep sentinel `6`). `SeatsCondition` has the
+four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
+
+### `ClimateCondition`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `power_on` | `bool?` | `None` | AC state; `None` when not reported (unknown, not off) |
+| `target_temperature_c` | `float?` | `None` | Target temperature (C) |
+| `inside_temperature_c` / `outside_temperature_c` | `float?` | `None` | Cabin / outside temperature (C) |
+| `humidity` | `float?` | `None` | Cabin humidity |
+| `inside_pm25` | `float?` | `None` | PM2.5 |
+| `air_quality_level` | `int?` | `None` | Air quality level |
+| `defrost_on` | `bool?` | `None` | Front defrost; `None` when not reported |
+| `fan_level` | `int?` | `None` | Fan level |
+| `steering_wheel_heater_on` | `bool?` | `None` | Steering wheel heater; `None` when not reported |
+| `steering_wheel_heater_level` | `int?` | `None` | Heater level |
+| `driver_seat_ventilation_level` / `driver_seat_heating_level` | `int` | `0` | Legacy driver-seat levels, retained for compatibility; seat data lives in `SeatsCondition` |
+
+### `TireStatus` and `TiresCondition`
+
+`TireStatus` holds `pressure_bar` (`float?`, converted from kPa), `temperature_c` (`float?`) and
+`alarm` (`bool`, default `False`). `TiresCondition` has the four positions `front_left`,
+`front_right`, `rear_left`, `rear_right`.
+
+### `LampsCondition`
+
+`high_beam`, `low_beam`, `position_lamp`, `front_fog`, `rear_fog`, `left_turn`, `right_turn` (all
+`bool`, default `False`).
+
+## 4. Commands
+
+### `CommandResultStatus`
+
+String enum: `pending`, `success`, `already_done`, `failed`.
+
+### `CommandResult`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `code` | `int?` | `None` | Raw `resultCode` when parsable |
+| `status` | `CommandResultStatus` | required | Normalized status |
+| `error_message` | `str?` | `None` | Gateway `errorMsg` |
+| `raw` | `dict` | `{}` | Original payload |
+
+`CommandResult.from_payload(payload)` classifies `-100`/absent as `pending`, `0`/`1201` as
+`success`, `1015` as `already_done` and `-1`/`-2`/unknown as `failed`.
+
+## 5. Digital key
+
+### `DigitalKeySupport`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `flag` | `int` | required | Raw flag from `query-supported-featured` |
+| `key_type` | `DigitalKeyKeyType` (`"ca" \| "icce" \| "honor" \| "unknown"`) | required | Key scheme the phone should use |
+| `raw` | `dict` | `{}` | Raw payload |
+
+`supported` is `True` when `key_type != "unknown"`. `from_flag(flag)` maps `0` to `ca`, `1` to
+`icce` and `2` to `honor`.
+
+### `VehicleAuthorizations`
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `raw_codes` | `list[str]` | `[]` | Function codes authorized for the account |
+| `digital_key` | `bool` | `False` | The `DigitalKey` code is present |
+| `raw` | `dict` | `{}` | Raw payload |
+
+`has_code(code)` checks the list; `from_payload(payload)` tolerates the candidate payload shapes
+because the service contract is inferred (it is not deployed in every region).
+
+## 6. Module constants
+
+| Constant | Value | Purpose |
+| --- | --- | --- |
+| `S05_TRIM_MAX` / `S05_TRIM_PRO` / `S05_TRIM_UNKNOWN` | `"max"` / `"pro"` / `"unknown"` | Capability trim hints |
+| `SEAT_HEAT_FUNCTION_CODES` | position to function code | Seat heating capabilities |
+| `SEAT_VENT_FUNCTION_CODES` | position to function code | Seat ventilation capabilities |
+| `DIGITAL_KEY_FUNCTION_CODE` | `"DigitalKey"` | Digital key authorization code |
+| `PHONE_SUPPORT_CA_KEY` / `PHONE_SUPPORT_ICCE_KEY` / `PHONE_SUPPORT_HONOR_KEY` | `0` / `1` / `2` | Digital key `flag` values |
+
+---

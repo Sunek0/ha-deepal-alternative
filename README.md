@@ -13,7 +13,7 @@ Home Assistant custom integration for **My Changan / Deepal** connected vehicles
 
 ## Requirements
 
-- Home Assistant 2026.3.0.
+- Home Assistant 2026.8.0.
 - An international My Changan account (email or SMS login). The HACS metadata advertises the
   countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
   Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
@@ -25,9 +25,14 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT. |
+| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
-| E07 | Only tested on SDA API. Telemetry through the REST API. Only supported in 1.4.0-beta releases. |
+| E07 | Only tested on SDA API. Telemetry through the REST API. |
+
+Charge limit: the S05 EV does not support setting it — the signed `charge_max` command is accepted
+without changing the limit — so the integration does not create the charge-limit control for it; the
+S05 PHEV reports the charge-limit function code, so it does offer the control. The charge schedule
+remains available on both.
 
 ## Supported features
 
@@ -94,28 +99,57 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   (S05, S07, E07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
 
-### Vehicle panel, example dashboard and card
+### Using the dashboard, the panel and the cards
 
-- **Panel** (optional): the setup asks whether to add it (disabled by default) and the integration
-  options can change it later. Once enabled, a **Deepal** entry appears in the sidebar for every
-  Home Assistant user, with no dashboard YAML and no extra cards. The integration's **Configure**
-  button opens the integration options, where the panel can be enabled or disabled.
-- The panel discovers vehicles and entities from the Home Assistant registries, so it works with
-  any vehicle name, area or entity id, and with several cars. Missing optional entities (for
-  example the PIN-gated lock, window and trunk controls) simply hide their controls. Tabs:
-  **Status** (layered vehicle picture on the S05 and the image entity on other models, door,
-  window, trunk, hood, light and tire states), **Climate** (cabin temperature, seat heating and
-  ventilation, steering wheel) and **Charging** (battery, cable, current, time left and the
-  tracked charging sessions). Everything is served by the integration itself.
-- **Card**: add **Deepal vehicle** from the card picker of any dashboard and pick your vehicle in
-  the form; the card carries the panel's three views (status, climate and charging) with the same
-  controls, and it is loaded by the integration itself, so it needs no Lovelace resource.
-- **Example dashboard**: `guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready view
-  derived from the reference cockpit with every home charger (V2C) element removed. Its helpers
-  ship in `guides/dashboards/deepal-dashboard.helpers.yaml`; mushroom is its only frontend
-  prerequisite and the entity ids must be replaced with yours.
-- Full walkthrough: [panel, example dashboard and card guide (English)](guides/dashboard-guide.en.md)
-  · [guía del panel, el dashboard de ejemplo y la tarjeta (español)](guides/dashboard-guide.es.md).
+Three ways to see and control your car; everything is served by the integration itself, with no
+HACS cards, no helpers and no Lovelace resources to configure.
+
+**Generated dashboard** — one view per car, nothing to configure:
+
+1. Open **Settings → Dashboards → Add dashboard** and pick **Deepal** under *Community dashboards*
+   (Home Assistant 2026.5+).
+2. Each view shows the complete card plus the sections of that car's model: quick controls, energy
+   graphs (fuel readings on the PHEV), tire pressures, driving and ambience on the models that
+   report them, and a templated alerts card. It rebuilds itself when a car or its entities change.
+   On older Home Assistant versions, create a dashboard in YAML mode with
+   `strategy: {type: custom:deepal}`.
+
+**Sidebar panel** (optional) — no dashboard needed:
+
+1. The setup asks whether to add it (disabled by default); change it later in **Configure → Show
+   the sidebar panel**. Once enabled it is visible to every Home Assistant user, and the
+   integration's **Configure** button keeps opening the options, not the panel.
+2. Open **Deepal** in the sidebar; with several cars, switch them with the header selector. The
+   panel discovers the vehicles and their entities from the Home Assistant registries, so any
+   name, area or language works.
+3. The vitals strip (battery, range, general closure and freshness) stays on top and the tabs are
+   **Status** (layered picture of the car's model, state chips, the controls, tire pressures,
+   health warnings while one is active and the energy block on fuel cars), **Driving** on the
+   models that report it, **Climate** and **Charging**.
+   Controls that need the remote control PIN (lock, windows, trunk) simply do not appear without
+   it, and missing optional entities hide their own controls.
+
+**Cards** — for your own dashboards:
+
+1. **Edit dashboard → Add card** and pick **Deepal vehicle** (complete, with the panel's views and
+   controls) or **Deepal vehicle (compact)** (vitals with the closure, the vehicle picture with the
+   opening chips, a climate control, quick actions and a charging strip), then select the car in
+   the form.
+2. By hand:
+   ```yaml
+   type: custom:deepal-card        # or custom:deepal-compact-card
+   device_id: <your vehicle device id>
+   ```
+   Both are loaded by the integration itself, so they need no Lovelace resource; the lock control
+   needs the control PIN like the panel.
+
+**Example dashboard**: `guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready sections
+view built only on the bundled card and core Home Assistant cards; paste it in the raw editor and
+replace the device and entity ids with yours.
+
+Full walkthrough and troubleshooting:
+[generated dashboard, panel, example and cards guide (English)](guides/dashboard-guide.en.md) ·
+[guía del dashboard generado, el panel, el ejemplo y las tarjetas (español)](guides/dashboard-guide.es.md).
 
 ### Diagnostics
 
@@ -224,6 +258,20 @@ automation:
           title: "Deepal"
           message: "The doors were unlocked; locking them now."
 ```
+
+## Data and security
+
+- **Secrets at rest.** The integration stores the session tokens, the login private key and the
+  remote control PIN inside the Home Assistant config entry (`.storage/core.config_entries`). Home
+  Assistant does not encrypt config entries: restrict the permissions of the `.storage` directory
+  and keep your backups encrypted.
+- **Vehicle image.** The image entity only downloads `https` URLs from the account payload and does
+  not follow redirects; when the image cannot be fetched, the bundled asset is shown.
+- **Panel visibility.** The optional vehicle panel is visible to every Home Assistant user, like
+  the entities themselves. The controls that act on the car require the remote control PIN when
+  one is configured.
+- **Secondary account.** Running the integration with a secondary My Changan account limits what
+  the stored session can do; see the recommended setup section above.
 
 ## Troubleshooting
 

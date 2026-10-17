@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 # Base Hostnames
 DEFAULT_BASE_URL = "https://pre-acenter.sda.changan.com.cn"
+# Research-only: recovered from the APK, not referenced by the client.
 GATEWAY_BASE_URL = "https://pre-acenter.sda.changan.com.cn/app-apigw/store-sda-api/api/v2"
 INTL_BASE_URL = "https://m.iov.changanauto.com.de"
 INTL_CA_BASE_URL = "https://ca-m.iov.changanauto.com.de"
@@ -87,6 +88,7 @@ def get_intl_environment(environment: str) -> IntlEnvironment:
 # Authentication Endpoints
 LOGIN_SMS_CODE = "/appauth/sda-app/api/user/login/code"
 OAUTH_TOKEN_BIND = "/appauth/sda-app/api/v2/oauth2-login/token/bind"
+# Research-only: not referenced by the client.
 OAUTH_THIRD_UNBIND = "/appauth/sda-app/api/v2/oauth2/third/unbind"
 INTL_SEND_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-send-auth-code"
 INTL_LOGIN_BY_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-code-in"
@@ -191,17 +193,21 @@ INTL_SDA_VOT_FUNCTION_CONFIG = (
 
 # Vehicle Information & Telemetry Endpoints
 GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"
+# Research-only: not referenced by the client.
 GET_CAR_STATUS = "/dae-terminal-mobile/api/v1/car/status"
 GET_CAR_FULL_CONDITION = "/dae-terminal-mobile/api/v1/car/full-condition"
+# Research-only: not referenced by the client.
 GET_CAR_SETTINGS = "/dae-terminal-mobile/api/v1/car/settings"
 
 # Charging & Home Charger Endpoints
+# Research-only: not referenced by the client.
 GET_HOME_CHARGER_STATUS = "/dae-terminal-mobile/api/v1/charger/home-status"
 GET_CHARGE_HISTORY = "/dae-terminal-mobile/api/v1/charger/history"
 
 # Control Commands Endpoints
 REMOTE_CLIMATE_CONTROL = "/dae-terminal-mobile/api/v1/control/climate"
 REMOTE_DOOR_LOCK = "/dae-terminal-mobile/api/v1/control/lock"
+# Research-only: not referenced by the client.
 PARKING_COMMAND = "/dae-terminal-mobile/api/v1/control/parking"
 
 REQUEST_ENCRYPTION_PUBLIC_KEY = (

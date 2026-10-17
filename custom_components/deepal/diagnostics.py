@@ -3,8 +3,9 @@
 The report is meant to make telemetry discovery possible from Home Assistant
 alone: it contains the mapped telemetry, the raw payloads the vehicle sent and
 the MQTT parameters no entity consumes yet. Credentials, personal identifiers
-and location-like values are redacted case-insensitively at any depth, and the
-device segment of MQTT topics is masked.
+and location-like values are redacted case-insensitively at any depth with the
+shared SDK redaction key model (`deepal.redact`), and the device segment of
+MQTT topics is masked.
 """
 
 from __future__ import annotations
@@ -15,96 +16,14 @@ from typing import Any
 from homeassistant.components.diagnostics import REDACTED
 from homeassistant.core import HomeAssistant
 
-from .const import (
-    CONF_ACCESS_TOKEN,
-    CONF_CAC_TOKEN,
-    CONF_CONTROL_PIN,
-    CONF_DEVICE_ID,
-    CONF_EMAIL,
-    CONF_PHONE,
-    CONF_PRIVATE_KEY,
-    CONF_REFRESH_TOKEN,
-    CONF_USER_ID,
-)
 from .deepal import VehicleCondition
 from .deepal.mqtt import unmapped_s05_keys
+from .deepal.redact import is_sensitive_key
 from .runtime_data import DeepalConfigEntry
-
-#: Exact report keys that are always redacted. Compared without distinguishing
-#: case, underscores or dashes, so `Lat`, `plateNumber` or `deviceDID` collapse
-#: to their canonical spelling before the lookup.
-_SENSITIVE_EXACT_KEYS = {
-    CONF_ACCESS_TOKEN,
-    CONF_CAC_TOKEN,
-    CONF_CONTROL_PIN,
-    CONF_DEVICE_ID,
-    CONF_EMAIL,
-    CONF_PHONE,
-    CONF_PRIVATE_KEY,
-    CONF_REFRESH_TOKEN,
-    CONF_USER_ID,
-    "address",
-    "authcode",
-    "devicedid",
-    "deviceid",
-    "gps",
-    "imageurl",
-    "imgurl",
-    "licenseplate",
-    "latitude",
-    "lat",
-    "longitude",
-    "lon",
-    "lng",
-    "platenumber",
-    "position",
-    "pubkey",
-    "rctoken",
-    "safecode",
-    "serialno",
-    "seriralno",
-    "thumbnailurl",
-    "userid",
-    "vehicleid",
-    "vehiclevin",
-    "vin",
-    "vincode",
-}
-
-#: Name fragments that mark a key as sensitive even when its exact spelling is
-#: new. Matched against the compacted (case, underscore and dash insensitive)
-#: key. Deliberately does not include "key" or "vin": they appear inside
-#: innocent names such as "unlockKeyDrivingStatus".
-_SENSITIVE_KEY_PARTS = (
-    "authorization",
-    "bearer",
-    "email",
-    "latitude",
-    "longitude",
-    "mobile",
-    "password",
-    "phone",
-    "pin",
-    "plate",
-    "private",
-    "serial",
-    "token",
-)
 
 #: `$vdp/<did>/...` MQTT topic strings: the device segment is masked wherever a
 #: topic appears in the report.
 _VDP_TOPIC = re.compile(r"^\$vdp/[^/]+")
-
-
-def _is_sensitive_key(key: Any) -> bool:
-    """Return whether a report key must be redacted, without distinguishing case."""
-    normalized = str(key).lower().replace("-", "_")
-    compact = normalized.replace("_", "")
-    return (
-        normalized in _SENSITIVE_EXACT_KEYS
-        or compact in _SENSITIVE_EXACT_KEYS
-        or any(part in compact for part in _SENSITIVE_KEY_PARTS)
-    )
 
 
 def _redact_string(value: str) -> str:
@@ -118,7 +37,7 @@ def _redact(value: Any) -> Any:
     """Return a redacted, report-safe copy of ``value``."""
     if isinstance(value, dict):
         return {
-            key: REDACTED if _is_sensitive_key(key) else _redact(item)
+            key: REDACTED if is_sensitive_key(key) else _redact(item)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):

@@ -114,9 +114,68 @@ def test_is_sensitive_key():
     assert is_sensitive_key("vinCode")
     assert is_sensitive_key("vehicle_vin")
     assert is_sensitive_key("pubKey")
+    assert is_sensitive_key("publicKey")
+    assert is_sensitive_key("privateKey")
+    assert is_sensitive_key("sign")
+    assert is_sensitive_key("smsCode")
+    assert is_sensitive_key("credential")
+    assert is_sensitive_key("passwd")
+    assert is_sensitive_key("otp")
+    assert is_sensitive_key("clientId")
+    assert is_sensitive_key("username")
+    assert is_sensitive_key("did")
+    assert is_sensitive_key("brokerUrl")
     assert not is_sensitive_key("soc")
     assert not is_sensitive_key("latestDate")
     assert not is_sensitive_key("unlockKeyDrivingStatus")
+    # A request parameter whose name merely starts with "sign" stays visible.
+    assert not is_sensitive_key("SignalList")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "publicKey",
+        "public_key",
+        "privateKey",
+        "secretKey",
+        "sign",
+        "smsCode",
+        "credential",
+        "passwd",
+        "otp",
+        "clientId",
+        "username",
+        "did",
+        "brokerUrl",
+        "cacToken",
+        "rcToken",
+        "serialNo",
+    ],
+)
+def test_audited_redaction_gaps_are_covered(key):
+    """The audited lists gaps stay covered by the shared key model."""
+    assert is_sensitive_key(key), key
+
+
+def test_audited_gap_payload_is_masked():
+    payload = {
+        "publicKey": "PUBKEY-BODY",
+        "secretKey": "secret-mqtt-token",
+        "smsCode": "sms-123456",
+        "sign": "signature",
+        "credential": "cred",
+        "passwd": "pass",
+        "otp": "123456",
+        "brokerUrl": "https://broker.example.invalid",
+        "clientId": "client-1",
+        "did": "device-did",
+        "username": "user",
+    }
+
+    out = redact_for_log(payload)
+
+    assert all(value == "[redacted]" for value in out.values())
 
 
 @pytest.mark.asyncio

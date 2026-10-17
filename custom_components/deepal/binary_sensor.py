@@ -36,12 +36,10 @@ S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
 
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities: the reference S05 does not
-# support the front defrost signal, and its airbag and coolant warning-light
-# codes read 1 on a healthy car (the airbag flag also toggled with no fault),
-# so the three entities were removed.
-REMOVED_BINARY_SENSOR_KEYS = frozenset(
-    {"defrost", "warning_airbag", "warning_coolant_temperature"}
-)
+# support the front defrost signal, so the entity was removed. The airbag and
+# coolant warning lights are mapped again (gated on the vehicle power state),
+# so they are not part of this set.
+REMOVED_BINARY_SENSOR_KEYS = frozenset({"defrost"})
 
 
 def build_binary_sensors(
@@ -454,6 +452,13 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
+        key="warning_airbag",
+        name="Airbag Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.airbag,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
         key="warning_brake_fluid",
         name="Brake Fluid Warning Light",
         value_fn=lambda cond, vehicle: cond.warnings.brake_fluid,
@@ -492,6 +497,13 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         key="warning_traction_battery_low",
         name="Traction Battery Low Warning Light",
         value_fn=lambda cond, vehicle: cond.warnings.traction_battery_low,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    DeepalBinarySensorDescription(
+        key="warning_coolant_temperature",
+        name="Coolant Temperature Warning Light",
+        value_fn=lambda cond, vehicle: cond.warnings.coolant_temperature,
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),

@@ -1,5 +1,8 @@
 """Custom exceptions for Changan Deepal SDK."""
 
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+
 
 class DeepalError(Exception):
     """Base exception for all Deepal SDK errors."""
@@ -49,15 +52,30 @@ class DeepalCommandNotReady(DeepalAuthError):
 
 
 def parse_retry_after(value: str | None) -> float | None:
-    """Parse an HTTP ``Retry-After`` delta-seconds header.
+    """Parse an HTTP ``Retry-After`` header, delta-seconds or HTTP-date.
 
-    Returns the positive number of seconds, or ``None`` when the header is
-    missing, not a number, or not positive.
+    An HTTP-date resolves to the positive seconds remaining until it. Returns
+    ``None`` when the header is missing, not parseable, negative or already in
+    the past.
     """
     if value is None:
         return None
+    text = value.strip()
     try:
-        seconds = int(value.strip())
+        seconds = float(text)
     except (AttributeError, TypeError, ValueError):
+        seconds = _seconds_until_http_date(text)
+    return seconds if seconds is not None and seconds > 0 else None
+
+
+def _seconds_until_http_date(value: str) -> float | None:
+    """Return the seconds until an HTTP-date, ``None`` when unparseable."""
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
         return None
-    return float(seconds) if seconds > 0 else None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (when - datetime.now(timezone.utc)).total_seconds()

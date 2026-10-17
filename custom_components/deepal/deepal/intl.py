@@ -205,7 +205,20 @@ INTL_REFRESH_THROTTLE_SECONDS = 1800.0
 #: refresh cycle with several vehicles asks the CA gateway once instead of once
 #: per MQTT session.
 INTL_MQTT_TOKEN_TTL_SECONDS = 60.0
+
+#: The CA connection configuration is per vehicle and practically static; it is
+#: reused within this window so the wake report wait (and its retries) fetches
+#: it once and the normal polls amortize the bootstrap across cycles. A
+#: rejection drops the cache, so a stale configuration cannot survive the
+#: reuse window.
+INTL_MQTT_CONFIG_TTL_SECONDS = 660.0
 CAR_CONTROL_REFRESH_THROTTLE_SECONDS = 3300.0
+
+#: Gateway result codes the app accepts as a completed vehicle wake when the
+#: response's ``success`` flag is missing or false. The upstream dec_deepal
+#: 2.5.1 accepts the same set (MIT): the gateway has been observed answering an
+#: accepted wake with ``code`` ``000000`` and a falsy ``success``.
+WAKE_OK_CODES = frozenset({"000000", "0", "00000"})
 
 
 def _is_auth_failure(code: Any) -> bool:
@@ -279,6 +292,22 @@ def _as_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _humidity_percent(value: Any) -> Optional[float]:
+    """Return the cabin humidity as a percentage.
+
+    The S05 reports ``insideHumidity`` either as a percentage (``61``) or as
+    tenths of a percent (``453``), so a value above 100 is divided by ten.
+    Values outside 0 to 100 after that are unknown. Mirrors the MQTT
+    normalization in ``deepal.mqtt``.
+    """
+    humidity = _as_float(value)
+    if humidity is None:
+        return None
+    if humidity > 100:
+        humidity /= 10
+    return humidity if 0 <= humidity <= 100 else None
 
 
 def _as_bool(value: Any) -> Optional[bool]:
@@ -385,6 +414,7 @@ class DeepalIntlClient:
         mqtt_exchange_timeout: Optional[float] = None,
         mqtt_wake_timeout: Optional[float] = None,
         mqtt_token_ttl: float = INTL_MQTT_TOKEN_TTL_SECONDS,
+        mqtt_config_ttl: float = INTL_MQTT_CONFIG_TTL_SECONDS,
         device_id: Optional[str] = None,
         private_key_pem: Optional[str] = None,
         public_key: Optional[str] = None,
@@ -423,8 +453,10 @@ class DeepalIntlClient:
         self.mqtt_exchange_timeout = mqtt_exchange_timeout
         self.mqtt_wake_timeout = mqtt_wake_timeout
         self.mqtt_token_ttl = mqtt_token_ttl
+        self.mqtt_config_ttl = mqtt_config_ttl
         self._mqtt_token: Optional[str] = None
         self._mqtt_token_expires_at = 0.0
+        self._mqtt_configs: dict[str, tuple[dict[str, Any], float]] = {}
         self.last_mqtt_exchange: Optional[MqttExchangeResult] = None
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
@@ -934,6 +966,7 @@ class DeepalIntlClient:
             self.rc_token = None
             self.access_token_expires_at = None
             self._invalidate_mqtt_token()
+            self._invalidate_mqtt_config()
 
     @staticmethod
     def _jwt_expiry(token: Optional[str]) -> Optional[int]:
@@ -1463,7 +1496,7 @@ class DeepalIntlClient:
             target_temperature_c=target_temp / 10 if target_temp is not None else None,
             inside_temperature_c=_tenths(hvac.get("insideTemp")),
             outside_temperature_c=_tenths(hvac.get("outsideTemp")),
-            humidity=_as_float(hvac.get("insideHumidity")),
+            humidity=_humidity_percent(hvac.get("insideHumidity")),
             inside_pm25=_as_float(hvac.get("insidePm25")),
             air_quality_level=_as_int(hvac.get("insideAirQualityLevel")),
             defrost_on=None if defrost is None else defrost != 0,
@@ -1572,8 +1605,21 @@ class DeepalIntlClient:
         """Return whether the vehicle uses the SDA condition service."""
         return (vehicle.protocol_type or "").upper() == "SDA-MQTT"
 
-    async def get_mqtt_config(self, vehicle_id: str) -> dict[str, Any]:
-        """Fetch the CA gateway MQTT connection configuration for a vehicle."""
+    async def get_mqtt_config(
+        self, vehicle_id: str, force: bool = False
+    ) -> dict[str, Any]:
+        """Return the CA gateway MQTT connection configuration for a vehicle.
+
+        The configuration is per vehicle and practically static, so it is
+        reused within ``mqtt_config_ttl`` (660 seconds by default, about two
+        default poll cycles) instead of fetched for every session: the wake
+        report wait and its retries bootstrap once. ``force`` bypasses the
+        cache, and a failed fetch never leaves a stale value behind.
+        """
+        cached = self._mqtt_configs.get(vehicle_id)
+        if not force and cached is not None and time.monotonic() < cached[1]:
+            return cached[0]
+        self._mqtt_configs.pop(vehicle_id, None)
         payload = {
             "deviceId": self.device_id,
             "carId": vehicle_id,
@@ -1604,12 +1650,20 @@ class DeepalIntlClient:
             )
         if not isinstance(data, dict):
             raise DeepalAPIError("Unexpected S05 MQTT configuration response.")
+        self._mqtt_configs[vehicle_id] = (
+            data,
+            time.monotonic() + self.mqtt_config_ttl,
+        )
         return data
 
     def _invalidate_mqtt_token(self) -> None:
         """Drop the cached MQTT auth token (rejected, or the session changed)."""
         self._mqtt_token = None
         self._mqtt_token_expires_at = 0.0
+
+    def _invalidate_mqtt_config(self) -> None:
+        """Drop the cached CA connection configurations (rejected bootstrap)."""
+        self._mqtt_configs.clear()
 
     async def get_mqtt_token(self, force: bool = False) -> str:
         """Exchange the account user id for an MQTT auth token.
@@ -2108,8 +2162,11 @@ class DeepalIntlClient:
             if reason_code != 0:
                 reason = MQTT_CONNACK_REASONS.get(reason_code, "unknown reason code")
                 # A rejected token must not survive the reuse window; force a
-                # fresh fetch on the next attempt.
+                # fresh fetch on the next attempt. The cached connection
+                # configuration is dropped too: the rejection may come from a
+                # stale broker/topic set.
                 self._invalidate_mqtt_token()
+                self._invalidate_mqtt_config()
                 raise DeepalAPIError(
                     "S05 MQTT broker rejected connection: "
                     f"reason code {reason_code} ({reason})"
@@ -2153,7 +2210,13 @@ class DeepalIntlClient:
                     break
                 if first >> 4 != 3:
                     continue
-                _topic, payload, packet_id = parse_publish(first, body)
+                try:
+                    _topic, payload, packet_id = parse_publish(first, body)
+                except ValueError as err:
+                    logger.debug(
+                        "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
+                    )
+                    continue
                 if packet_id is not None:
                     writer.write(build_puback_packet(packet_id))
                     await writer.drain()
@@ -2313,7 +2376,13 @@ class DeepalIntlClient:
                     break
                 if first >> 4 != 3:
                     continue
-                topic, payload, packet_id = parse_publish(first, body)
+                try:
+                    topic, payload, packet_id = parse_publish(first, body)
+                except ValueError as err:
+                    logger.debug(
+                        "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
+                    )
+                    continue
                 if packet_id is not None:
                     writer.write(build_puback_packet(packet_id))
                     await writer.drain()
@@ -2352,6 +2421,175 @@ class DeepalIntlClient:
             )
         finally:
             await self._close_s05_mqtt(writer)
+
+    async def s05_wait_for_report(
+        self,
+        vehicle_id: str,
+        *,
+        previous_timestamp: Optional[int] = None,
+        interval: float = 5.0,
+        timeout: float = 60.0,
+        vin: Optional[str] = None,
+    ) -> Optional[VehicleCondition]:
+        """Wait for a newer S05 report over one bounded MQTT exchange.
+
+        Opens a single session and re-publishes the condition request every
+        ``interval`` seconds until a snapshot newer than ``previous_timestamp``
+        arrives or the caller's ``timeout`` expires, so a wake refresh does not
+        open one session per poll. Returns ``None`` when no newer report
+        arrives in time; a broken session raises ``DeepalAPIError`` so the
+        caller can retry with the remaining budget. The session stays under the
+        client's MQTT lock for its whole (bounded) duration because the broker
+        closes concurrent sessions that share the account identity.
+        """
+        async with self._mqtt_lock:
+            config = await self.get_mqtt_config(vehicle_id)
+            token = await self.get_mqtt_token()
+            try:
+                (
+                    reader,
+                    writer,
+                    resolved,
+                    basic_info,
+                    secret_key,
+                    _plan,
+                ) = await self._open_s05_mqtt(config, token)
+            except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+                raise DeepalAPIError(
+                    f"S05 MQTT report wait failed: {exc}"
+                ) from exc
+            try:
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + timeout
+                request_timeout = self.mqtt_exchange_timeout or max(
+                    self.timeout, 20.0
+                )
+                while True:
+                    wait = max(
+                        0.05, min(request_timeout, deadline - loop.time())
+                    )
+                    try:
+                        condition = await self._request_condition_on_session(
+                            reader,
+                            writer,
+                            resolved,
+                            basic_info,
+                            secret_key,
+                            vehicle_id,
+                            vin,
+                            wait,
+                            require_timestamp=previous_timestamp is not None,
+                        )
+                    except (
+                        asyncio.TimeoutError,
+                        EOFError,
+                        OSError,
+                        ssl.SSLError,
+                    ) as exc:
+                        raise DeepalAPIError(
+                            f"S05 MQTT report wait failed: {exc}"
+                        ) from exc
+                    if condition is not None:
+                        timestamp = condition.last_updated_timestamp
+                        if previous_timestamp is None or (
+                            timestamp is not None
+                            and timestamp > previous_timestamp
+                        ):
+                            return condition
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        return None
+                    await asyncio.sleep(min(interval, remaining))
+            finally:
+                await self._close_s05_mqtt(writer)
+
+    async def _request_condition_on_session(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        resolved: MqttTopics,
+        basic_info: Mapping[str, Any],
+        secret_key: str,
+        vehicle_id: str,
+        vin: Optional[str],
+        wait: float,
+        *,
+        require_timestamp: bool,
+    ) -> Optional[VehicleCondition]:
+        """Request one condition snapshot on an already open MQTT session.
+
+        Returns a complete snapshot, or ``None`` when the reply did not arrive
+        within ``wait`` or was incomplete. With ``require_timestamp`` a
+        response without a report timestamp field does not count: the parser's
+        current-time fallback must not make it look fresh.
+        """
+        properties_topic = resolved.properties_publish
+        device_did = resolved.device_did
+        login_did = resolved.login_did or device_did
+        if not properties_topic or not device_did or not secret_key:
+            raise DeepalAPIError(
+                "S05 MQTT session is missing the properties topic or the secretKey."
+            )
+        req_id = new_request_id(device_did)
+        writer.write(
+            build_publish_packet(
+                properties_topic,
+                condition_request_payload(
+                    device_did,
+                    login_did,
+                    secret_key,
+                    req_id,
+                    basic_info=basic_info,
+                ),
+            )
+        )
+        await writer.drain()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait
+        partial: dict[str, Any] = {}
+        while loop.time() < deadline:
+            try:
+                first, body = await read_packet_with_keepalive(
+                    reader,
+                    writer,
+                    max(0.05, deadline - loop.time()),
+                    self.mqtt_keepalive,
+                )
+            except asyncio.TimeoutError:
+                return None
+            if first >> 4 != 3:
+                continue
+            try:
+                _topic, payload, packet_id = parse_publish(first, body)
+            except ValueError as err:
+                logger.debug(
+                    "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
+                )
+                continue
+            if packet_id is not None:
+                writer.write(build_puback_packet(packet_id))
+                await writer.drain()
+            if payload.get("r") != req_id:
+                continue
+            params = self._s05_params_from_payload(payload, secret_key)
+            if not params:
+                continue
+            partial.update(params)
+            if len(partial) > 10:
+                break
+        else:
+            return None
+        if require_timestamp and not any(
+            key in partial
+            for key in ("lastUpdatedTime", "lastUpdatedAt", "latestDate")
+        ):
+            return None
+        condition = self.parse_condition(
+            normalize_s05_params(partial), vehicle_id, vin=vin
+        )
+        condition.mqtt_raw_data = partial
+        condition.condition_source = "legacy-mqtt"
+        return condition
 
     async def wake_vehicle(self, vehicle_id: str) -> None:
         """Wake an MQTT-backed vehicle so it publishes fresh condition data.
@@ -2434,7 +2672,14 @@ class DeepalIntlClient:
                     if first >> 4 != 3:
                         observed.append(f"packet_type={first >> 4}")
                         continue
-                    topic, payload, packet_id = parse_publish(first, body)
+                    try:
+                        topic, payload, packet_id = parse_publish(first, body)
+                    except ValueError as err:
+                        logger.debug(
+                            "Deepal MQTT: skipping a malformed PUBLISH packet (%s)",
+                            err,
+                        )
+                        continue
                     if packet_id is not None:
                         writer.write(build_puback_packet(packet_id))
                         await writer.drain()
@@ -2450,7 +2695,7 @@ class DeepalIntlClient:
                     if not matched or result is None:
                         continue
                     code, success = result
-                    if success:
+                    if success or code in WAKE_OK_CODES:
                         logger.info(
                             "Deepal wake for %s acknowledged with code %s after "
                             "%.1f s",

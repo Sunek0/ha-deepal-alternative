@@ -22,6 +22,16 @@ SEAT_VENT_FUNCTION_CODES = {
     "rear_right": "#RightRearSeatVent",
 }
 
+# Charge-limit function codes: the S05 PHEV reports them (its AC charge limit
+# can be set) while the S05 EV does not. The backend serves them with and
+# without a leading ``#``, so they are matched normalized.
+CHARGE_LIMIT_FUNCTION_CODES = ("BatteryMaxSoc", "#chargeSet")
+
+
+def _normalized_code(code: str) -> str:
+    """Upper-case alphanumerics of a function code, without its ``#`` prefix."""
+    return "".join(character for character in str(code).upper() if character.isalnum())
+
 
 class Vehicle(BaseModel):
     """Deepal Vehicle Summary model."""
@@ -57,6 +67,13 @@ class VehicleCapabilities(BaseModel):
         default=False,
         description="Vehicle reports a fuel tank capability (PHEV / range extender)",
     )
+    has_charge_limit: bool = Field(
+        default=False,
+        description=(
+            "Vehicle reports a settable AC charge limit (charge-limit function "
+            "codes present)"
+        ),
+    )
     trim_hint: Literal["max", "pro", "unknown"] = Field(
         default=S05_TRIM_UNKNOWN,
         description="S05 trim hint derived from the capabilities, never from telemetry",
@@ -66,6 +83,7 @@ class VehicleCapabilities(BaseModel):
     def from_codes(cls, codes: list[str]) -> "VehicleCapabilities":
         """Build the typed capabilities from the raw function code list."""
         known = {str(code) for code in codes}
+        normalized = {_normalized_code(code) for code in codes}
         seats = {
             position: SeatCapabilities(
                 heating=heat_code in known,
@@ -80,6 +98,10 @@ class VehicleCapabilities(BaseModel):
             raw_codes=[str(code) for code in codes],
             seats=seats,
             has_fuel="#oilMileage" in known,
+            has_charge_limit=any(
+                _normalized_code(code) in normalized
+                for code in CHARGE_LIMIT_FUNCTION_CODES
+            ),
             trim_hint=S05_TRIM_MAX if front_ventilation else S05_TRIM_PRO,
         )
 
@@ -210,12 +232,14 @@ class WarningLightsCondition(BaseModel):
     battery_12v: Optional[bool] = None
     tpms: Optional[bool] = None
     abs: Optional[bool] = None
+    airbag: Optional[bool] = None
     brake_fluid: Optional[bool] = None
     brake: Optional[bool] = None
     eps: Optional[bool] = None
     power_limit: Optional[bool] = None
     power_system: Optional[bool] = None
     traction_battery_low: Optional[bool] = None
+    coolant_temperature: Optional[bool] = None
 
 
 class LampsCondition(BaseModel):

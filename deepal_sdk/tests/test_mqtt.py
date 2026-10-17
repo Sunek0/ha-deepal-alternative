@@ -84,7 +84,7 @@ def test_connect_packet_is_mqtt5_with_exact_bytes():
         b"\x00\x04MQTT"
         b"\x05"
         b"\xc2"
-        b"\x00\x3c"
+        b"\x00\x32"
         b"\x00"
         b"\x00\x05did-1"
         b"\x00\x06user-1"
@@ -583,6 +583,7 @@ def test_normalize_s05_params_maps_telemetry():
         "frontDefrostStatus": 1,
         "airPurifierStatus": 3,
         "airConditioningHairRatings": 4,
+        "steeringWheelHeating": 1,
         "ChrgSts": 3,
         "acChargeGunConnectionState": 3,
         "BattACChrgInCurr": 16.2,
@@ -632,7 +633,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["vehicleStatus"]["totalMileage"] == 18300
     assert condition["vehicleStatus"]["totalMeterYesterday"] == 42.5
     assert condition["vehicleStatus"]["igniteCumulativeMileage"] == 12.25
-    assert "steeringWheelHeater" not in condition["vehicleStatus"]
+    assert condition["vehicleStatus"]["steeringWheelHeater"] == 1
     assert condition["hvac"]["acStatus"] == 1
     assert condition["hvac"]["remoteTemp"] == 225
     assert condition["charge"]["chargeStatus"] == 3
@@ -795,6 +796,8 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
 
     assert normalized["warningLights"]["tpms"] is True
     assert normalized["warningLights"]["battery12v"] is False
+    assert normalized["warningLights"]["airbag"] is False
+    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["keyBatteryLow"] is True
     assert normalized["airRecirculation"] is True
     assert normalized["windowOpenings"] == {
@@ -810,17 +813,63 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
         "battery12v",
         "tpms",
         "abs",
+        "airbag",
         "brakeFluid",
         "brake",
         "eps",
         "powerLimit",
         "powerSystem",
         "tractionBatteryLow",
+        "coolantTemperature",
     }
     assert empty["warningLights"]["tpms"] is None
     assert empty["keyBatteryLow"] is None
     assert empty["airRecirculation"] is None
     assert empty["windowOpenings"]["frontLeft"] is None
+
+
+def test_normalize_s05_params_blanks_warnings_while_the_vehicle_is_off():
+    normalized = normalize_s05_params(
+        {
+            "absLightStatus": 1,
+            "brakeLightStatus": 1,
+            "tpmsLightStatus": 1,
+            "airBagLightStatus": 1,
+            "coolanTemperatureLightStatus": 1,
+            "powerStatusFeedBack": 0,
+        }
+    )
+
+    assert normalized["warningLights"]["abs"] is None
+    assert normalized["warningLights"]["brake"] is None
+    assert normalized["warningLights"]["tpms"] is None
+    assert normalized["warningLights"]["airbag"] is None
+    assert normalized["warningLights"]["coolantTemperature"] is None
+    assert normalized["vehicleStatus"]["powerStatus"] == 0
+
+
+def test_normalize_s05_params_keeps_warnings_while_the_vehicle_is_on():
+    normalized = normalize_s05_params(
+        {
+            "absLightStatus": 1,
+            "brakeLightStatus": 0,
+            "airBagLightStatus": 1,
+            "coolanTemperatureLightStatus": 0,
+            "powerStatusFeedBack": 2,
+        }
+    )
+
+    assert normalized["warningLights"]["abs"] is True
+    assert normalized["warningLights"]["brake"] is False
+    assert normalized["warningLights"]["airbag"] is True
+    assert normalized["warningLights"]["coolantTemperature"] is False
+    assert normalized["vehicleStatus"]["powerStatus"] == 2
+
+
+def test_normalize_s05_params_keeps_warnings_without_a_power_state():
+    normalized = normalize_s05_params({"absLightStatus": 1})
+
+    assert normalized["warningLights"]["abs"] is True
 
 
 def test_normalize_s05_params_maps_remain_charge_time_sentinel():
@@ -1141,6 +1190,31 @@ def test_parse_suback_returns_packet_id_and_reason_codes():
     assert parse_suback(0x30, b"\x00\x01\x00") == (None, [])
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"\x00",
+        b"\x00\x05ab",
+        b"\x00\x01a\x80",
+        b"\x00\x01a\x05",
+        b"\x00\x01a\x00not-json",
+        b"\x00\x01a\x00[1, 2]",
+    ],
+)
+def test_parse_publish_rejects_malformed_bodies(body):
+    with pytest.raises(ValueError):
+        parse_publish(0x30, body)
+
+
+def test_parse_publish_accepts_a_json_object_body():
+    topic, payload, packet_id = parse_publish(0x30, b'\x00\x01a\x00{"x": 1}')
+
+    assert topic == "a"
+    assert payload == {"x": 1}
+    assert packet_id is None
+
+
 @pytest.mark.asyncio
 async def test_sda_broker_session_tries_dids_subscribes_and_acks(monkeypatch):
     event = build_publish_packet(
@@ -1245,3 +1319,28 @@ async def test_sda_broker_session_login_publishes_the_loginout(monkeypatch):
     assert payload["mt"] == "loginout"
     assert result.secret_key == secret
     assert build_puback_packet(3) in broker.writer.packets
+
+
+@pytest.mark.asyncio
+async def test_sda_broker_session_skips_malformed_publishes(monkeypatch):
+    malformed = bytes([0x30, 0x01, 0x00])
+    event = build_publish_packet(
+        "$vdp/did-1/car-1/server/event",
+        {"d": {"p": {"DrvrDoorLockLogicSts": 2}}},
+    )
+    broker = _ScriptedBroker(_connack(0x00) + _suback(1, [0x01]) + malformed + event)
+    _install_broker(monkeypatch, broker)
+
+    result = await sda_broker_session(
+        "prod-appmq.example",
+        8883,
+        device_ids=["did-1"],
+        password="token-123",
+        topics=["$vdp/did-1/car-1/server/event"],
+        seconds=0.05,
+        timeout=1.0,
+    )
+
+    assert result.connected is True
+    assert len(result.messages) == 1
+    assert result.messages[0]["payload"]["d"]["p"]["DrvrDoorLockLogicSts"] == 2

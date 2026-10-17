@@ -7,6 +7,7 @@ config entries.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -476,3 +477,53 @@ async def test_panel_step_stores_the_choice() -> None:
     disabled = await flow.async_step_panel({})
 
     assert disabled["options"] == {CONF_SHOW_PANEL: False}
+
+
+# --- Profile layout assets -------------------------------------------------
+
+PANEL_SRC = (
+    REPO_ROOT / "custom_components" / "deepal" / "frontend" / "panel" / "src"
+)
+PANEL_ASSETS = REPO_ROOT / "custom_components" / "deepal" / "frontend" / "assets"
+
+
+def _layout_referenced_assets() -> list[str]:
+    """Every asset path quoted by the per-model layout constants."""
+    source = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
+    return sorted(set(re.findall(r'"((?:s05|s07)/[^"]+\.(?:png|webm))"', source)))
+
+
+def test_profile_layout_assets_ship_on_disk() -> None:
+    """Every file a model layout references must exist under frontend/assets."""
+    assets = _layout_referenced_assets()
+
+    assert len(assets) >= 55  # a broken pattern must never pass silently
+    assert any(path.startswith("s05/") for path in assets)
+    assert any(path.startswith("s07/") for path in assets)
+    assert any(path.endswith(".webm") for path in assets)
+    missing = [path for path in assets if not (PANEL_ASSETS / path).is_file()]
+    assert missing == []
+
+
+# --- Dashboard strategies --------------------------------------------------
+
+BUNDLE = (
+    REPO_ROOT
+    / "custom_components"
+    / "deepal"
+    / "frontend"
+    / "panel"
+    / "deepal-frontend.js"
+)
+
+
+def test_bundle_registers_the_dashboard_strategies() -> None:
+    """The built bundle must define and advertise the dashboard strategies."""
+    bundle = BUNDLE.read_text(encoding="utf-8")
+
+    assert "class DeepalDashboardStrategy" in bundle
+    assert "class DeepalVehicleViewStrategy" in bundle
+    assert '"ll-strategy-dashboard-deepal"' in bundle
+    assert '"ll-strategy-view-deepal-vehicle"' in bundle
+    assert "window.customStrategies" in bundle
+    assert 'strategyType: "dashboard"' in bundle

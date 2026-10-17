@@ -173,8 +173,26 @@ async def test_api_image_is_fetched_once_with_a_bounded_timeout() -> None:
     url, timeout, follow_redirects = client.calls[0]
     assert url == API_IMAGE_URL
     assert timeout == API_IMAGE_TIMEOUT
-    assert follow_redirects is True
+    assert follow_redirects is False
     assert API_IMAGE_TIMEOUT < IMAGE_TIMEOUT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.invalid/car.png",
+        "file:///etc/passwd",
+        "ftp://example.invalid/car.png",
+        "data:image/png;base64,AAAA",
+    ],
+)
+async def test_non_https_api_image_urls_are_not_fetched(url: str) -> None:
+    client = FakeHttpClient(response=FakeResponse())
+    entity = _entity(client, _vehicle(thumbnail_url=url))
+
+    assert await entity.async_image() == GENERIC_ASSET.read_bytes()
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
@@ -246,6 +264,7 @@ async def test_invalid_api_url_serves_the_bundled_asset() -> None:
 
     assert await entity.async_image() == GENERIC_ASSET.read_bytes()
     assert entity.content_type == SVG_CONTENT_TYPE
+    assert client.calls == []
 
 
 @pytest.mark.asyncio

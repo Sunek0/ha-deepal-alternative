@@ -50,7 +50,7 @@ CONF_SHOW_PANEL = "show_panel"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"
-DEFAULT_SCAN_INTERVAL = 120  # seconds (2 minutes)
+DEFAULT_SCAN_INTERVAL = 300  # seconds (5 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 DEFAULT_WAKE = True
 # New entries start without the sidebar panel (the setup flow asks for it).

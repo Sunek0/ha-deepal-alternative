@@ -1,6 +1,6 @@
-// Panel shell: header, vehicle selector, tabs, action dispatch and error
-// feedback. The three views live in 60_estado.js, 61_clima.js and
-// 62_carga.js and hang off the prototype.
+// Panel shell: app bar, persistent vitals, segmented tabs, action dispatch
+// and error feedback. The views live in 60_status.js, 61_climate.js,
+// 62_charging.js and 63_driving.js and hang off the prototype.
 
 class DeepalPanel extends HTMLElement {
   constructor() {
@@ -10,6 +10,11 @@ class DeepalPanel extends HTMLElement {
     this._deviceId = null;
     this._error = "";
     this._vehicles = [];
+    this._animHost = null;
+    this._animVideos = {};
+    this._animStates = {};
+    this._animSupported = null;
+    this._animProbeStarted = false;
     installPointerFreeze(this);
     this.shadowRoot.addEventListener("click", (event) => this._onClick(event));
     this.shadowRoot.addEventListener("change", (event) => this._onChange(event));
@@ -44,12 +49,31 @@ class DeepalPanel extends HTMLElement {
     if (this._hass) this._render();
   }
 
+  /** Whether the combined flash-and-horn control is offered (panel only). */
+  get _showsFlashAndHonk() {
+    return true;
+  }
+
+  /** Whether the state chips carry the general closure chip (complete card). */
+  get _chipsShowLock() {
+    return false;
+  }
+
   _syncVehicles() {
     this._vehicles = discoverVehicles(this._hass || {});
     if (!this._vehicles.some((vehicle) => vehicle.deviceId === this._deviceId)) {
       this._deviceId = this._vehicles.length
         ? this._vehicles[0].deviceId
         : null;
+    }
+    // A model change can drop the selected tab (the Driving tab only exists
+    // on the profiles that define it): fall back to the status tab.
+    const vehicle = this._vehicle;
+    if (
+      vehicle &&
+      !this._profileTabs(vehicle).some(([key]) => key === this._tab)
+    ) {
+      this._tab = "status";
     }
   }
 
@@ -160,9 +184,11 @@ class DeepalPanel extends HTMLElement {
         if (!state) return;
         const min = Number(state.attributes.min ?? 0);
         const max = Number(state.attributes.max ?? 3);
+        const step = Number(state.attributes.step ?? 1) || 1;
+        const delta = Number(target.dataset.delta || 0) * step;
         const value = Math.min(
           max,
-          Math.max(min, Number(state.state) + Number(target.dataset.delta || 0)),
+          Math.max(min, Number(state.state) + delta),
         );
         this._callService("number", "set_value", { entity_id: id, value });
         return;
@@ -179,10 +205,24 @@ class DeepalPanel extends HTMLElement {
   }
 
   _onChange(event) {
-    const target = event.target.closest("[data-action='select-vehicle']");
+    const target = event.target.closest("[data-action]");
     if (!target) return;
-    this._deviceId = target.value;
-    this._render();
+    if (target.dataset.action === "select-vehicle") {
+      this._deviceId = target.value;
+      this._render();
+      return;
+    }
+    if (target.dataset.action === "time-set") {
+      const vehicle = this._vehicle;
+      if (!vehicle) return;
+      const id = entityFor(vehicle, "time", target.dataset.key);
+      if (id && target.value) {
+        this._callService("time", "set_value", {
+          entity_id: id,
+          time: target.value,
+        });
+      }
+    }
   }
 
   /** Cheap signature of everything the panel currently shows. */
@@ -222,13 +262,14 @@ class DeepalPanel extends HTMLElement {
     if (!this._hass) return;
     try {
       this.shadowRoot.innerHTML = this._renderHtml();
+      this._syncAnimations();
     } catch (error) {
       // A render error must never leave the panel stuck on the old view.
       console.error("Deepal panel render failed", error);
       this.shadowRoot.innerHTML = `
         <style>${PANEL_CSS}</style>
         <div class="panel">
-          <div class="error">${escapeHtml(
+          <div class="alert">${escapeHtml(
             String((error && error.message) || error),
           )}</div>
         </div>`;
@@ -242,7 +283,8 @@ class DeepalPanel extends HTMLElement {
     const refresh = vehicle
       ? entityFor(vehicle, "button", "refresh")
       : undefined;
-    const tabs = this._tabsHtml();
+    const name = vehicle ? vehicle.name : this._t("title");
+    const model = vehicle && vehicle.model ? vehicle.model : "";
     const selector =
       vehicles.length > 1
         ? `
@@ -263,20 +305,25 @@ class DeepalPanel extends HTMLElement {
     return `
       <style>${PANEL_CSS}</style>
       <div class="panel">
-        <header class="header">
-          <h1><ha-icon icon="mdi:car-electric"></ha-icon>${escapeHtml(this._t("title"))}</h1>
-          ${selector}
+        <header class="app-bar">
+          <h1 class="app-title">
+            <ha-icon icon="${PANEL_ICONS.car_electric}"></ha-icon>
+            <span>${escapeHtml(name)}</span>
+            ${model ? `<span class="model">${escapeHtml(model)}</span>` : ""}
+          </h1>
           <div class="spacer"></div>
+          ${selector}
           ${
             refresh
-              ? `<button class="icon-button" title="${escapeHtml(this._t("refresh_hint"))}" data-action="refresh"><ha-icon icon="mdi:refresh"></ha-icon></button>`
+              ? `<button class="icon-button" title="${escapeHtml(this._t("refresh_hint"))}" aria-label="${escapeHtml(this._t("refresh_hint"))}" data-action="refresh"><ha-icon icon="${PANEL_ICONS.refresh}"></ha-icon></button>`
               : ""
           }
         </header>
-        ${this._error ? `<div class="error">${escapeHtml(this._error)}</div>` : ""}
+        ${this._error ? `<div class="alert">${escapeHtml(this._error)}</div>` : ""}
         ${
           vehicle
-            ? `<nav class="tabs" role="tablist">${tabs}</nav>
+            ? `${vitalsHtml(this._hass, vehicle, (key) => this._t(key))}
+               <nav class="segmented" role="tablist">${this._tabsHtml()}</nav>
                <div class="view">${this._renderView(vehicle)}</div>`
             : `<div class="empty">${escapeHtml(this._t("no_vehicle"))}</div>`
         }
@@ -284,15 +331,22 @@ class DeepalPanel extends HTMLElement {
   }
 
   _renderView(vehicle) {
+    if (this._tab === "driving") return this._renderDriving(vehicle);
     if (this._tab === "climate") return this._renderClimate(vehicle);
     if (this._tab === "charging") return this._renderCharging(vehicle);
     return this._renderStatus(vehicle);
   }
 
+  /** Tabs of the vehicle's model profile, or the default list. */
+  _profileTabs(vehicle) {
+    const layout = layoutFor(vehicle);
+    return (layout && layout.tabs) || PANEL_TABS;
+  }
+
   _tabsHtml() {
-    return PANEL_TABS.map(
+    return this._profileTabs(this._vehicle).map(
       ([key, icon]) => `
-      <button class="tab" role="tab" aria-selected="${this._tab === key}" data-action="tab" data-tab="${key}">
+      <button class="segment" role="tab" aria-selected="${this._tab === key}" data-action="tab" data-tab="${key}">
         <ha-icon icon="${icon}"></ha-icon>
         <span>${escapeHtml(this._t(`tab_${key}`))}</span>
       </button>`,

@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -56,8 +57,15 @@ def _build_client(
     """Build the API client for the entry's platform.
 
     Both clients share Home Assistant's httpx session; the SDK keeps an
-    injected client open and leaves closing it to Home Assistant.
+    injected client open and leaves closing it to Home Assistant. An entry
+    whose stored data carries no access token fails with
+    ``ConfigEntryAuthFailed`` so the reauthentication flow can recover it.
     """
+    access_token = entry.data.get(CONF_ACCESS_TOKEN)
+    if not access_token:
+        raise ConfigEntryAuthFailed(
+            "The Deepal entry stores no access token; reauthenticate the entry."
+        )
     if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
         client = DeepalIntlClient(
             country=entry.data.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
@@ -71,7 +79,7 @@ def _build_client(
             ),
             httpx_client=get_async_client(hass),
         )
-        client.access_token = entry.data[CONF_ACCESS_TOKEN]
+        client.access_token = access_token
         client.refresh_token = entry.data.get(CONF_REFRESH_TOKEN) or None
         client.cac_token = entry.data.get(CONF_CAC_TOKEN) or None
         client.user_id = entry.data.get(CONF_USER_ID) or None
@@ -98,7 +106,7 @@ def _build_client(
         return client
 
     return DeepalClient(
-        access_token=entry.data[CONF_ACCESS_TOKEN],
+        access_token=access_token,
         httpx_client=get_async_client(hass),
     )
 
@@ -174,9 +182,18 @@ def _remove_stale_vehicle_registry(
     """Drop registry entries of vehicles the account no longer reports.
 
     Runs on every setup and is idempotent: only entries whose vehicle is not
-    part of the freshly fetched vehicle list are removed.
+    part of the freshly fetched vehicle list are removed. An empty freshly
+    fetched list removes nothing: it is treated as an anomaly, not as a
+    removal event.
     """
     current = {vehicle.car_id for vehicle in coordinator.vehicles}
+    if not current:
+        # The config flow rejects accounts without vehicles, and a running
+        # coordinator keeps the current list when the account reports none, so
+        # an empty first list is an anomaly (for example a transient gateway
+        # response). Removing the registry here would wipe every entity and
+        # device of the entry.
+        return
     prefixes = {f"deepal_{car_id}_" for car_id in current}
 
     entity_registry = er.async_get(hass)

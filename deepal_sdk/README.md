@@ -14,13 +14,13 @@ The SDK speaks to two different Changan platforms, each with its own client:
 
 | Client | Platform | Base host | Login | Reference |
 | --- | --- | --- | --- | --- |
-| `DeepalIntlClient` | International (My Changan app, Europe/LatAm) | `m.iov.changanauto.com.de` | Email or SMS verification code | [`docs/intl-api.md`](docs/intl-api.md) |
-| `DeepalClient` | SDA (mainland China) | `pre-acenter.sda.changan.com.cn` | SMS code or a pasted access token | [`docs/sda-api.md`](docs/sda-api.md) |
+| `DeepalIntlClient` | International (My Changan app, Europe/LatAm) | `m.iov.changanauto.com.de` | Email or SMS verification code | [`docs/reference/intl-api.md`](docs/reference/intl-api.md) |
+| `DeepalClient` | SDA (mainland China) | `pre-acenter.sda.changan.com.cn` | SMS code or a pasted access token | [`docs/reference/sda-api.md`](docs/reference/sda-api.md) |
 
 The international platform is the fully implemented path: REST telemetry, remote commands signed
-with the account keypair, S05 MQTT telemetry (`docs/mqtt-telemetry.md`) and read-only digital key
-checks. The SDA client is a thin access-token client for the Chinese platform; its commands are
-recovered from the app but not verified live.
+with the account keypair, S05 MQTT telemetry (`docs/reference/mqtt-telemetry.md`) and read-only
+digital key checks. The SDA client is a thin access-token client for the Chinese platform; its
+commands are recovered from the app but not verified live.
 
 ## Requirements
 
@@ -120,8 +120,8 @@ result = await client.control_result_status(vehicle.car_id, command_id)
 print(result.status)
 ```
 
-See [`docs/intl-api.md`](docs/intl-api.md#10-remote-commands) for the complete command list, the
-signature construction, the PIN/token rules and the command result codes.
+See [`docs/reference/intl-api.md`](docs/reference/intl-api.md#10-remote-commands) for the complete
+command list, the signature construction, the PIN/token rules and the command result codes.
 
 ### MQTT telemetry (S05)
 
@@ -136,7 +136,7 @@ else:
 ```
 
 The bootstrap, the connection options and the parameter mapping are documented in
-[`docs/mqtt-telemetry.md`](docs/mqtt-telemetry.md).
+[`docs/reference/mqtt-telemetry.md`](docs/reference/mqtt-telemetry.md).
 
 ## Quickstart: SDA (China) platform
 
@@ -157,8 +157,9 @@ asyncio.run(main())
 ```
 
 The SMS login flow (`request_sms_code` / `login_with_code`) is implemented but the recommended path
-is an access token issued by the SDA platform. See [`docs/sda-api.md`](docs/sda-api.md) for the
-headers, the telemetry mapping and the unverified caveats.
+is an access token issued by the SDA platform. See
+[`docs/reference/sda-api.md`](docs/reference/sda-api.md) for the headers, the telemetry mapping and
+the unverified caveats.
 
 ## Error handling
 
@@ -193,24 +194,47 @@ except DeepalAPIError as err:
 - `DeepalAPIError`: any other gateway or HTTP failure, with `code` and `status_code`.
 - `DeepalConnectionError`: transport failure (`httpx.RequestError`).
 
-The full code-to-exception mapping is in [`docs/intl-api.md`](docs/intl-api.md#11-errors). For the SDA
-client only `DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError` are raised.
+The full code-to-exception mapping is in
+[`docs/reference/intl-api.md`](docs/reference/intl-api.md#11-errors). For the SDA client only
+`DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError` are raised.
 
 ## Diagnostics
 
 `DeepalIntlClient(enable_api_logging=True)` logs every request and response at `WARNING` level with
 tokens, keys, VINs, emails, phones, PINs and serial numbers redacted, and truncates long strings.
 Payload parsing never fails on missing groups: absent telemetry is reported as `None`, `False` or
-`0` according to [`docs/models.md`](docs/models.md).
+`0` according to [`docs/reference/models.md`](docs/reference/models.md).
 
 ## Documentation
 
+Task guides (step-by-step walkthroughs):
+
+| Guide | Contents |
+| --- | --- |
+| [`docs/guides/authentication.md`](docs/guides/authentication.md) | Login flows, session persistence and restore, refresh and logout |
+| [`docs/guides/telemetry.md`](docs/guides/telemetry.md) | Vehicles, condition, capabilities, digital key and the REST/MQTT routing decision |
+| [`docs/guides/remote-commands.md`](docs/guides/remote-commands.md) | Control PIN, signing prerequisites, command families and result polling |
+| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies and the single-use condition exchange |
+| [`docs/guides/errors-and-diagnostics.md`](docs/guides/errors-and-diagnostics.md) | Error taxonomy in practice and redacted API logging |
+
+Reference (protocol and models):
+
 | Document | Contents |
 | --- | --- |
-| [`docs/intl-api.md`](docs/intl-api.md) | International platform: environments, headers, login, session refresh, telemetry, capabilities, digital key, signed commands, errors, diagnostics |
-| [`docs/sda-api.md`](docs/sda-api.md) | SDA (China) platform: access token, headers, methods, telemetry mapping, limitations |
-| [`docs/mqtt-telemetry.md`](docs/mqtt-telemetry.md) | S05 MQTT bootstrap, connection options and parameter mapping |
-| [`docs/models.md`](docs/models.md) | Every public Pydantic model, its fields and their semantics |
+| [`docs/reference/intl-api.md`](docs/reference/intl-api.md) | International platform: environments, headers, login, session refresh, telemetry, capabilities, digital key, signed commands, errors, diagnostics |
+| [`docs/reference/sda-api.md`](docs/reference/sda-api.md) | SDA (China) platform: access token, headers, methods, telemetry mapping, limitations |
+| [`docs/reference/mqtt-telemetry.md`](docs/reference/mqtt-telemetry.md) | MQTT bootstrap, connection options, exchange and parameter mapping, SDA-MQTT beta |
+| [`docs/reference/models.md`](docs/reference/models.md) | Every public Pydantic model, its fields and their semantics |
+
+LLM-friendly entry points:
+
+| File | Contents |
+| --- | --- |
+| [`llms.txt`](llms.txt) | Index of every document with one-line descriptions (llmstxt.org shape) |
+| [`llms-full.txt`](llms-full.txt) | Every document concatenated verbatim for ingestion |
+
+Regenerate them after changing any document with
+`python scripts/generate-llms-docs.py --sdk deepal`; the SDK suite fails when they go stale.
 
 Runnable examples:
 

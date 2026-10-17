@@ -62,7 +62,7 @@ SDA_CONDITION_SECTIONS = (
 )
 
 MQTT_PROTOCOL_LEVEL = 5
-MQTT_DEFAULT_KEEPALIVE = 60
+MQTT_DEFAULT_KEEPALIVE = 50
 # Seconds to wait for one SDA probe response before publishing the next variant.
 MQTT_SDA_PROBE_GRACE = 3.0
 
@@ -267,19 +267,34 @@ def parse_connack(first: int, body: bytes) -> tuple[Optional[int], Optional[int]
 
 
 def parse_publish(first: int, body: bytes) -> tuple[str, dict[str, Any], Optional[int]]:
-    """Parse an MQTT 5.0 PUBLISH body into ``(topic, payload, packet_id)``."""
+    """Parse an MQTT 5.0 PUBLISH body into ``(topic, payload, packet_id)``.
+
+    Malformed packets (truncated fields, non-JSON payloads and JSON payloads
+    that are not objects) raise ``ValueError`` so MQTT readers can skip them
+    without leaking ``struct`` or JSON decoder errors to their callers.
+    """
     pos = 0
+    if len(body) < 2:
+        raise ValueError("Truncated MQTT PUBLISH topic length.")
     topic_len = struct.unpack("!H", body[pos : pos + 2])[0]
     pos += 2
+    if len(body) < pos + topic_len:
+        raise ValueError("Truncated MQTT PUBLISH topic.")
     topic = body[pos : pos + topic_len].decode(errors="replace")
     pos += topic_len
     packet_id: Optional[int] = None
     if (first >> 1) & 0x03:
+        if len(body) < pos + 2:
+            raise ValueError("Truncated MQTT PUBLISH packet identifier.")
         packet_id = struct.unpack("!H", body[pos : pos + 2])[0]
         pos += 2
     properties_length, pos = read_variable_byte_integer(body, pos)
+    if len(body) < pos + properties_length:
+        raise ValueError("Truncated MQTT PUBLISH properties.")
     pos += properties_length
     payload = json.loads(body[pos:].decode())
+    if not isinstance(payload, dict):
+        raise ValueError("MQTT PUBLISH payload is not a JSON object.")
     return topic, payload, packet_id
 
 
@@ -1215,7 +1230,7 @@ async def sda_broker_session(
                 continue
             try:
                 topic, payload, packet_id = parse_publish(first, body)
-            except (ValueError, UnicodeDecodeError):
+            except ValueError:
                 continue
             qos = (first >> 1) & 0x03
             if packet_id is not None and qos == 1:
@@ -1374,6 +1389,19 @@ def _as_bool(value: Any) -> Optional[bool]:
     """Return a boolean for zero/non-zero values, ``None`` when absent."""
     number = _as_int(value)
     return None if number is None else number != 0
+
+
+def _warning_light(value: Any, power_status: Optional[int]) -> Optional[bool]:
+    """Return a dashboard light bit, unknown while the vehicle reports off.
+
+    A sleeping car woken for a refresh reports the bits as ``1`` on a healthy
+    vehicle (owner report 2026-10-17: ABS and brake after a wake), so they are
+    only trusted while the payload says the vehicle is on. A payload without
+    the power state keeps the reported bit.
+    """
+    if power_status == 0:
+        return None
+    return _as_bool(value)
 
 
 def _humidity_percent(value: Any) -> Optional[float]:
@@ -1557,6 +1585,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         ac_gun_value=params.get("acChargeGunConnectionState"),
         dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
     )
+    power_status = _as_int(params.get("powerStatusFeedBack"))
     return {
         "lastUpdatedAt": _to_millis(latest),
         "vehicleStatus": {
@@ -1571,8 +1600,12 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             ),
             "engineSts": _as_int(params.get("engineStatus")),
             "connectStatus": 1,
-            "powerStatus": _as_int(params.get("powerStatusFeedBack")),
+            "powerStatus": power_status,
             "epbSts": _as_int(params.get("electronichandbrakeStatus")),
+            # Fallback only: with the heater off the car can still report 1
+            # here; the app condition overlay keeps priority (see
+            # docs/intl-api.md).
+            "steeringWheelHeater": _as_int(params.get("steeringWheelHeating")),
         },
         "hvac": {
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
@@ -1631,15 +1664,27 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "rightTurn": _as_int(params.get("turnLndicatorRight")),
         },
         "warningLights": {
-            "battery12v": _as_bool(params.get("batt12VLightStatus")),
-            "tpms": _as_bool(params.get("tpmsLightStatus")),
-            "abs": _as_bool(params.get("absLightStatus")),
-            "brakeFluid": _as_bool(params.get("brakeFluidLightStatus")),
-            "brake": _as_bool(params.get("brakeLightStatus")),
-            "eps": _as_bool(params.get("epsLightStatus")),
-            "powerLimit": _as_bool(params.get("powerLimitLightStatus")),
-            "powerSystem": _as_bool(params.get("powerSystemLightStatus")),
-            "tractionBatteryLow": _as_bool(params.get("bcuBattSocLightStatus")),
+            "battery12v": _warning_light(params.get("batt12VLightStatus"), power_status),
+            "tpms": _warning_light(params.get("tpmsLightStatus"), power_status),
+            "abs": _warning_light(params.get("absLightStatus"), power_status),
+            "airbag": _warning_light(params.get("airBagLightStatus"), power_status),
+            "brakeFluid": _warning_light(
+                params.get("brakeFluidLightStatus"), power_status
+            ),
+            "brake": _warning_light(params.get("brakeLightStatus"), power_status),
+            "eps": _warning_light(params.get("epsLightStatus"), power_status),
+            "powerLimit": _warning_light(
+                params.get("powerLimitLightStatus"), power_status
+            ),
+            "powerSystem": _warning_light(
+                params.get("powerSystemLightStatus"), power_status
+            ),
+            "tractionBatteryLow": _warning_light(
+                params.get("bcuBattSocLightStatus"), power_status
+            ),
+            "coolantTemperature": _warning_light(
+                params.get("coolanTemperatureLightStatus"), power_status
+            ),
         },
         "windowOpenings": {
             "frontLeft": _as_int(params.get("leftAnteriorWindowDegree")),
@@ -1728,6 +1773,7 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "frontDefrostStatus",
         "airPurifierStatus",
         "airConditioningHairRatings",
+        "steeringWheelHeating",
         # Charging
         "ChrgSts",
         "acChargeGunConnectionState",
@@ -1768,12 +1814,14 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "batt12VLightStatus",
         "tpmsLightStatus",
         "absLightStatus",
+        "airBagLightStatus",
         "brakeFluidLightStatus",
         "brakeLightStatus",
         "epsLightStatus",
         "powerLimitLightStatus",
         "powerSystemLightStatus",
         "bcuBattSocLightStatus",
+        "coolanTemperatureLightStatus",
         "keyLowPower",
         # Air recirculation
         "airRecycleStatus",

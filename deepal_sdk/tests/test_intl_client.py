@@ -1841,6 +1841,117 @@ async def test_get_mqtt_config_and_token_use_ca_gateway():
     assert all("ca-m.iov.changanauto.com.de" in url for url in captured["urls"])
 
 
+def _mqtt_config_counter_handler(calls: list[str]):
+    """Serve the CA config and token while recording every request path."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("/getConnConf") or request.url.path.endswith(
+            "/appGetCarConfFunc"
+        ):
+            return httpx.Response(
+                200, json={"success": True, "code": "000000", "data": _mqtt_config()}
+            )
+        return httpx.Response(
+            200,
+            json={"success": True, "code": "000000", "data": {"authToken": "tok-1"}},
+        )
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_reuses_the_cached_configuration():
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    first = await client.get_mqtt_config("car-1")
+    second = await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert first == second
+    assert sum("getConnConf" in path for path in calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_expired_window_refetches():
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+    client.mqtt_config_ttl = 0.0
+
+    await client.get_mqtt_config("car-1")
+    await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_force_bypasses_the_cache():
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_config("car-1")
+    await client.get_mqtt_config("car-1", force=True)
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_config_cache_is_per_vehicle():
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_config("car-1")
+    await client.get_mqtt_config("car-2")
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_logout_invalidates_the_cached_configuration():
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    await client.get_mqtt_config("car-1")
+    await client.logout()
+    client.access_token = "test_token_123"
+    await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_rejected_connection_invalidates_the_cached_configuration(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_reason_code=0x86)
+    _install_fake_broker(monkeypatch, broker)
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.get_mqtt_config("car-1")
+    with pytest.raises(DeepalAPIError):
+        await client.s05_mqtt_condition("car-1")
+    await client.get_mqtt_config("car-1")
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 2
+
+
 @pytest.mark.asyncio
 async def test_get_mqtt_token_without_user_id_raises():
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -2135,6 +2246,22 @@ def test_vehicle_capabilities_without_front_ventilation_hints_pro():
     assert capabilities.seats["front_left"].ventilation is False
 
 
+def test_vehicle_capabilities_charge_limit_flags_the_supported_codes():
+    assert VehicleCapabilities.from_codes(["BatteryMaxSoc"]).has_charge_limit is True
+    assert VehicleCapabilities.from_codes(["#chargeSet"]).has_charge_limit is True
+    assert VehicleCapabilities.from_codes(["#chargeset"]).has_charge_limit is True
+    assert VehicleCapabilities.from_codes(["batterymaxsoc"]).has_charge_limit is True
+
+
+def test_vehicle_capabilities_charge_limit_is_false_without_the_codes():
+    capabilities = VehicleCapabilities.from_codes(["#oilMileage", "#driverSeatVent"])
+
+    assert capabilities.has_charge_limit is False
+    assert capabilities.has_fuel is True
+    assert capabilities.trim_hint == "max"
+    assert capabilities.raw_codes == ["#oilMileage", "#driverSeatVent"]
+
+
 @pytest.mark.parametrize(
     ("protocol_type", "is_mqtt", "is_sda"),
     [
@@ -2205,6 +2332,41 @@ async def test_s05_mqtt_condition_uses_normalized_params():
     assert condition.doors.locked is True
     assert condition.tires.front_left.pressure_bar == 2.4
     assert condition.mqtt_raw_data == raw_params
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [(1, True), (0, False), (None, None)],
+)
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_maps_the_steering_fallback(raw_value, expected):
+    raw_params: dict = {"soc": 71}
+    if raw_value is not None:
+        raw_params["steeringWheelHeating"] = raw_value
+
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
+        return MqttExchangeResult(
+            params=dict(raw_params),
+            source="legacy-mqtt",
+            variants={"legacy-mqtt": dict(raw_params)},
+        )
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._read_s05_params = fake_params
+    condition = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert condition.climate.steering_wheel_heater_on is expected
 
 
 @pytest.mark.asyncio
@@ -2291,7 +2453,8 @@ def test_mqtt_constructor_defaults_and_overrides():
     client = _client(lambda request: httpx.Response(200, json={}))
     assert client.mqtt_client_id is None
     assert client.mqtt_username is None
-    assert client.mqtt_keepalive == 60
+    assert client.mqtt_keepalive == 50
+    assert client.mqtt_config_ttl == 660
     assert client.mqtt_clean_start is True
     assert client.mqtt_tls_insecure is False
 
@@ -2366,6 +2529,169 @@ async def test_read_s05_params_runs_mqtt5_exchange(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_s05_wait_for_report_reuses_one_exchange(monkeypatch):
+    stale_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 5000}
+    fresh_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 7000}
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        condition_sequence=[
+            {"service_code": "car_condition", "params": stale_params},
+            {"service_code": "car_condition", "params": fresh_params},
+        ],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=6000, interval=0.01, timeout=5.0
+    )
+    await client.close()
+
+    assert condition is not None
+    assert condition.last_updated_timestamp == 7000
+    assert len(broker.condition_publishes) == 2
+    assert len([write for write in broker.writes if write[0] == 0x10]) == 1
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_bootstraps_the_config_once(monkeypatch):
+    stale_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 5000}
+    fresh_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 7000}
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        condition_sequence=[
+            {"service_code": "car_condition", "params": stale_params},
+            {"service_code": "car_condition", "params": fresh_params},
+        ],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    calls: list[str] = []
+    client = _client(_mqtt_config_counter_handler(calls))
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.s05_wait_for_report(
+        "car-1", previous_timestamp=6000, interval=0.01, timeout=5.0
+    )
+    await client.close()
+
+    assert sum("getConnConf" in path for path in calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_times_out_without_a_newer_report(monkeypatch):
+    stale_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 5000}
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        condition_sequence=[
+            {"service_code": "car_condition", "params": stale_params},
+        ],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=6000, interval=0.01, timeout=0.2
+    )
+    await client.close()
+
+    assert condition is None
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_ignores_responses_without_a_timestamp(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=1, interval=0.01, timeout=0.2
+    )
+    await client.close()
+
+    assert condition is None
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_accepts_the_first_report_without_previous(monkeypatch):
+    params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 9000}
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        condition_sequence=[{"service_code": "car_condition", "params": params}],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", interval=0.01, timeout=1.0
+    )
+    await client.close()
+
+    assert condition is not None
+    assert condition.last_updated_timestamp == 9000
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_raises_on_rejected_connection(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_reason_code=0x86)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError):
+        await client.s05_wait_for_report(
+            "car-1", previous_timestamp=1, interval=0.01, timeout=0.5
+        )
+    await client.close()
+
+
+class _MalformedFirstBroker(_FakeMqttBroker):
+    """Broker injecting a truncated PUBLISH before every real reply."""
+
+    def _on_publish(self, first: int, body: bytes) -> None:
+        self.reader.feed_data(bytes([0x30, 0x01, 0x00]))
+        super()._on_publish(first, body)
+
+
+@pytest.mark.asyncio
+async def test_malformed_publishes_are_skipped_during_the_s05_exchange(monkeypatch):
+    broker = _MalformedFirstBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert result.params["soc"] == 71
+
+
+@pytest.mark.asyncio
+async def test_malformed_publishes_are_skipped_while_waiting_for_the_wake(monkeypatch):
+    broker = _MalformedFirstBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.wake_payload is not None
+    assert broker.wake_payload["mt"] == "properties"
+
+
+@pytest.mark.asyncio
 async def test_wake_vehicle_publishes_wake_service(monkeypatch):
     broker = _FakeMqttBroker(S05_BROKER_PARAMS)
     _install_fake_broker(monkeypatch, broker)
@@ -2419,6 +2745,23 @@ async def test_wake_vehicle_raises_on_rejected_service(monkeypatch):
 
     assert err.value.code == "VVCC_-1_-1_02_023"
     assert "rejected" in str(err.value)
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_accepts_the_gateway_success_code(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    broker.wake_success = False
+    broker.wake_code = "000000"
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.wake_payload is not None
     assert broker.close_count == 1
 
 
@@ -3328,6 +3671,18 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.low_beam is False
     assert condition.lamps.front_fog is False
     assert condition.lamps.rear_fog is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(61, 61.0), (453, 45.3), (-5, None), (1200, None)],
+)
+def test_parse_condition_normalizes_the_humidity_scale(raw, expected):
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition({"hvac": {"insideHumidity": raw}}, "car-1")
+
+    assert condition.climate.humidity == expected
 
 
 @pytest.mark.parametrize(
