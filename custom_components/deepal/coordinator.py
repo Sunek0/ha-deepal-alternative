@@ -556,7 +556,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         A field whose last written value came from an unconfirmed optimistic
         update must not be restored this way: it expires to unknown when the
-        vehicle stops reporting it, until a report carries it again.
+        vehicle stops reporting it, until a report carries it again. The last
+        known position is also kept, so the location tracker does not flap when
+        the car reports no coordinates. The dashboard warning lights reported as
+        unknown (vehicle off, asleep or a REST fallback) keep their last known
+        values as well; the SDK power-state gate guarantees those came from a
+        report with the vehicle on.
         """
         pending = self._optimistic_pending.get(vehicle_id)
 
@@ -565,6 +570,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         previous = (self.data or {}).get(vehicle_id)
         if previous is not None:
+            if condition.latitude is None:
+                condition.latitude = previous.latitude
+            if condition.longitude is None:
+                condition.longitude = previous.longitude
+            for field in type(condition.warnings).model_fields:
+                if (
+                    getattr(condition.warnings, field) is None
+                    and getattr(previous.warnings, field) is not None
+                ):
+                    setattr(
+                        condition.warnings, field, getattr(previous.warnings, field)
+                    )
             if condition.climate.power_on is None and keep("climate.power_on"):
                 condition.climate.power_on = previous.climate.power_on
             if condition.climate.steering_wheel_heater_on is None and keep(

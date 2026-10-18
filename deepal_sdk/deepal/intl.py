@@ -71,13 +71,15 @@ from deepal.exceptions import (
     DeepalAPIError,
     DeepalAuthError,
     DeepalCommandAuthError,
+    DeepalSessionInvalidated,
     DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalError,
     DeepalRateLimitError,
     parse_retry_after,
 )
-from deepal.redact import redact_for_log, safe_headers
+from deepal.redact import is_sensitive_key, redact_for_log, safe_headers
+from deepal.location import find_location
 from deepal.models import (
     AuthToken,
     BatteryCondition,
@@ -220,14 +222,41 @@ CAR_CONTROL_REFRESH_THROTTLE_SECONDS = 3300.0
 #: accepted wake with ``code`` ``000000`` and a falsy ``success``.
 WAKE_OK_CODES = frozenset({"000000", "0", "00000"})
 
+#: MQTT timeouts are independent of the HTTP timeout: socket operations keep
+#: the connect budget and the exchange/wake deadlines their own value, so
+#: raising the HTTP bound never extends a telemetry or wake exchange.
+MQTT_SOCKET_TIMEOUT = 15.0
+MQTT_EXCHANGE_TIMEOUT = 20.0
 
-def _is_auth_failure(code: Any) -> bool:
-    code_str = str(code)
-    return (
-        "AUTH" in code_str.upper()
-        or code_str.startswith("401")
-        or code_str in _AUTH_ERROR_CODES
-    )
+
+def _auth_failure_class(code: Any, message: Any = None) -> Optional[type]:
+    """Return the authentication error class for a rejection, or ``None``.
+
+    Kick-out codes keep raising ``DeepalAuthError``. A rejection whose code
+    matches none of the patterns is classified by its message only when it
+    identifies an invalid, invalidated or expired session token (the live
+    ``invalided token`` wording) and not the command ``rcToken``, which the
+    command flow handles on its own; those message-classified failures raise
+    ``DeepalSessionInvalidated`` so the CA-bootstrap fallbacks can recover.
+    """
+    if code is not None:
+        code_str = str(code)
+        if (
+            "AUTH" in code_str.upper()
+            or code_str.startswith("401")
+            or code_str in _AUTH_ERROR_CODES
+        ):
+            return DeepalAuthError
+    if message is None:
+        return None
+    lowered = str(message).lower()
+    if "rctoken" in lowered:
+        return None
+    if "token" in lowered and any(
+        marker in lowered for marker in ("invalid", "invalidated", "expired", "caduc")
+    ):
+        return DeepalSessionInvalidated
+    return None
 
 
 def _normalize_country_code(country_code: str) -> str:
@@ -421,7 +450,7 @@ class DeepalIntlClient:
         base_url: Optional[str] = None,
         ca_base_url: Optional[str] = None,
         sda_base_url: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 30.0,
         enable_api_logging: bool = False,
         signing_policy: str = SIGNING_POLICY_APP,
         httpx_client: Optional[httpx.AsyncClient] = None,
@@ -475,6 +504,7 @@ class DeepalIntlClient:
         self.ca_user_id: Optional[str] = None
         self.cac_user_id: Optional[str] = None
         self.control_pin: Optional[str] = None
+        self.location_enabled = False
         self.rc_token: Optional[str] = None
         self.public_key: Optional[str] = public_key
         self.private_key_pem: Optional[str] = private_key_pem
@@ -734,8 +764,9 @@ class DeepalIntlClient:
                     "Remote command signing was rejected; log in again to register "
                     "a new command-signing key."
                 )
-            if _is_auth_failure(code):
-                raise DeepalAuthError(f"Authentication failed: {code} {msg}")
+            auth_error = _auth_failure_class(code, msg)
+            if auth_error is not None:
+                raise auth_error(f"Authentication failed: {code} {msg}")
             detail = f"{code} {msg}" if code is not None else msg
             raise DeepalAPIError(
                 f"API Error: {detail}",
@@ -1284,20 +1315,23 @@ class DeepalIntlClient:
         self, vehicle_id: str, vin: Optional[str] = None
     ) -> VehicleCondition:
         """Fetch the telemetry condition of an international vehicle."""
+        criteria = {
+            "seat": "1",
+            "door": "1",
+            "hvac": "1",
+            "charge": "1",
+            "lamp": "1",
+            "window": "1",
+            "tire": "1",
+            "vehicleStatus": "1",
+            "fuel": "1",
+        }
+        if self.location_enabled:
+            criteria["location"] = "1"
         raw = await self._request(
             INTL_GET_VEHICLE_CONDITION,
             json_data={
-                "vechileCriteria": {
-                    "seat": "1",
-                    "door": "1",
-                    "hvac": "1",
-                    "charge": "1",
-                    "lamp": "1",
-                    "window": "1",
-                    "tire": "1",
-                    "vehicleStatus": "1",
-                    "fuel": "1",
-                },
+                "vechileCriteria": criteria,
                 "vehicleId": vehicle_id,
             },
             auth_required=True,
@@ -1534,9 +1568,13 @@ class DeepalIntlClient:
             else engine_status not in (None, 0)
         )
 
+        location = find_location(raw)
+
         return VehicleCondition(
             car_id=vehicle_id,
             vin=raw.get("vin") or vin or "",
+            latitude=location[0] if location is not None else None,
+            longitude=location[1] if location is not None else None,
             total_odometer_km=_as_float(status.get("totalMileage")),
             mileage_yesterday_km=_as_float(status.get("totalMeterYesterday")),
             trip_mileage_km=_as_float(status.get("igniteCumulativeMileage")),
@@ -1636,7 +1674,7 @@ class DeepalIntlClient:
             )
         except DeepalRateLimitError:
             raise
-        except DeepalAPIError as exc:
+        except (DeepalAPIError, DeepalSessionInvalidated) as exc:
             if not self.mqtt_config_fallback:
                 raise
             logger.warning(
@@ -1694,7 +1732,7 @@ class DeepalIntlClient:
             )
         except DeepalRateLimitError:
             raise
-        except DeepalAPIError as exc:
+        except (DeepalAPIError, DeepalSessionInvalidated) as exc:
             if not self.mqtt_token_fallback:
                 raise
             logger.warning(
@@ -1830,7 +1868,7 @@ class DeepalIntlClient:
             password=token,
             topics=subscriptions,
             seconds=seconds,
-            timeout=self.timeout,
+            timeout=MQTT_SOCKET_TIMEOUT,
             keepalive=self.mqtt_keepalive,
             ssl_context=await asyncio.to_thread(self._mqtt_ssl_context),
             login=login,
@@ -1887,6 +1925,9 @@ class DeepalIntlClient:
         condition = self.parse_condition(
             normalize_s05_params(result.params), vehicle_id, vin=vin
         )
+        location = find_location(result.params)
+        if location is not None:
+            condition.latitude, condition.longitude = location
         condition.mqtt_raw_data = result.params
         condition.condition_source = result.source
         condition.mqtt_variants = result.variants or None
@@ -2021,6 +2062,9 @@ class DeepalIntlClient:
         condition = self.parse_condition(normalized, vehicle_id, vin=vin)
         condition.mqtt_raw_data = payload
         condition.condition_source = "sda-rest"
+        location = find_location(payload, normalized)
+        if location is not None:
+            condition.latitude, condition.longitude = location
         return condition
 
     @staticmethod
@@ -2046,7 +2090,10 @@ class DeepalIntlClient:
         logger.debug(
             "S05 MQTT unmapped parameters: %s",
             json.dumps(
-                {key: params[key] for key in sorted(unmapped)},
+                {
+                    key: "[redacted]" if is_sensitive_key(key) else params[key]
+                    for key in sorted(unmapped)
+                },
                 ensure_ascii=False,
                 sort_keys=True,
                 default=str,
@@ -2142,7 +2189,7 @@ class DeepalIntlClient:
         context = await asyncio.to_thread(self._mqtt_ssl_context)
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=context, server_hostname=host),
-            timeout=self.timeout,
+            timeout=MQTT_SOCKET_TIMEOUT,
         )
         try:
             writer.write(
@@ -2156,7 +2203,7 @@ class DeepalIntlClient:
             )
             await writer.drain()
             first, body = await asyncio.wait_for(
-                read_packet(reader), timeout=self.timeout
+                read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT
             )
             _session_present, reason_code = parse_connack(first, body)
             if reason_code != 0:
@@ -2182,7 +2229,7 @@ class DeepalIntlClient:
                 subscriptions.add(sda_response)
             writer.write(build_subscribe_packet(1, sorted(subscriptions)))
             await writer.drain()
-            await asyncio.wait_for(read_packet(reader), timeout=self.timeout)
+            await asyncio.wait_for(read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT)
 
             login_req_id = new_request_id(login_did)
             writer.write(
@@ -2197,7 +2244,7 @@ class DeepalIntlClient:
 
             secret_key: Optional[str] = None
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + max(self.timeout, 20.0)
+            deadline = loop.time() + MQTT_EXCHANGE_TIMEOUT
             while loop.time() < deadline and secret_key is None:
                 try:
                     first, body = await read_packet_with_keepalive(
@@ -2284,7 +2331,7 @@ class DeepalIntlClient:
             probe_index = -1
             probe_deadline: Optional[float] = None
             loop = asyncio.get_running_loop()
-            exchange_timeout = self.mqtt_exchange_timeout or max(self.timeout, 20.0)
+            exchange_timeout = self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT
             deadline = loop.time() + exchange_timeout
 
             def publish_probe(index: int) -> None:
@@ -2461,8 +2508,8 @@ class DeepalIntlClient:
             try:
                 loop = asyncio.get_running_loop()
                 deadline = loop.time() + timeout
-                request_timeout = self.mqtt_exchange_timeout or max(
-                    self.timeout, 20.0
+                request_timeout = (
+                    self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT
                 )
                 while True:
                     wait = max(
@@ -2587,6 +2634,9 @@ class DeepalIntlClient:
         condition = self.parse_condition(
             normalize_s05_params(partial), vehicle_id, vin=vin
         )
+        location = find_location(partial)
+        if location is not None:
+            condition.latitude, condition.longitude = location
         condition.mqtt_raw_data = partial
         condition.condition_source = "legacy-mqtt"
         return condition
@@ -2656,7 +2706,7 @@ class DeepalIntlClient:
 
                 loop = asyncio.get_running_loop()
                 started = loop.time()
-                wait_seconds = self.mqtt_wake_timeout or max(self.timeout, 20.0)
+                wait_seconds = self.mqtt_wake_timeout or MQTT_EXCHANGE_TIMEOUT
                 deadline = started + wait_seconds
                 observed: list[str] = []
                 while loop.time() < deadline:

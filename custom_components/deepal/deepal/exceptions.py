@@ -47,6 +47,15 @@ class DeepalCommandAuthError(DeepalAuthError):
     """Raised when remote-command signing material is rejected."""
 
 
+class DeepalSessionInvalidated(DeepalAuthError):
+    """Raised when the gateway reports an invalidated session token by message.
+
+    A dedicated type so the CA-bootstrap fallbacks can try their alternative
+    endpoint for this wording while authentication callers still treat it as a
+    `DeepalAuthError`.
+    """
+
+
 class DeepalCommandNotReady(DeepalAuthError):
     """Raised when remote-command prerequisites are missing."""
 

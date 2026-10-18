@@ -1667,7 +1667,6 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "battery12v": _warning_light(params.get("batt12VLightStatus"), power_status),
             "tpms": _warning_light(params.get("tpmsLightStatus"), power_status),
             "abs": _warning_light(params.get("absLightStatus"), power_status),
-            "airbag": _warning_light(params.get("airBagLightStatus"), power_status),
             "brakeFluid": _warning_light(
                 params.get("brakeFluidLightStatus"), power_status
             ),
@@ -1681,9 +1680,6 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             ),
             "tractionBatteryLow": _warning_light(
                 params.get("bcuBattSocLightStatus"), power_status
-            ),
-            "coolantTemperature": _warning_light(
-                params.get("coolanTemperatureLightStatus"), power_status
             ),
         },
         "windowOpenings": {
@@ -1814,14 +1810,12 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "batt12VLightStatus",
         "tpmsLightStatus",
         "absLightStatus",
-        "airBagLightStatus",
         "brakeFluidLightStatus",
         "brakeLightStatus",
         "epsLightStatus",
         "powerLimitLightStatus",
         "powerSystemLightStatus",
         "bcuBattSocLightStatus",
-        "coolanTemperatureLightStatus",
         "keyLowPower",
         # Air recirculation
         "airRecycleStatus",

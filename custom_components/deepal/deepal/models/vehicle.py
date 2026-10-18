@@ -232,14 +232,12 @@ class WarningLightsCondition(BaseModel):
     battery_12v: Optional[bool] = None
     tpms: Optional[bool] = None
     abs: Optional[bool] = None
-    airbag: Optional[bool] = None
     brake_fluid: Optional[bool] = None
     brake: Optional[bool] = None
     eps: Optional[bool] = None
     power_limit: Optional[bool] = None
     power_system: Optional[bool] = None
     traction_battery_low: Optional[bool] = None
-    coolant_temperature: Optional[bool] = None
 
 
 class LampsCondition(BaseModel):
@@ -257,6 +255,12 @@ class VehicleCondition(BaseModel):
     """Full Vehicle Status / Telemetry snapshot."""
     car_id: str
     vin: str
+    latitude: Optional[float] = Field(
+        default=None, description="Vehicle latitude in decimal degrees (when reported)"
+    )
+    longitude: Optional[float] = Field(
+        default=None, description="Vehicle longitude in decimal degrees (when reported)"
+    )
     total_odometer_km: Optional[float] = Field(default=None, description="Total odometer in km")
     mileage_yesterday_km: Optional[float] = Field(
         default=None, description="Mileage driven yesterday in km (MQTT)"

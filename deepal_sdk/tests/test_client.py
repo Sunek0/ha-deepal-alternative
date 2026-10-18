@@ -22,6 +22,14 @@ async def test_client_initialization():
     await client.close()
 
 
+@pytest.mark.asyncio
+async def test_sda_client_timeout_defaults_to_30_seconds():
+    client = DeepalClient(access_token="test_token_123")
+
+    assert client.timeout == 30.0
+    await client.close()
+
+
 def test_vehicle_model():
     v = Vehicle(car_id="12345", vin="LS5AXXXXX123456", series_name="Deepal S05 Max")
     assert v.car_id == "12345"

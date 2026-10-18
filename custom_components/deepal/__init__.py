@@ -34,11 +34,13 @@ from .const import (
     CONF_ENVIRONMENT,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
+    CONF_ENABLE_LOCATION,
     CONF_WAKE,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
+    DEFAULT_ENABLE_LOCATION,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .runtime_data import DeepalConfigEntry, DeepalRuntimeData
@@ -103,6 +105,9 @@ def _build_client(
             or None
         )
         client.device_id = entry.data.get(CONF_DEVICE_ID) or client.device_id
+        client.location_enabled = bool(
+            entry.options.get(CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION)
+        )
         return client
 
     return DeepalClient(
@@ -114,6 +119,10 @@ def _build_client(
 def _platforms(entry: DeepalConfigEntry) -> list[Platform]:
     """Return the entity platforms for an entry."""
     platforms = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.IMAGE]
+    if getattr(entry, "options", {}).get(
+        CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
+    ):
+        platforms.append(Platform.DEVICE_TRACKER)
     if (
         entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
         and entry.data.get(CONF_PRIVATE_KEY)

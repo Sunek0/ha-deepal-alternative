@@ -195,6 +195,7 @@
           "control_pin": "PIN di controllo remoto",
           "enable_api_logging": "Registra il traffico API",
           "wake": "Sveglia il veicolo quando serve",
+          "enable_location": "Recupera la posizione del veicolo",
           "environment": "Ambiente regionale",
           "show_panel": "Mostra il pannello laterale"
         },
@@ -204,6 +205,7 @@
           "control_pin": "PIN di controllo remoto di My Changan. Necessario per bloccare/sbloccare, muovere i finestrini o aprire il bagagliaio.",
           "enable_api_logging": "Scrive ogni richiesta e risposta API nel log di Home Assistant, con token, chiavi, VIN, email, telefono, PIN e numero di serie nascosti. Abilitalo solo durante la risoluzione dei problemi.",
           "wake": "Sveglia un veicolo MQTT addormentato prima di aggiornare o inviare un comando con PIN. Attivo per impostazione predefinita; disattivalo per preservare la batteria a 12 V se aggiorni molto spesso.",
+          "enable_location": "Richiede ed espone la posizione del veicolo. Attualmente i veicoli europei non la inviano, quindi il tracker può restare sconosciuto; l'opzione è pensata per i server che la espongono.",
           "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita.",
           "show_panel": "Aggiunge una pagina Deepal nella barra laterale per tutti gli utenti di Home Assistant."
         }
@@ -421,6 +423,9 @@
       "engine": {
         "name": "Motore"
       },
+      "climate_on": {
+        "name": "Climatizzatore"
+      },
       "connected": {
         "name": "Connessione cloud"
       },
@@ -514,9 +519,6 @@
       "warning_abs": {
         "name": "Spia ABS"
       },
-      "warning_airbag": {
-        "name": "Spia airbag"
-      },
       "warning_brake_fluid": {
         "name": "Spia liquido freni"
       },
@@ -534,9 +536,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Spia batteria di trazione scarica"
-      },
-      "warning_coolant_temperature": {
-        "name": "Spia temperatura refrigerante"
       }
     },
     "button": {
@@ -614,6 +613,11 @@
       },
       "charge_schedule_end": {
         "name": "Fine programma di ricarica"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Posizione"
       }
     }
   }

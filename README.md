@@ -55,14 +55,18 @@ remains available on both.
   "Charging" sensor is on only for the charging states, the charge current is taken from the
   active charger and validated (`0-600 A`), and the power state is a translated off/on sensor.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
-  fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
-  brakes, power steering, power limit, power system, traction battery low and coolant temperature),
-  the key fob battery, the air recirculation state and the rear fog lamp.
+  fields, the dashboard warning lights (12 V battery, tire pressure, ABS, brake fluid,
+  brakes, power steering, power limit, power system and traction battery low), the key fob
+  battery, the air recirculation state and the rear fog lamp.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
 - Climate target temperature and fan level, the license plate and per-window opening-degree sensors
   (the opening sensors ship disabled by default because the scale is not confirmed).
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
+- **Opt-in vehicle location**: enable *Fetch the vehicle location* in the options to request and
+  expose the car position as a device tracker. European vehicles currently report no location, so
+  the tracker may stay unknown; the option targets servers that expose it (and SDA accounts, where
+  the payload carries `Lat`/`Lng`). The last known position is kept while the car sleeps.
 - One Home Assistant device per vehicle, with translated entity names.
 
 ### Vehicle wake

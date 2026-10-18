@@ -36,10 +36,13 @@ S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
 
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities: the reference S05 does not
-# support the front defrost signal, so the entity was removed. The airbag and
-# coolant warning lights are mapped again (gated on the vehicle power state),
-# so they are not part of this set.
-REMOVED_BINARY_SENSOR_KEYS = frozenset({"defrost"})
+# support the front defrost signal, and its airbag warning bit keeps toggling on
+# healthy cars while the coolant bit is a fuel-vehicle signal, so both warning
+# entities were retired again on 2026-10-18 (their codes stay visible in the
+# unmapped-parameter diagnostics).
+REMOVED_BINARY_SENSOR_KEYS = frozenset(
+    {"defrost", "warning_airbag", "warning_coolant_temperature"}
+)
 
 
 def build_binary_sensors(
@@ -163,6 +166,7 @@ class DeepalTireAlarmBinarySensor(DeepalBaseBinarySensor):
     """Tire pressure alarm binary sensor for international vehicles."""
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any, key: str) -> None:
         super().__init__(coordinator, vehicle)
@@ -250,6 +254,12 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         name="Engine",
         value_fn=lambda cond, vehicle: cond.engine_on,
         device_class=BinarySensorDeviceClass.RUNNING,
+    ),
+    DeepalBinarySensorDescription(
+        key="climate_on",
+        name="Climate On",
+        value_fn=lambda cond, vehicle: cond.climate.power_on,
+        device_class=None,
     ),
     DeepalBinarySensorDescription(
         key="connected",
@@ -452,13 +462,6 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
-        key="warning_airbag",
-        name="Airbag Warning Light",
-        value_fn=lambda cond, vehicle: cond.warnings.airbag,
-        device_class=BinarySensorDeviceClass.PROBLEM,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    DeepalBinarySensorDescription(
         key="warning_brake_fluid",
         name="Brake Fluid Warning Light",
         value_fn=lambda cond, vehicle: cond.warnings.brake_fluid,
@@ -497,13 +500,6 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         key="warning_traction_battery_low",
         name="Traction Battery Low Warning Light",
         value_fn=lambda cond, vehicle: cond.warnings.traction_battery_low,
-        device_class=BinarySensorDeviceClass.PROBLEM,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    DeepalBinarySensorDescription(
-        key="warning_coolant_temperature",
-        name="Coolant Temperature Warning Light",
-        value_fn=lambda cond, vehicle: cond.warnings.coolant_temperature,
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),

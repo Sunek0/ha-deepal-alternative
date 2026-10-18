@@ -195,6 +195,7 @@
           "control_pin": "Code PIN de contrôle à distance",
           "enable_api_logging": "Journaliser le trafic API",
           "wake": "Réveiller le véhicule si nécessaire",
+          "enable_location": "Récupérer la position du véhicule",
           "environment": "Environnement régional",
           "show_panel": "Afficher le panneau latéral"
         },
@@ -204,6 +205,7 @@
           "control_pin": "Code PIN de contrôle à distance de My Changan. Nécessaire pour verrouiller/déverrouiller, déplacer les vitres ou ouvrir le coffre ; il est échangé contre un jeton qui expire périodiquement et il est redemandé lorsque cela se produit.",
           "enable_api_logging": "Écrit chaque requête et réponse API dans le journal de Home Assistant, avec jetons, clés, VIN, e-mail, téléphone, PIN et numéro de série masqués. À activer uniquement en cas de dépannage.",
           "wake": "Réveille un véhicule MQTT endormi avant une actualisation ou une commande avec code PIN. Activé par défaut ; désactivez-le pour préserver la batterie 12 V en cas d'actualisations très fréquentes.",
+          "enable_location": "Demande et expose la position du véhicule. Les véhicules européens ne la signalent pas actuellement, le tracker peut donc rester inconnu ; l'option cible les serveurs qui la fournissent.",
           "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut.",
           "show_panel": "Ajoute une page Deepal dans la barre latérale pour tous les utilisateurs de Home Assistant."
         }
@@ -421,6 +423,9 @@
       "engine": {
         "name": "Moteur"
       },
+      "climate_on": {
+        "name": "Climatisation"
+      },
       "connected": {
         "name": "Connexion au cloud"
       },
@@ -514,9 +519,6 @@
       "warning_abs": {
         "name": "Voyant ABS"
       },
-      "warning_airbag": {
-        "name": "Voyant airbag"
-      },
       "warning_brake_fluid": {
         "name": "Voyant liquide de frein"
       },
@@ -534,9 +536,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Voyant batterie de traction faible"
-      },
-      "warning_coolant_temperature": {
-        "name": "Voyant température du liquide de refroidissement"
       }
     },
     "button": {
@@ -614,6 +613,11 @@
       },
       "charge_schedule_end": {
         "name": "Fin de la plage de charge"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Position"
       }
     }
   }

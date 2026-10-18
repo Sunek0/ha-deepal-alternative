@@ -1076,7 +1076,7 @@ DeepalIntlClient(
     base_url=None,
     ca_base_url=None,
     sda_base_url=None,
-    timeout=15.0,
+    timeout=30.0,
     enable_api_logging=False,
     signing_policy="app",
     httpx_client=None,
@@ -1096,12 +1096,12 @@ DeepalIntlClient(
 | `mqtt_clean_start` | MQTT clean-start flag (default `True`). |
 | `mqtt_tls_insecure` | Disables MQTT certificate and hostname verification (diagnostic; logs a warning). |
 | `mqtt_sda_probe_grace` | Seconds an SDA-MQTT session may probe condition variants and signals before falling back (default 3.0). |
-| `mqtt_exchange_timeout` | Timeout for one MQTT condition exchange; default `max(timeout, 20)` seconds. |
-| `mqtt_wake_timeout` | Timeout waiting for the gateway to acknowledge a `wake_vehicle` request; default `max(timeout, 20)` seconds. |
+| `mqtt_exchange_timeout` | Timeout for one MQTT condition exchange; default 20 seconds, independent of the HTTP timeout. |
+| `mqtt_wake_timeout` | Timeout waiting for the gateway to acknowledge a `wake_vehicle` request; default 20 seconds, independent of the HTTP timeout. |
 | `mqtt_token_ttl` | Reuse window of the account MQTT auth token before it is fetched again (default 60.0 seconds). |
 | `device_id` | Persistent client fingerprint; generated as 32 lowercase hex characters when omitted. Reuse the same value across restarts. |
 | `private_key_pem`, `public_key` | Command-signing keypair to reuse; see [Login keypair](#52-login-keypair). |
-| `timeout` | HTTP timeout in seconds (default 15). |
+| `timeout` | HTTP timeout in seconds (default 30). |
 | `enable_api_logging` | Log redacted requests and responses at `WARNING` level. |
 | `signing_policy` | `app` (default) or `legacy`; see [Signature](#103-signature). |
 | `httpx_client` | Inject an `httpx.AsyncClient`; the SDK uses it as-is and never closes it. |
@@ -1262,7 +1262,12 @@ to `SDA-MQTT`.
 
 `await client.get_vehicle_condition(vehicle_id, vin=None)` requests the app's condition sections
 (`seat`, `door`, `hvac`, `charge`, `lamp`, `window`, `tire`, `vehicleStatus`, `fuel`; the API field
-is the intentional typo `vechileCriteria`) and maps the response into `VehicleCondition`.
+is the intentional typo `vechileCriteria`) and maps the response into `VehicleCondition`. The
+`location` section is requested only when the client's `location_enabled` flag is set (the
+integration wires it to the opt-in `enable_location` option; European vehicles currently report no
+position). The position, when present, is searched case-insensitively at any depth (paired
+`lat`/`latitude` and `lng`/`lon`/`longitude`, `(0, 0)` and out-of-range discarded) and exposed as
+`VehicleCondition.latitude`/`longitude`.
 `parse_condition(raw, vehicle_id, vin=None)` applies the same mapping to a raw payload (used by the
 MQTT path).
 

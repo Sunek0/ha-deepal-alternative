@@ -2361,3 +2361,64 @@ async def test_failed_command_clears_unconfirmed_marks():
 
     assert "car-1" not in coordinator._optimistic_holds
     assert "car-1" not in coordinator._optimistic_pending
+
+
+@pytest.mark.asyncio
+async def test_location_retention_keeps_the_last_known_position():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1", vin="", latitude=41.65, longitude=-0.89
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    silent = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    merged = coordinator._merge_condition("car-1", silent)
+
+    assert merged.latitude == 41.65
+    assert merged.longitude == -0.89
+
+    reported = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        latitude=40.0,
+        longitude=-3.0,
+        last_updated_timestamp=3000,
+    )
+    merged = coordinator._merge_condition("car-1", reported)
+
+    assert merged.latitude == 40.0
+    assert merged.longitude == -3.0
+
+
+@pytest.mark.asyncio
+async def test_warning_lights_retain_the_last_known_values():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        warnings={"power_limit": True, "abs": False},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    silent = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    merged = coordinator._merge_condition("car-1", silent)
+
+    assert merged.warnings.power_limit is True
+    assert merged.warnings.abs is False
+
+    reported = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        warnings={"power_limit": False},
+        last_updated_timestamp=3000,
+    )
+    merged = coordinator._merge_condition("car-1", reported)
+
+    assert merged.warnings.power_limit is False
+    assert merged.warnings.abs is False
+
+    first_poll = _coordinator(_FakeIntlClient([]))
+    merged = first_poll[0]._merge_condition(
+        "car-1", VehicleCondition(car_id="car-1", vin="")
+    )
+    assert merged.warnings.power_limit is None

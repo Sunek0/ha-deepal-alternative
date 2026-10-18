@@ -195,6 +195,7 @@
           "control_pin": "Remote control PIN",
           "enable_api_logging": "Log API traffic",
           "wake": "Wake the vehicle when needed",
+          "enable_location": "Fetch the vehicle location",
           "environment": "Regional environment",
           "show_panel": "Show the sidebar panel"
         },
@@ -204,6 +205,7 @@
           "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number hidden. Enable only while troubleshooting.",
           "wake": "Wake a sleeping MQTT vehicle before refreshing or sending a PIN command. Enabled by default; disable it to protect the 12 V battery if you refresh very often.",
+          "enable_location": "Request and expose the vehicle position. European vehicles currently report no location, so the tracker may stay unknown; the option targets servers that expose it.",
           "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
           "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
         }
@@ -421,6 +423,9 @@
       "engine": {
         "name": "Engine"
       },
+      "climate_on": {
+        "name": "Climate On"
+      },
       "connected": {
         "name": "Cloud connection"
       },
@@ -514,9 +519,6 @@
       "warning_abs": {
         "name": "ABS warning"
       },
-      "warning_airbag": {
-        "name": "Airbag warning"
-      },
       "warning_brake_fluid": {
         "name": "Brake fluid warning"
       },
@@ -534,9 +536,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Traction battery low warning"
-      },
-      "warning_coolant_temperature": {
-        "name": "Coolant temperature warning"
       }
     },
     "button": {
@@ -614,6 +613,11 @@
       },
       "charge_schedule_end": {
         "name": "Charge schedule end"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Location"
       }
     }
   }

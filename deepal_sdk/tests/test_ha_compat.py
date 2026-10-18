@@ -851,7 +851,9 @@ def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
 def test_retired_entities_are_removed() -> None:
     keys = {description.key for description in binary_sensor.BINARY_SENSORS}
     assert "defrost" not in keys
-    assert {"warning_airbag", "warning_coolant_temperature"} <= keys
+    assert {"defrost", "warning_airbag", "warning_coolant_temperature"}.isdisjoint(
+        keys
+    )
 
     removed: list[str] = []
 
@@ -867,7 +869,11 @@ def test_retired_entities_are_removed() -> None:
         _Registry(), SimpleNamespace(car_id="car-1")
     )
 
-    assert removed == ["binary_sensor.deepal_car-1_defrost"]
+    assert sorted(removed) == [
+        "binary_sensor.deepal_car-1_defrost",
+        "binary_sensor.deepal_car-1_warning_airbag",
+        "binary_sensor.deepal_car-1_warning_coolant_temperature",
+    ]
 
 
 def test_ac_gun_binary_sensor_follows_the_model() -> None:
@@ -911,14 +917,12 @@ def test_new_telemetry_entities_are_created() -> None:
         "warning_12v_battery",
         "warning_tpms",
         "warning_abs",
-        "warning_airbag",
         "warning_brake_fluid",
         "warning_brake",
         "warning_eps",
         "warning_power_limit",
         "warning_power_system",
         "warning_traction_battery_low",
-        "warning_coolant_temperature",
         "ac_gun_connected",
         "dc_gun_connected",
     } <= binary_keys
@@ -1401,6 +1405,87 @@ def test_icons_are_translated() -> None:
     )
 
 
+def test_device_tracker_platform_is_gated_by_the_option() -> None:
+    from homeassistant.const import Platform
+
+    from custom_components.deepal import _platforms
+    from custom_components.deepal.const import (
+        CONF_ENABLE_LOCATION,
+        CONF_PRIVATE_KEY,
+        CONF_PLATFORM,
+        PLATFORM_INTL,
+    )
+
+    entry = SimpleNamespace(
+        data={CONF_PLATFORM: PLATFORM_INTL, CONF_PRIVATE_KEY: "key"},
+        options={},
+    )
+    assert Platform.DEVICE_TRACKER not in _platforms(entry)
+
+    entry.options = {CONF_ENABLE_LOCATION: True}
+    assert Platform.DEVICE_TRACKER in _platforms(entry)
+
+
+def test_location_tracker_exposes_the_condition_coordinates() -> None:
+    from custom_components.deepal import device_tracker as tracker_platform
+
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(
+        car_id="car-1", vin="test-vin", latitude=41.65, longitude=-0.89
+    )
+    coordinator.data["car-1"] = condition
+
+    entity = tracker_platform.DeepalLocationTracker(coordinator, _fake_vehicle())
+
+    assert entity.unique_id == "deepal_car-1_location"
+    assert entity.translation_key == "location"
+    assert entity.source_type is tracker_platform.SourceType.GPS
+    assert entity.latitude == 41.65
+    assert entity.longitude == -0.89
+
+    condition.latitude = None
+    condition.longitude = None
+    assert entity.latitude is None
+    assert entity.longitude is None
+
+
+def test_tire_alarm_sensors_are_diagnostic() -> None:
+    from homeassistant.const import EntityCategory
+
+    coordinator = FakeCoordinator()
+    coordinator.data["car-1"] = VehicleCondition(car_id="car-1", vin="test-vin")
+
+    entity = binary_sensor.DeepalTireAlarmBinarySensor(
+        coordinator, _fake_vehicle(), "front_left"
+    )
+
+    assert entity.entity_category is EntityCategory.DIAGNOSTIC
+    assert entity.unique_id == "deepal_car-1_tire_front_left_alarm"
+
+
+def test_climate_on_binary_sensor_mirrors_the_climate_state() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(
+        car_id="car-1", vin="test-vin", climate={"power_on": True}
+    )
+    coordinator.data["car-1"] = condition
+    descriptions = {
+        description.key: description for description in binary_sensor.BINARY_SENSORS
+    }
+
+    entity = binary_sensor.DeepalBinarySensor(
+        coordinator, _fake_vehicle(), descriptions["climate_on"]
+    )
+
+    assert entity.is_on is True
+
+    condition.climate.power_on = False
+    assert entity.is_on is False
+
+    condition.climate.power_on = None
+    assert entity.is_on is None
+
+
 def test_entities_have_no_hardcoded_icons() -> None:
     for platform, entities in _entities_by_platform().items():
         for entity in entities:
@@ -1866,6 +1951,25 @@ def test_options_schema_exposes_the_wake_toggle() -> None:
     assert len(wake_keys) == 1
     assert wake_keys[0].default() == DEFAULT_WAKE
     assert schema({CONF_WAKE: False})[CONF_WAKE] is False
+
+
+def test_options_schema_exposes_the_location_toggle() -> None:
+    from custom_components.deepal.const import (
+        CONF_ENABLE_LOCATION,
+        CONF_ENVIRONMENT,
+        DEFAULT_ENABLE_LOCATION,
+    )
+
+    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
+
+    location_keys = [
+        key for key in schema.schema if key.schema == CONF_ENABLE_LOCATION
+    ]
+    assert len(location_keys) == 1
+    assert location_keys[0].default() == DEFAULT_ENABLE_LOCATION
+    assert DEFAULT_ENABLE_LOCATION is False
+    assert schema({CONF_ENABLE_LOCATION: True})[CONF_ENABLE_LOCATION] is True
 
 
 @pytest.mark.asyncio

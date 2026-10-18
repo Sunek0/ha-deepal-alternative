@@ -776,14 +776,12 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
         "batt12VLightStatus": 0,
         "tpmsLightStatus": 1,
         "absLightStatus": 0,
-        "airBagLightStatus": 0,
         "brakeFluidLightStatus": 0,
         "brakeLightStatus": 0,
         "epsLightStatus": 0,
         "powerLimitLightStatus": 0,
         "powerSystemLightStatus": 0,
         "bcuBattSocLightStatus": 0,
-        "coolanTemperatureLightStatus": 0,
         "keyLowPower": 1,
         "airRecycleStatus": 1,
         "leftAnteriorWindowDegree": 20,
@@ -796,8 +794,6 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
 
     assert normalized["warningLights"]["tpms"] is True
     assert normalized["warningLights"]["battery12v"] is False
-    assert normalized["warningLights"]["airbag"] is False
-    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["keyBatteryLow"] is True
     assert normalized["airRecirculation"] is True
     assert normalized["windowOpenings"] == {
@@ -813,14 +809,12 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
         "battery12v",
         "tpms",
         "abs",
-        "airbag",
         "brakeFluid",
         "brake",
         "eps",
         "powerLimit",
         "powerSystem",
         "tractionBatteryLow",
-        "coolantTemperature",
     }
     assert empty["warningLights"]["tpms"] is None
     assert empty["keyBatteryLow"] is None
@@ -834,8 +828,6 @@ def test_normalize_s05_params_blanks_warnings_while_the_vehicle_is_off():
             "absLightStatus": 1,
             "brakeLightStatus": 1,
             "tpmsLightStatus": 1,
-            "airBagLightStatus": 1,
-            "coolanTemperatureLightStatus": 1,
             "powerStatusFeedBack": 0,
         }
     )
@@ -843,8 +835,6 @@ def test_normalize_s05_params_blanks_warnings_while_the_vehicle_is_off():
     assert normalized["warningLights"]["abs"] is None
     assert normalized["warningLights"]["brake"] is None
     assert normalized["warningLights"]["tpms"] is None
-    assert normalized["warningLights"]["airbag"] is None
-    assert normalized["warningLights"]["coolantTemperature"] is None
     assert normalized["vehicleStatus"]["powerStatus"] == 0
 
 
@@ -853,16 +843,12 @@ def test_normalize_s05_params_keeps_warnings_while_the_vehicle_is_on():
         {
             "absLightStatus": 1,
             "brakeLightStatus": 0,
-            "airBagLightStatus": 1,
-            "coolanTemperatureLightStatus": 0,
             "powerStatusFeedBack": 2,
         }
     )
 
     assert normalized["warningLights"]["abs"] is True
     assert normalized["warningLights"]["brake"] is False
-    assert normalized["warningLights"]["airbag"] is True
-    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["vehicleStatus"]["powerStatus"] == 2
 
 

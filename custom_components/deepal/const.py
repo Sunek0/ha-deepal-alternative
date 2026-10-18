@@ -45,6 +45,7 @@ CONF_DEVICE_ID = "device_id"
 CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
+CONF_ENABLE_LOCATION = "enable_location"
 CONF_WAKE = "wake"
 CONF_SHOW_PANEL = "show_panel"
 
@@ -57,6 +58,10 @@ DEFAULT_WAKE = True
 # A missing preference means the entry predates the option, so the panel is
 # kept for those entries.
 DEFAULT_SHOW_PANEL = False
+
+# Vehicle location: opt-in and off by default (European vehicles currently do
+# not report a position; the option targets servers that expose it).
+DEFAULT_ENABLE_LOCATION = False
 
 # Vehicle wake (MQTT): an explicit refresh wakes a stale car, throttled so
 # repeated refreshes cannot drain the 12 V battery.

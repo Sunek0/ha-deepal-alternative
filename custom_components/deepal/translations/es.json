@@ -195,6 +195,7 @@
           "control_pin": "PIN de control remoto",
           "enable_api_logging": "Registrar tráfico API",
           "wake": "Despertar el vehículo cuando haga falta",
+          "enable_location": "Obtener la ubicación del coche",
           "environment": "Entorno regional",
           "show_panel": "Mostrar el panel en la barra lateral"
         },
@@ -204,6 +205,7 @@
           "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero.",
           "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie ocultos. Actívalo solo al solucionar problemas.",
           "wake": "Despertar un vehículo MQTT dormido antes de actualizar o enviar un comando con PIN. Activado por defecto; desactívalo para cuidar la batería de 12 V si actualizas muy a menudo.",
+          "enable_location": "Solicita y expone la posición del coche. Actualmente los vehículos europeos no la envían, así que el rastreador puede quedarse desconocido; está pensado para servidores que sí la expongan.",
           "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto.",
           "show_panel": "Añade una página de Deepal a la barra lateral para todos los usuarios de Home Assistant."
         }
@@ -421,6 +423,9 @@
       "engine": {
         "name": "Motor"
       },
+      "climate_on": {
+        "name": "Climatizador"
+      },
       "connected": {
         "name": "Conexión a la nube"
       },
@@ -514,9 +519,6 @@
       "warning_abs": {
         "name": "Aviso ABS"
       },
-      "warning_airbag": {
-        "name": "Aviso airbag"
-      },
       "warning_brake_fluid": {
         "name": "Aviso líquido de frenos"
       },
@@ -534,9 +536,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Aviso batería de tracción baja"
-      },
-      "warning_coolant_temperature": {
-        "name": "Aviso temperatura del refrigerante"
       }
     },
     "button": {
@@ -614,6 +613,11 @@
       },
       "charge_schedule_end": {
         "name": "Fin del horario de carga"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Ubicación"
       }
     }
   }

@@ -195,6 +195,7 @@
           "control_pin": "Fernsteuerungs-PIN",
           "enable_api_logging": "API-Verkehr protokollieren",
           "wake": "Fahrzeug bei Bedarf aufwecken",
+          "enable_location": "Fahrzeugstandort abrufen",
           "environment": "Regionale Umgebung",
           "show_panel": "Seitenleisten-Panel anzeigen"
         },
@@ -204,6 +205,7 @@
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
           "enable_api_logging": "Schreibt jede API-Anfrage und -Antwort ins Home-Assistant-Protokoll, mit ausgeblendeten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN und Seriennummer. Nur bei der Fehlersuche aktivieren.",
           "wake": "Weckt ein schlafendes MQTT-Fahrzeug vor dem Aktualisieren oder vor PIN-Befehlen. Standardmäßig aktiviert; deaktivieren, um die 12-V-Batterie zu schonen, wenn sehr häufig aktualisiert wird.",
+          "enable_location": "Fordert und zeigt die Position des Fahrzeugs an. Europäische Fahrzeuge melden derzeit keinen Standort, daher kann der Tracker unbekannt bleiben; die Option ist für Server gedacht, die ihn bereitstellen.",
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa.",
           "show_panel": "Fügt allen Home-Assistant-Benutzern eine Deepal-Seite in der Seitenleiste hinzu."
         }
@@ -421,6 +423,9 @@
       "engine": {
         "name": "Motor"
       },
+      "climate_on": {
+        "name": "Klimaanlage"
+      },
       "connected": {
         "name": "Cloud-Verbindung"
       },
@@ -514,9 +519,6 @@
       "warning_abs": {
         "name": "Warnleuchte ABS"
       },
-      "warning_airbag": {
-        "name": "Warnleuchte Airbag"
-      },
       "warning_brake_fluid": {
         "name": "Warnleuchte Bremsflüssigkeit"
       },
@@ -534,9 +536,6 @@
       },
       "warning_traction_battery_low": {
         "name": "Warnleuchte Antriebsbatterie schwach"
-      },
-      "warning_coolant_temperature": {
-        "name": "Warnleuchte Kühlmitteltemperatur"
       }
     },
     "button": {
@@ -614,6 +613,11 @@
       },
       "charge_schedule_end": {
         "name": "Ende Ladezeitplan"
+      }
+    },
+    "device_tracker": {
+      "location": {
+        "name": "Standort"
       }
     }
   }

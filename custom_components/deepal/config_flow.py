@@ -42,6 +42,7 @@ from .const import (
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
+    CONF_ENABLE_LOCATION,
     CONF_WAKE,
     CONF_SHOW_PANEL,
     DEFAULT_COUNTRY,
@@ -49,6 +50,7 @@ from .const import (
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
     DEFAULT_SHOW_PANEL,
+    DEFAULT_ENABLE_LOCATION,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
 
@@ -822,6 +824,12 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                 vol.Optional(
                     CONF_WAKE,
                     default=options.get(CONF_WAKE, DEFAULT_WAKE),
+                ): bool,
+                vol.Optional(
+                    CONF_ENABLE_LOCATION,
+                    default=options.get(
+                        CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
+                    ),
                 ): bool,
                 vol.Optional(
                     CONF_SHOW_PANEL,

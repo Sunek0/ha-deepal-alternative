@@ -22,6 +22,7 @@ from deepal import (
     DeepalConnectionError,
     DeepalIntlClient,
     DeepalRateLimitError,
+    DeepalSessionInvalidated,
     SeatCapabilities,
     Vehicle,
     VehicleCapabilities,
@@ -1557,6 +1558,64 @@ async def test_unrelated_gateway_code_stays_api_error():
     assert err.value.code == "APP_1_1_02_007"
 
 
+@pytest.mark.asyncio
+async def test_message_only_token_rejection_is_an_auth_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "APIGW_-1_7_01_004",
+                "msg": "invalided token",
+            },
+        )
+
+    client = _client(handler)
+    with pytest.raises(DeepalAuthError) as err:
+        await client.request_email_code(EMAIL)
+    await client.close()
+
+    assert isinstance(err.value, DeepalSessionInvalidated)
+
+
+@pytest.mark.asyncio
+async def test_recognized_codes_keep_their_classification():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "HW_1_1_01_047",
+                "msg": "invalid token",
+            },
+        )
+
+    client = _client(handler)
+    with pytest.raises(DeepalRateLimitError):
+        await client.request_email_code(EMAIL)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_http_timeout_defaults_to_30_seconds():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    assert client.timeout == 30.0
+    await client.close()
+
+
+def test_mqtt_waits_are_independent_of_the_http_timeout():
+    import inspect
+
+    from deepal import intl as intl_module
+
+    assert intl_module.MQTT_SOCKET_TIMEOUT == 15.0
+    assert intl_module.MQTT_EXCHANGE_TIMEOUT == 20.0
+    for name in ("_read_s05_params", "s05_wait_for_report", "_wake_vehicle_locked"):
+        source = inspect.getsource(getattr(intl_module.DeepalIntlClient, name))
+        assert "self.timeout" not in source
+
+
 def _login_keypair(key_size: int = 1024) -> tuple[str, object]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     private_pem = key.private_bytes(
@@ -2396,7 +2455,13 @@ async def test_s05_mqtt_condition_normalizes_connection_eof():
 
 @pytest.mark.asyncio
 async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
-    params = {**S05_BROKER_PARAMS, "chargeCoverStatus": 3, "mysterySignal": 7}
+    params = {
+        **S05_BROKER_PARAMS,
+        "chargeCoverStatus": 3,
+        "mysterySignal": 7,
+        "Lat": 41.65,
+        "Lng": -0.89,
+    }
     broker = _FakeMqttBroker(params)
     _install_fake_broker(monkeypatch, broker)
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -2411,6 +2476,8 @@ async def test_read_s05_params_logs_unmapped_parameters(monkeypatch, caplog):
     assert "chargeCoverStatus" in caplog.text
     assert "mysterySignal" in caplog.text
     assert '"soc"' not in caplog.text
+    assert "Lat" in caplog.text
+    assert "41.65" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -3683,6 +3750,26 @@ def test_parse_condition_normalizes_the_humidity_scale(raw, expected):
     condition = client.parse_condition({"hvac": {"insideHumidity": raw}}, "car-1")
 
     assert condition.climate.humidity == expected
+
+
+def test_parse_condition_maps_the_vehicle_location():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition(
+        {"location": {"Lat": 41.65, "Lng": -0.89}}, "car-1"
+    )
+
+    assert condition.latitude == 41.65
+    assert condition.longitude == -0.89
+
+
+def test_parse_condition_without_location_leaves_it_unknown():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition({"vehicleStatus": {}}, "car-1")
+
+    assert condition.latitude is None
+    assert condition.longitude is None
 
 
 @pytest.mark.parametrize(
@@ -5046,6 +5133,27 @@ async def test_http_429_without_valid_retry_after():
 
     assert err.value.status_code == 429
     assert err.value.retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_condition_request_includes_location_only_when_enabled():
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    await client.get_vehicle_condition("car-1")
+    assert "location" not in bodies[-1]["vechileCriteria"]
+
+    client.location_enabled = True
+    await client.get_vehicle_condition("car-1")
+    assert bodies[-1]["vechileCriteria"]["location"] == "1"
+
+    await client.close()
 
 
 @pytest.mark.asyncio

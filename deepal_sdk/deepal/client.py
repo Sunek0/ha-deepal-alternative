@@ -40,7 +40,7 @@ class DeepalClient:
         self,
         access_token: Optional[str] = None,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 15.0,
+        timeout: float = 30.0,
         httpx_client: Optional[httpx.AsyncClient] = None,
     ):
         self.base_url = base_url.rstrip("/")
