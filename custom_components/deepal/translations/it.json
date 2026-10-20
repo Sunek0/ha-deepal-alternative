@@ -274,9 +274,6 @@
       "seat_ventilation_level_rear_right": {
         "name": "Livello ventilazione sedile posteriore destro"
       },
-      "steering_wheel_heater_level": {
-        "name": "Livello riscaldamento volante"
-      },
       "speed": {
         "name": "Velocità"
       },
@@ -338,6 +335,9 @@
       },
       "fuel_range": {
         "name": "Autonomia a carburante"
+      },
+      "fuel_volume": {
+        "name": "Volume di carburante"
       },
       "fuel_tank_capacity": {
         "name": "Capacità del serbatoio"
@@ -464,12 +464,6 @@
       },
       "hood": {
         "name": "Cofano"
-      },
-      "driver_door_unlocked": {
-        "name": "Porta conducente sbloccata"
-      },
-      "passenger_door_unlocked": {
-        "name": "Porta passeggero sbloccata"
       },
       "dc_gun_connected": {
         "name": "Pistola DC collegata"

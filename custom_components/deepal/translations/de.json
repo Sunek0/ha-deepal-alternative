@@ -274,9 +274,6 @@
       "seat_ventilation_level_rear_right": {
         "name": "Sitzbelüftungsstufe hinten rechts"
       },
-      "steering_wheel_heater_level": {
-        "name": "Lenkradheizungsstufe"
-      },
       "speed": {
         "name": "Geschwindigkeit"
       },
@@ -338,6 +335,9 @@
       },
       "fuel_range": {
         "name": "Kraftstoffreichweite"
+      },
+      "fuel_volume": {
+        "name": "Kraftstoffmenge"
       },
       "fuel_tank_capacity": {
         "name": "Kraftstofftank-Kapazität"
@@ -464,12 +464,6 @@
       },
       "hood": {
         "name": "Motorhaube"
-      },
-      "driver_door_unlocked": {
-        "name": "Fahrertür entriegelt"
-      },
-      "passenger_door_unlocked": {
-        "name": "Beifahrertür entriegelt"
       },
       "dc_gun_connected": {
         "name": "DC-Stecker angeschlossen"

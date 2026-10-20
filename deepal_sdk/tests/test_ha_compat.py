@@ -19,6 +19,7 @@ pytest.importorskip("homeassistant")
 from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     UnitOfRatio,
+    UnitOfVolume,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +45,7 @@ from custom_components.deepal import (
 from custom_components.deepal import async_remove_config_entry_device
 from custom_components.deepal import time as time_platform
 from custom_components.deepal.charging import ChargingSessionManager
+from custom_components.deepal.coordinator import WakeResult
 from custom_components.deepal.const import CONF_CONTROL_PIN, CONF_VEHICLE_ID
 from custom_components.deepal.deepal import (
     DeepalAPIError,
@@ -53,7 +55,12 @@ from custom_components.deepal.deepal import (
     DeepalRateLimitError,
     VehicleCapabilities,
 )
-from custom_components.deepal.vehicle_model import is_bev, is_s05, supports_fuel
+from custom_components.deepal.vehicle_model import (
+    is_bev,
+    is_s05,
+    supports_charge_limit,
+    supports_fuel,
+)
 from deepal.models import Vehicle, VehicleCondition
 
 from homeassistant.components.diagnostics.const import REDACTED
@@ -135,7 +142,6 @@ def _entities_by_platform() -> dict[str, list]:
             sensor.DeepalSeatLevelSensor(
                 coordinator, vehicle, "front_left", "heating_level"
             ),
-            sensor.DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle),
             sensor.DeepalChargeStatusSensor(coordinator, vehicle),
             sensor.DeepalPowerStatusSensor(coordinator, vehicle),
             sensor.DeepalChargeModeSensor(coordinator, vehicle),
@@ -201,6 +207,123 @@ def _entities_by_platform() -> dict[str, list]:
         ],
         "image": [image.DeepalVehicleImage(coordinator, vehicle)],
     }
+
+
+@pytest.mark.asyncio
+async def test_refresh_button_skips_the_full_poll_after_a_fresh_wake() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    refresh = button.DeepalRefreshButton(coordinator, vehicle)
+    calls: list[str] = []
+
+    async def refresh_vehicle(car_id: str) -> WakeResult:
+        calls.append("refresh")
+        return WakeResult.FRESH
+
+    async def request_refresh() -> None:
+        calls.append("poll")
+
+    coordinator.async_refresh_vehicle = refresh_vehicle
+    coordinator.async_request_refresh = request_refresh
+
+    await refresh.async_press()
+
+    assert calls == ["refresh"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_button_does_not_inquire_when_the_wake_is_not_needed() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    refresh = button.DeepalRefreshButton(coordinator, vehicle)
+    calls: list[str] = []
+
+    async def refresh_vehicle(car_id: str) -> WakeResult:
+        calls.append("refresh")
+        return WakeResult.NOT_NEEDED
+
+    async def condition_inquiry(car_id: str) -> None:
+        calls.append("inquiry")
+
+    async def request_refresh() -> None:
+        calls.append("poll")
+
+    coordinator.async_refresh_vehicle = refresh_vehicle
+    coordinator.async_condition_inquiry = condition_inquiry
+    coordinator.async_request_refresh = request_refresh
+
+    await refresh.async_press()
+
+    assert calls == ["refresh", "poll"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_button_falls_back_after_a_failed_wake() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    refresh = button.DeepalRefreshButton(coordinator, vehicle)
+    calls: list[str] = []
+
+    async def refresh_vehicle(car_id: str) -> WakeResult:
+        calls.append("refresh")
+        return WakeResult.FAILED
+
+    async def condition_inquiry(car_id: str) -> None:
+        calls.append("inquiry")
+
+    async def request_refresh() -> None:
+        calls.append("poll")
+
+    coordinator.async_refresh_vehicle = refresh_vehicle
+    coordinator.async_condition_inquiry = condition_inquiry
+    coordinator.async_request_refresh = request_refresh
+
+    await refresh.async_press()
+
+    assert calls == ["refresh", "inquiry", "poll"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_button_falls_back_when_the_wake_is_throttled() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    refresh = button.DeepalRefreshButton(coordinator, vehicle)
+    calls: list[str] = []
+
+    async def refresh_vehicle(car_id: str) -> WakeResult:
+        calls.append("refresh")
+        return WakeResult.THROTTLED
+
+    async def condition_inquiry(car_id: str) -> None:
+        calls.append("inquiry")
+
+    async def request_refresh() -> None:
+        calls.append("poll")
+
+    coordinator.async_refresh_vehicle = refresh_vehicle
+    coordinator.async_condition_inquiry = condition_inquiry
+    coordinator.async_request_refresh = request_refresh
+
+    await refresh.async_press()
+
+    assert calls == ["refresh", "inquiry", "poll"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_button_reports_no_fresh_report() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    refresh = button.DeepalRefreshButton(coordinator, vehicle)
+
+    async def refresh_vehicle(car_id: str) -> WakeResult:
+        return WakeResult.NO_REPORT
+
+    coordinator.async_refresh_vehicle = refresh_vehicle
+
+    with pytest.raises(HomeAssistantError) as err:
+        await refresh.async_press()
+
+    assert err.value.translation_key == "wake_no_fresh_report"
 
 
 def test_hacs_metadata_declares_supported_baseline() -> None:
@@ -851,9 +974,13 @@ def test_seat_level_unknown_and_out_of_range_are_hidden() -> None:
 def test_retired_entities_are_removed() -> None:
     keys = {description.key for description in binary_sensor.BINARY_SENSORS}
     assert "defrost" not in keys
-    assert {"defrost", "warning_airbag", "warning_coolant_temperature"}.isdisjoint(
-        keys
-    )
+    assert {
+        "defrost",
+        "warning_airbag",
+        "warning_coolant_temperature",
+        "driver_door_unlocked",
+        "passenger_door_unlocked",
+    }.isdisjoint(keys)
 
     removed: list[str] = []
 
@@ -871,6 +998,8 @@ def test_retired_entities_are_removed() -> None:
 
     assert sorted(removed) == [
         "binary_sensor.deepal_car-1_defrost",
+        "binary_sensor.deepal_car-1_driver_door_unlocked",
+        "binary_sensor.deepal_car-1_passenger_door_unlocked",
         "binary_sensor.deepal_car-1_warning_airbag",
         "binary_sensor.deepal_car-1_warning_coolant_temperature",
     ]
@@ -990,11 +1119,11 @@ def test_charge_limit_is_not_offered_on_the_s05_without_the_capability() -> None
     s05_by_name = _model_vehicle("car-3", model_name="Deepal S05")
     no_code = VehicleCapabilities.from_codes(["#battery", "#chargingInfo"])
 
-    assert number.supports_charge_limit(s05, None) is False
-    assert number.supports_charge_limit(s05_by_code, None) is False
-    assert number.supports_charge_limit(s05_by_name, None) is False
-    assert number.supports_charge_limit(s05, no_code) is False
-    assert number.supports_charge_limit(s05_by_code, no_code) is False
+    assert supports_charge_limit(s05, None) is False
+    assert supports_charge_limit(s05_by_code, None) is False
+    assert supports_charge_limit(s05_by_name, None) is False
+    assert supports_charge_limit(s05, no_code) is False
+    assert supports_charge_limit(s05_by_code, no_code) is False
 
 
 def test_charge_limit_is_offered_on_the_s05_phev_by_capabilities() -> None:
@@ -1002,8 +1131,8 @@ def test_charge_limit_is_offered_on_the_s05_phev_by_capabilities() -> None:
     phev_by_code = _model_vehicle("car-2", series_code="c857-phev")
     capabilities = VehicleCapabilities.from_codes(["#oilMileage", "#chargeSet"])
 
-    assert number.supports_charge_limit(phev, capabilities) is True
-    assert number.supports_charge_limit(phev_by_code, capabilities) is True
+    assert supports_charge_limit(phev, capabilities) is True
+    assert supports_charge_limit(phev_by_code, capabilities) is True
 
 
 def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
@@ -1012,11 +1141,11 @@ def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
     missing = _model_vehicle("car-3")
     no_code = VehicleCapabilities.from_codes(["#ota"])
 
-    assert number.supports_charge_limit(s07, None) is True
-    assert number.supports_charge_limit(unknown, None) is True
-    assert number.supports_charge_limit(missing, None) is True
-    assert number.supports_charge_limit(s07, no_code) is True
-    assert number.supports_charge_limit(unknown, no_code) is True
+    assert supports_charge_limit(s07, None) is True
+    assert supports_charge_limit(unknown, None) is True
+    assert supports_charge_limit(missing, None) is True
+    assert supports_charge_limit(s07, no_code) is True
+    assert supports_charge_limit(unknown, no_code) is True
 
 
 def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
@@ -1139,13 +1268,14 @@ def test_build_sensors_adds_fuel_only_for_fuel_vehicles() -> None:
     coordinator = FakeCoordinator()
     coordinator.client = object.__new__(DeepalIntlClient)
     coordinator.capabilities = {
-        "car-1": VehicleCapabilities.from_codes(["#oilMileage"]),
+        "car-1": VehicleCapabilities.from_codes(["#oilMileage", "#chargeSet"]),
         "car-2": VehicleCapabilities.from_codes(["#oilMileage"]),
         "car-3": VehicleCapabilities.from_codes(["#ota"]),
     }
     phev = _model_vehicle("car-1", series_name="S05", model_code="SC6464AAKPHEV")
     bev = _model_vehicle("car-2", series_name="S05", model_code="SC6464AAKBEV")
     electric_without_codes = _model_vehicle("car-3", series_name="Deepal S07")
+    s05_without_codes = _model_vehicle("car-4", series_name="S05", series_code="C857-EU")
 
     phev_keys = {
         entity.translation_key for entity in sensor.build_sensors(coordinator, phev)
@@ -1157,10 +1287,33 @@ def test_build_sensors_adds_fuel_only_for_fuel_vehicles() -> None:
         entity.translation_key
         for entity in sensor.build_sensors(coordinator, electric_without_codes)
     }
+    s05_keys = {
+        entity.translation_key
+        for entity in sensor.build_sensors(coordinator, s05_without_codes)
+    }
 
     assert sensor.FUEL_SENSOR_KEYS <= phev_keys
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(bev_keys)
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(electric_keys)
+    assert "charge_limit" in phev_keys
+    assert "charge_limit" not in bev_keys
+    assert "charge_limit" not in s05_keys
+
+
+def test_fuel_volume_sensor_exposes_litres() -> None:
+    coordinator = FakeCoordinator()
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    condition.fuel.volume_l = 28.5
+    coordinator.data["car-1"] = condition
+    vehicle = _fake_vehicle()
+    descriptions = {description.key: description for description in sensor.SENSORS}
+    entity = sensor.DeepalSensor(
+        coordinator, vehicle, descriptions["fuel_volume"]
+    )
+
+    assert entity.native_value == 28.5
+    assert entity._attr_unique_id == "deepal_car-1_fuel_volume"
+    assert entity._attr_native_unit_of_measurement is UnitOfVolume.LITERS
 
 
 def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:
@@ -1397,11 +1550,72 @@ def test_icons_are_translated() -> None:
     )["entity"]
 
     assert icons["binary_sensor"]["trunk"]["default"] == "mdi:car-select"
-    assert icons["number"]["charge_limit"]["default"] == "mdi:battery-heart"
-    assert icons["sensor"]["tire_pressure_front_left"]["default"] == "mdi:tire"
+    assert icons["binary_sensor"]["hood"]["default"] == "mdi:car-select"
+    assert icons["cover"]["trunk"]["default"] == "mdi:car-select"
+    assert icons["binary_sensor"]["high_beam"]["default"] == "mdi:car-light-high"
+    assert icons["binary_sensor"]["low_beam"]["default"] == "mdi:car-light-dimmed"
     assert (
-        icons["binary_sensor"]["tire_alarm_front_left"]["default"]
-        == "mdi:car-tire-alert"
+        icons["binary_sensor"]["left_turn_signal"]["default"]
+        == "mdi:car-arrow-left"
+    )
+    assert (
+        icons["binary_sensor"]["right_turn_signal"]["default"]
+        == "mdi:car-arrow-right"
+    )
+    assert (
+        icons["binary_sensor"]["climate_on"]["default"]
+        == icons["climate"]["cabin_climate"]["default"]
+        == "mdi:air-conditioner"
+    )
+    assert (
+        icons["binary_sensor"]["front_left_seat_heating"]["default"]
+        == "mdi:car-seat-heater"
+    )
+    assert (
+        icons["binary_sensor"]["front_right_seat_heating"]["default"]
+        == "mdi:car-seat-heater"
+    )
+    assert (
+        icons["binary_sensor"]["front_left_seat_ventilation"]["default"]
+        == "mdi:car-seat-cooler"
+    )
+    assert (
+        icons["binary_sensor"]["front_right_seat_ventilation"]["default"]
+        == "mdi:car-seat-cooler"
+    )
+    assert (
+        icons["sensor"]["seat_heating_level_front_left"]["default"]
+        == "mdi:car-seat-heater"
+    )
+    assert (
+        icons["sensor"]["seat_heating_level_front_right"]["default"]
+        == "mdi:car-seat-heater"
+    )
+    assert (
+        icons["sensor"]["seat_ventilation_level_front_left"]["default"]
+        == "mdi:car-seat-cooler"
+    )
+    assert (
+        icons["sensor"]["seat_ventilation_level_front_right"]["default"]
+        == "mdi:car-seat-cooler"
+    )
+    assert icons["number"]["charge_limit"]["default"] == "mdi:battery-heart"
+    assert (
+        icons["sensor"]["climate_target_temperature"]["default"]
+        == "mdi:snowflake-variant"
+    )
+    assert icons["sensor"]["tire_pressure_front_left"]["default"] == "mdi:tire"
+    assert {
+        icons["binary_sensor"][key]["default"]
+        for key in (
+            "tire_alarm_front_left",
+            "tire_alarm_front_right",
+            "tire_alarm_rear_left",
+            "tire_alarm_rear_right",
+        )
+    } == {"mdi:car-tire-alert"}
+    assert not any(
+        key.startswith("window_open_") for key in icons["binary_sensor"]
     )
 
 
@@ -1545,6 +1759,99 @@ def test_spanish_entity_names_are_corrected() -> None:
         == "Encender luces de emergencia"
     )
     assert data["entity"]["sensor"]["total_odometer"]["name"] == "Kilometraje total"
+    assert data["entity"]["binary_sensor"]["tire_alarm_front_left"]["name"] == (
+        "Testigo de presión neumático delantero izquierdo"
+    )
+    assert data["entity"]["binary_sensor"]["tire_alarm_rear_right"]["name"] == (
+        "Testigo de presión neumático trasero derecho"
+    )
+    assert data["entity"]["binary_sensor"]["warning_brake"]["name"] == (
+        "Testigo de frenos"
+    )
+    assert data["entity"]["binary_sensor"]["warning_eps"]["name"] == (
+        "Testigo de dirección asistida"
+    )
+    assert data["entity"]["binary_sensor"]["rear_fog_lamp"]["name"] == (
+        "Luz antiniebla trasera"
+    )
+    assert data["entity"]["binary_sensor"]["window_open_front_left"]["name"] == (
+        "Ventanilla delantera izquierda"
+    )
+    assert data["entity"]["binary_sensor"]["doors_lock_state"]["name"] == (
+        "Cierre centralizado"
+    )
+    assert data["entity"]["climate"]["cabin_climate"]["name"] == "Climatización"
+    assert data["entity"]["sensor"]["charge_mode"]["state"] == {
+        "ac": "CA",
+        "dc": "CC",
+    }
+
+
+def test_diagnostic_telemetry_is_categorized() -> None:
+    from homeassistant.const import EntityCategory
+
+    descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
+    assert descriptions["connected"].entity_category is EntityCategory.DIAGNOSTIC
+    assert descriptions["hood"].entity_category is None
+
+    entity = sensor.DeepalSeatLevelSensor(
+        FakeCoordinator(), _fake_vehicle(), "front_left", "heating_level"
+    )
+    assert entity.entity_category is EntityCategory.DIAGNOSTIC
+
+    for key in (
+        "front_left_seat_heating",
+        "front_right_seat_heating",
+        "front_left_seat_ventilation",
+        "front_right_seat_ventilation",
+    ):
+        assert descriptions[key].entity_category is EntityCategory.DIAGNOSTIC
+
+    steering = binary_sensor.DeepalSteeringWheelHeaterBinarySensor(
+        FakeCoordinator(), _fake_vehicle()
+    )
+    assert steering.entity_category is EntityCategory.DIAGNOSTIC
+
+
+def test_engine_binary_sensor_uses_the_power_device_class() -> None:
+    descriptions = {d.key: d for d in binary_sensor.BINARY_SENSORS}
+    assert (
+        descriptions["engine"].device_class
+        is binary_sensor.BinarySensorDeviceClass.POWER
+    )
+
+
+def test_steering_wheel_heater_level_sensor_is_retired() -> None:
+    assert sensor.REMOVED_SENSOR_KEYS == frozenset({"steering_wheel_heater_level"})
+    assert "steering_wheel_heater_level" not in {
+        description.key for description in sensor.SENSORS
+    }
+
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    keys = {
+        entity.translation_key
+        for entity in sensor.build_sensors(
+            coordinator, _model_vehicle("car-1", series_name="Deepal S07")
+        )
+    }
+    assert "steering_wheel_heater_level" not in keys
+
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            assert (platform, domain) == ("sensor", "deepal")
+            return f"sensor.{unique_id}"
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    sensor._remove_retired_entities(
+        _Registry(), SimpleNamespace(car_id="car-1")
+    )
+
+    assert removed == ["sensor.deepal_car-1_steering_wheel_heater_level"]
 
 
 def test_every_entity_translation_key_ships_in_every_language() -> None:
@@ -1673,17 +1980,23 @@ def test_integration_has_no_removed_api_references() -> None:
 class _DiagnosticsCoordinator:
     """Coordinator double for the diagnostics report."""
 
-    def __init__(self, vehicles, conditions, capabilities, attempts=None) -> None:
+    def __init__(
+        self, vehicles, conditions, capabilities, attempts=None, wakes=None
+    ) -> None:
         self.vehicles = vehicles
         self.data = conditions
         self._capabilities = capabilities
         self._attempts = attempts or {}
+        self._wakes = wakes or {}
 
     def vehicle_capabilities(self, car_id: str):
         return self._capabilities.get(car_id)
 
     def mqtt_attempt(self, car_id: str):
         return self._attempts.get(car_id)
+
+    def wake_result(self, car_id: str):
+        return self._wakes.get(car_id)
 
 
 def _diagnostics_entry(coordinator) -> SimpleNamespace:
@@ -1753,6 +2066,13 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
                 "plan": {"device_did": "plan-did"},
             }
         },
+        {
+            "car-1": {
+                "result": "fresh",
+                "wake_sent": True,
+                "timeout_s": 30.0,
+            }
+        },
     )
 
     report = await diagnostics.async_get_config_entry_diagnostics(
@@ -1774,6 +2094,8 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
     assert report["sda_plans"]["car-1"]["property_codes"] == ["carCondition"]
     assert report["mqtt_attempts"]["car-1"]["variants"]["sda-mqtt"] == {}
     assert report["mqtt_attempts"]["car-1"]["plan"] == {"device_did": REDACTED}
+    assert report["wake_results"]["car-1"]["result"] == "fresh"
+    assert report["wake_results"]["car-1"]["wake_sent"] is True
     assert "mqtt_variants" not in report["mapped_telemetry"]["car-1"]
     assert "sda_plan" not in report["mapped_telemetry"]["car-1"]
     assert report["unmapped_mqtt_keys"]["car-1"] == [

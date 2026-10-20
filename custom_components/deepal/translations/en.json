@@ -274,9 +274,6 @@
       "seat_ventilation_level_rear_right": {
         "name": "Rear right seat ventilation level"
       },
-      "steering_wheel_heater_level": {
-        "name": "Steering wheel heater level"
-      },
       "speed": {
         "name": "Speed"
       },
@@ -338,6 +335,9 @@
       },
       "fuel_range": {
         "name": "Fuel range"
+      },
+      "fuel_volume": {
+        "name": "Fuel volume"
       },
       "fuel_tank_capacity": {
         "name": "Fuel tank capacity"
@@ -464,12 +464,6 @@
       },
       "hood": {
         "name": "Hood"
-      },
-      "driver_door_unlocked": {
-        "name": "Driver door unlocked"
-      },
-      "passenger_door_unlocked": {
-        "name": "Passenger door unlocked"
       },
       "dc_gun_connected": {
         "name": "DC gun connected"

@@ -8,7 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import DeepalDataUpdateCoordinator
+from .coordinator import DeepalDataUpdateCoordinator, WakeResult
 from .deepal import DeepalError, FLASH_HONK_BEE, FLASH_HONK_FLASH, FLASH_HONK_FLASH_BEE
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
@@ -51,7 +51,7 @@ class DeepalRefreshButton(DeepalEntity, ButtonEntity):
     async def async_press(self) -> None:
         """Request fresh data and refresh the coordinator."""
         try:
-            await self.coordinator.async_refresh_vehicle(self._car_id)
+            result = await self.coordinator.async_refresh_vehicle(self._car_id)
         except DeepalError as err:
             raise HomeAssistantError(
                 f"Deepal refresh command failed: {err}",
@@ -59,6 +59,20 @@ class DeepalRefreshButton(DeepalEntity, ButtonEntity):
                 translation_key="refresh_command_failed",
                 translation_placeholders={"error": str(err)},
             ) from err
+        if result is WakeResult.FRESH:
+            return
+        if result is WakeResult.NO_REPORT:
+            raise HomeAssistantError(
+                "The vehicle did not report fresh data after the wake request; "
+                "it may be offline or asleep",
+                translation_domain=DOMAIN,
+                translation_key="wake_no_fresh_report",
+            )
+        if result in (WakeResult.THROTTLED, WakeResult.FAILED):
+            try:
+                await self.coordinator.async_condition_inquiry(self._car_id)
+            except DeepalError:
+                pass
         await self.coordinator.async_request_refresh()
 
 

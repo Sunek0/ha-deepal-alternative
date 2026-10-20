@@ -86,6 +86,14 @@ async def async_get_config_entry_diagnostics(
             else None
         )
 
+    wake_result_lookup = getattr(coordinator, "wake_result", None)
+    wake_results: dict[str, Any] = {}
+    if callable(wake_result_lookup):
+        for vehicle in coordinator.vehicles:
+            result = wake_result_lookup(vehicle.car_id)
+            if result is not None:
+                wake_results[vehicle.car_id] = result
+
     report = {
         "vehicles": [_vehicle_data(vehicle) for vehicle in coordinator.vehicles],
         "config_entry_data": dict(entry.data),
@@ -126,6 +134,7 @@ async def async_get_config_entry_diagnostics(
             for vehicle in coordinator.vehicles
             if coordinator.mqtt_attempt(vehicle.car_id) is not None
         },
+        "wake_results": wake_results,
         "unmapped_mqtt_keys": {
             car_id: sorted(unmapped_s05_keys(condition.mqtt_raw_data or {}))
             for car_id, condition in conditions.items()

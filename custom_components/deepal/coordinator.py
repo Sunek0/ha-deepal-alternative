@@ -5,7 +5,9 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any, NoReturn
 
 from homeassistant.config_entries import ConfigEntry
@@ -34,6 +36,7 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
+    WAKE_BEFORE_COMMAND_TIMEOUT,
     WAKE_COOLDOWN,
     WAKE_REPORT_TIMEOUT,
     WAKE_STALE_AFTER,
@@ -50,7 +53,27 @@ _CONDITION_FETCH_INTERVAL = 5.0
 _WAKE_POLL_INTERVAL = 5.0
 _VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
+_CHARGING_READ_INTERVAL = 600.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
+
+
+class WakeResult(StrEnum):
+    """Outcome of an explicit wake-and-read attempt."""
+
+    NOT_NEEDED = "not_needed"
+    THROTTLED = "throttled"
+    FRESH = "fresh"
+    NO_REPORT = "no_report"
+    FAILED = "failed"
+
+
+@dataclass
+class _OptimisticFieldHold:
+    """One optimistic field waiting for the vehicle to confirm it."""
+
+    expires: float
+    value: Any
+
 
 # How long the vehicle needs to complete a command's physical cycle before it
 # accepts the same command again (measured on the real car). Comfort controls
@@ -179,6 +202,26 @@ def _retain_seat_levels(
                 setattr(seat, field, getattr(previous_seat, field))
 
 
+_FUEL_FIELDS = (
+    "level_percent",
+    "remaining_range_km",
+    "volume_l",
+    "tank_capacity_l",
+    "temperature_c",
+)
+_FUEL_STATIC_FIELDS = ("volume_l", "tank_capacity_l", "temperature_c")
+
+
+def _copy_missing_fields(target: Any, source: Any, fields: tuple[str, ...]) -> None:
+    """Copy the source values the target does not carry yet."""
+    for field in fields:
+        if getattr(target, field) is not None:
+            continue
+        value = getattr(source, field)
+        if value is not None:
+            setattr(target, field, value)
+
+
 class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleCondition]]):
     """Class to manage fetching Changan Deepal data from API."""
 
@@ -204,7 +247,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._last_vehicle_refresh: float = 0.0
         self._command_locks: dict[str, asyncio.Lock] = {}
         self._command_cooldowns: dict[tuple[str, str], float] = {}
-        self._optimistic_holds: dict[str, dict[str, Any]] = {}
+        self._optimistic_holds: dict[str, dict[str, _OptimisticFieldHold]] = {}
         self._optimistic_pending: dict[str, set[str]] = {}
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
         self._last_steering_wheel: dict[str, tuple[bool, int | None]] = {}
@@ -212,12 +255,20 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
         self._wake_report_timeout = WAKE_REPORT_TIMEOUT
+        self._last_wake_result: dict[str, dict[str, Any]] = {}
         self._mqtt_attempts: dict[str, dict[str, Any]] = {}
         self.charging: ChargingSessionManager | None = None
+        self._charging_read_task: asyncio.Task[None] | None = None
+        self._charging_read_stop: asyncio.Event | None = None
+        self._charging_read_interval = _CHARGING_READ_INTERVAL
 
     def mqtt_attempt(self, vehicle_id: str) -> dict[str, Any] | None:
         """Return the last failed MQTT exchange details for diagnostics."""
         return self._mqtt_attempts.get(vehicle_id)
+
+    def wake_result(self, vehicle_id: str) -> dict[str, Any] | None:
+        """Return the last wake outcome for diagnostics."""
+        return self._last_wake_result.get(vehicle_id)
 
     async def _async_maybe_refresh_vehicles(self) -> None:
         """Refresh the account vehicle list and reload when it changed.
@@ -332,10 +383,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         last server-authored steering wheel state is remembered and kept when a
         later app condition fails or omits the field, with the MQTT fallback
         only before the first server-authored state.
-        The seat block, the charge connection flags and the fuel block keep the
-        freshness rule (the server condition applies only when its report is
-        not older), so a genuinely newer MQTT snapshot wins; the server
-        condition is also the fallback for the gun fields a car omits over MQTT.
+        The seat block and the charge connection flags keep the freshness rule
+        (the server condition applies only when its report is not older), so a
+        genuinely newer MQTT snapshot wins; the server condition is also the
+        fallback for the gun fields a car omits over MQTT. PHEV fuel and the AC
+        charge limit are merged per field: dynamic fuel values keep the
+        freshness rule, while volume, tank capacity, fuel temperature and the
+        charge limit are slow or static and fill a missing field even when the
+        server report is older.
         """
         if not self._uses_mqtt(vehicle):
             return condition
@@ -372,9 +427,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if (raw.get("hvac") or {}).get("defrostStatus") is not None:
             condition.climate.defrost_on = app_condition.climate.defrost_on
         if app_is_older:
-            # Seats, charge and fuel: a genuinely newer MQTT snapshot is the
-            # better source, so the server condition only fills them when its
-            # report is not older.
+            # A genuinely newer MQTT snapshot wins for dynamic fuel values, but
+            # the static PHEV fields and the AC limit are absent from the MQTT
+            # path, so an older REST report is still better than unknown.
+            _copy_missing_fields(
+                condition.fuel, app_condition.fuel, _FUEL_STATIC_FIELDS
+            )
+            if condition.battery.charge_limit_percent is None:
+                condition.battery.charge_limit_percent = (
+                    app_condition.battery.charge_limit_percent
+                )
             return condition
         if raw.get("seat"):
             _overlay_seat_levels(app_condition.seats, condition.seats)
@@ -393,10 +455,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             and app_charge.get("dcChargeGunConnectStatus") is not None
         ):
             condition.battery.dc_gun_connected = app_condition.battery.dc_gun_connected
-        if raw.get("fuel") and all(
-            value is None for value in condition.fuel.model_dump().values()
-        ):
-            condition.fuel = app_condition.fuel
+        _copy_missing_fields(condition.fuel, app_condition.fuel, _FUEL_FIELDS)
+        if condition.battery.charge_limit_percent is None:
+            condition.battery.charge_limit_percent = (
+                app_condition.battery.charge_limit_percent
+            )
         return condition
 
     def _register_optimistic_hold(
@@ -404,17 +467,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     ) -> None:
         """Remember the fields a command changed so reports cannot revert them.
 
-        The changed paths are also marked as unconfirmed: the merge will not
-        restore them from the previous condition once the hold expires unless a
-        report carried them.
+        Holds are kept per changed field and merged with the holds of earlier
+        commands: a command that touches other fields must not release them,
+        while a command that touches the same field refreshes its value and its
+        window. The changed paths are also marked as unconfirmed: the merge
+        will not restore them from the previous condition once the hold expires
+        unless a report carried them.
         """
         changes = _diff_paths(before, after)
-        if changes:
-            self._optimistic_holds[vehicle_id] = {
-                "expires": time.monotonic() + _OPTIMISTIC_HOLD_SECONDS,
-                "values": changes,
-            }
-            self._optimistic_pending.setdefault(vehicle_id, set()).update(changes)
+        if not changes:
+            return
+        expires = time.monotonic() + _OPTIMISTIC_HOLD_SECONDS
+        hold = self._optimistic_holds.setdefault(vehicle_id, {})
+        for path, value in changes.items():
+            hold[path] = _OptimisticFieldHold(expires, value)
+        self._optimistic_pending.setdefault(vehicle_id, set()).update(changes)
 
     def _apply_optimistic_hold(
         self, vehicle_id: str, condition: VehicleCondition
@@ -423,33 +490,33 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
         The car applies commands with a delay (and the account is rate limited),
         so reports generated before the command took effect would otherwise
-        revert the entity to the previous value. A value the vehicle never
-        confirms expires when the window closes: its unconfirmed mark keeps the
-        previous-condition merge from restoring it, and a report that carries
-        the field clears the mark.
+        revert the entity to the previous value. Each field has its own window:
+        a value the vehicle never confirms expires when that window closes, and
+        its unconfirmed mark keeps the previous-condition merge from restoring
+        it. A report that carries the field clears the mark.
         """
         hold = self._optimistic_holds.get(vehicle_id)
-        if hold is not None and time.monotonic() >= hold["expires"]:
-            # The window closed: stop overriding. The unconfirmed marks stay so
-            # the merge cannot resurrect the value.
-            self._optimistic_holds.pop(vehicle_id, None)
-            hold = None
         masked: set[str] = set()
         if hold is not None:
-            remaining: dict[str, Any] = {}
-            for path, value in hold["values"].items():
+            now = time.monotonic()
+            remaining: dict[str, _OptimisticFieldHold] = {}
+            for path, entry in hold.items():
+                if now >= entry.expires:
+                    # This field's window closed: stop overriding it. Its
+                    # unconfirmed mark stays so the merge cannot resurrect it.
+                    continue
                 try:
-                    if _path_get(condition, path) == value:
+                    if _path_get(condition, path) == entry.value:
                         continue
-                    _path_set(condition, path, value)
+                    _path_set(condition, path, entry.value)
                 except AttributeError:
                     self._optimistic_pending.get(vehicle_id, set()).discard(path)
                     continue
                 self._optimistic_pending.setdefault(vehicle_id, set()).add(path)
-                remaining[path] = value
+                remaining[path] = entry
+                masked.add(path)
             if remaining:
-                hold["values"] = remaining
-                masked = set(remaining)
+                self._optimistic_holds[vehicle_id] = remaining
             else:
                 self._optimistic_holds.pop(vehicle_id, None)
         pending = self._optimistic_pending.get(vehicle_id)
@@ -561,7 +628,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         the car reports no coordinates. The dashboard warning lights reported as
         unknown (vehicle off, asleep or a REST fallback) keep their last known
         values as well; the SDK power-state gate guarantees those came from a
-        report with the vehicle on.
+        report with the vehicle on. PHEV fuel and the AC charge limit also keep
+        their last known values; an unconfirmed optimistic charge limit expires
+        instead of being retained.
         """
         pending = self._optimistic_pending.get(vehicle_id)
 
@@ -582,6 +651,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     setattr(
                         condition.warnings, field, getattr(previous.warnings, field)
                     )
+            _copy_missing_fields(condition.fuel, previous.fuel, _FUEL_FIELDS)
+            if condition.battery.charge_limit_percent is None and keep(
+                "battery.charge_limit_percent"
+            ):
+                condition.battery.charge_limit_percent = (
+                    previous.battery.charge_limit_percent
+                )
             if condition.climate.power_on is None and keep("climate.power_on"):
                 condition.climate.power_on = previous.climate.power_on
             if condition.climate.steering_wheel_heater_on is None and keep(
@@ -733,36 +809,76 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             (item for item in self.vehicles if item.car_id == vehicle_id), None
         )
 
-    def _should_wake(self, vehicle_id: str, report_ts: int | None) -> bool:
-        """Return whether an explicit refresh should wake this vehicle.
-
-        Waking the car drains the 12 V battery, so it is throttled per vehicle
-        and only happens when the last report is older than the stale threshold.
-        """
+    def _wake_block_reason(
+        self, vehicle_id: str, report_ts: int | None
+    ) -> WakeResult | None:
+        """Return why a wake is not needed, or ``None`` when it should run."""
         if not self.wake_enabled:
-            return False
+            return WakeResult.NOT_NEEDED
+        if (
+            report_ts is not None
+            and time.time() - report_ts <= WAKE_STALE_AFTER
+        ):
+            return WakeResult.NOT_NEEDED
         last_wake = self._last_wake_at.get(vehicle_id)
         if last_wake is not None and time.monotonic() - last_wake < WAKE_COOLDOWN:
-            return False
-        if report_ts is None:
-            return True
-        return time.time() - report_ts > WAKE_STALE_AFTER
+            return WakeResult.THROTTLED
+        return None
+
+    def _record_wake_result(
+        self,
+        vehicle_id: str,
+        result: WakeResult,
+        *,
+        wake_sent: bool,
+        timeout: float | None = None,
+        error: DeepalError | None = None,
+    ) -> None:
+        """Keep the last wake outcome for the diagnostics report."""
+        record: dict[str, Any] = {
+            "result": str(result),
+            "wake_sent": wake_sent,
+            "at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
+        if timeout is not None:
+            record["timeout_s"] = round(timeout, 1)
+        if error is not None:
+            record["error"] = str(error)[:200]
+            code = getattr(error, "code", None)
+            if code:
+                record["code"] = str(code)
+        self._last_wake_result[vehicle_id] = record
 
     async def async_wake_vehicle(self, vehicle_id: str) -> None:
-        """Wake an MQTT vehicle, recovering an expired session."""
+        """Wake an MQTT vehicle, recovering an expired session or CA token."""
         if not isinstance(self.client, DeepalIntlClient):
             raise HomeAssistantError(
                 "Remote wake requires the international platform",
                 translation_domain=DOMAIN,
                 translation_key="wake_requires_international",
             )
-        await self._async_with_session_retry(
-            lambda: self.client.wake_vehicle(vehicle_id)
-        )
+        try:
+            await self._async_with_session_retry(
+                lambda: self.client.wake_vehicle(vehicle_id)
+            )
+        except DeepalAPIError as err:
+            if (
+                getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES
+                and await self._async_refresh_session_for_mqtt(err)
+            ):
+                await self._async_with_session_retry(
+                    lambda: self.client.wake_vehicle(vehicle_id)
+                )
+            else:
+                raise
 
     async def _async_wait_for_report(
-        self, vehicle_id: str, previous: int | None
-    ) -> bool:
+        self,
+        vehicle_id: str,
+        previous: int | None,
+        *,
+        timeout: float | None = None,
+    ) -> VehicleCondition | None:
         """Wait for a newer MQTT report through one bounded SDK exchange.
 
         The SDK opens a single session and re-requests the condition on it, so
@@ -772,8 +888,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """
         vehicle = self._vehicle(vehicle_id)
         vin = vehicle.vin if vehicle is not None else None
+        wait_timeout = self._wake_report_timeout if timeout is None else timeout
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._wake_report_timeout
+        deadline = loop.time() + wait_timeout
         while loop.time() < deadline:
             try:
                 condition = await self.client.s05_wait_for_report(
@@ -793,46 +910,90 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 await asyncio.sleep(min(self._wake_poll_interval, remaining))
                 continue
             if condition is not None:
-                return True
+                return condition
             break
-        return False
+        return None
+
+    async def _async_apply_condition(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Merge and publish one fresh vehicle condition."""
+        vehicle = self._vehicle(vehicle_id)
+        if vehicle is not None:
+            condition = await self._overlay_app_comfort(vehicle, condition)
+        condition = self._apply_optimistic_hold(vehicle_id, condition)
+        data = dict(self.data or {})
+        data[vehicle_id] = condition
+        self._track_charging(data)
+        self._sync_charging_read(data, start=False)
+        self.async_set_updated_data(data)
 
     async def _async_wake_and_wait(
-        self, vehicle_id: str, *, wait_when_unconfirmed: bool = False
-    ) -> bool | None:
+        self,
+        vehicle_id: str,
+        *,
+        wait_when_unconfirmed: bool = False,
+        timeout: float | None = None,
+    ) -> WakeResult:
         """Wake one vehicle and wait for a newer condition report.
 
-        Returns True when a newer report arrived, False when no report arrived
-        within the wait window, and None when the wake request itself failed
-        and the caller asked not to wait for the report
-        (``wait_when_unconfirmed=False``). The gateway acknowledgement is
-        unreliable while the car is deeply asleep (observed 2026-10-14: the
-        wake is published, the car wakes, and no service result arrives), so a
-        manual refresh passes ``wait_when_unconfirmed=True`` and lets the
-        report decide the outcome. The wake cooldown is recorded as soon as the
-        wake is accepted, whether or not the report arrives afterwards.
+        Returns a ``WakeResult`` so callers can distinguish a fresh report, a
+        wake that was accepted but produced no report, and a wake request that
+        failed. The gateway acknowledgement is unreliable while the car is
+        deeply asleep (observed 2026-10-14), so a manual refresh passes
+        ``wait_when_unconfirmed=True`` and lets the report decide the outcome.
+        The wake cooldown is recorded as soon as the gateway accepts the wake,
+        whether or not the report arrives afterwards.
         """
+        timeout_seconds = self._wake_report_timeout if timeout is None else timeout
         current = (self.data or {}).get(vehicle_id)
         previous = current.last_updated_timestamp if current is not None else None
+        wake_sent = False
+        wake_error: DeepalError | None = None
         try:
             await self.async_wake_vehicle(vehicle_id)
         except DeepalError as err:
+            wake_error = err
             _LOGGER.warning(
                 "Deepal wake request failed for %s: %s", vehicle_id, err
             )
             if not wait_when_unconfirmed:
-                return None
+                self._record_wake_result(
+                    vehicle_id,
+                    WakeResult.FAILED,
+                    wake_sent=False,
+                    error=err,
+                )
+                return WakeResult.FAILED
         else:
+            wake_sent = True
             self._last_wake_at[vehicle_id] = time.monotonic()
-        if await self._async_wait_for_report(vehicle_id, previous):
-            return True
-        _LOGGER.warning(
-            "Deepal vehicle %s did not report fresh data within %.0f s after "
-            "the wake request",
-            vehicle_id,
-            self._wake_report_timeout,
+
+        condition = await self._async_wait_for_report(
+            vehicle_id, previous, timeout=timeout_seconds
         )
-        return False
+        if condition is not None:
+            await self._async_apply_condition(vehicle_id, condition)
+            result = WakeResult.FRESH
+        elif wake_sent:
+            result = WakeResult.NO_REPORT
+            _LOGGER.warning(
+                "Deepal vehicle %s did not report fresh data within %.0f s "
+                "after the wake request",
+                vehicle_id,
+                timeout_seconds,
+            )
+        else:
+            result = WakeResult.FAILED
+
+        self._record_wake_result(
+            vehicle_id,
+            result,
+            wake_sent=wake_sent,
+            timeout=timeout_seconds if wake_sent else None,
+            error=wake_error if result is WakeResult.FAILED else None,
+        )
+        return result
 
     async def _async_prepare_pin_command(self, vehicle_id: str) -> None:
         """Wake a stale MQTT vehicle before a PIN-gated command.
@@ -852,24 +1013,25 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return
         current = (self.data or {}).get(vehicle_id)
         previous = current.last_updated_timestamp if current is not None else None
-        if not self._should_wake(vehicle_id, previous):
+        if self._wake_block_reason(vehicle_id, previous) is not None:
             return
         async with self._vehicle_wake_lock(vehicle_id):
-            if not self._should_wake(vehicle_id, previous):
+            if self._wake_block_reason(vehicle_id, previous) is not None:
                 return
-            await self._async_wake_and_wait(vehicle_id)
+            await self._async_wake_and_wait(
+                vehicle_id, timeout=WAKE_BEFORE_COMMAND_TIMEOUT
+            )
 
-    async def async_refresh_vehicle(self, vehicle_id: str) -> None:
+    async def async_refresh_vehicle(self, vehicle_id: str) -> WakeResult:
         """Refresh one vehicle, waking it first when its report is stale.
 
         MQTT vehicles are woken through the app's ``TxWakeup`` service when the
         last report is older than the stale threshold and the per-vehicle wake
-        cooldown elapsed; the coordinator waits for a newer report and raises a
-        Home Assistant error when none arrives. Concurrent refreshes share the
-        per-vehicle wake lock, so a single wake is published per cooldown
-        window. The gateway acknowledgement is not required: when the wake
-        request fails, the report wait still decides the outcome. REST vehicles
-        keep the signed condition-inquiry request.
+        cooldown elapsed. A successful wake updates the coordinator data with
+        the fresh condition, so the refresh button does not need a full poll.
+        Concurrent refreshes share the per-vehicle wake lock, so a single wake
+        is published per cooldown window. REST vehicles keep the signed
+        condition-inquiry request.
         """
         vehicle = self._vehicle(vehicle_id)
         current = (self.data or {}).get(vehicle_id)
@@ -880,23 +1042,25 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # The app reads SDA conditions over REST and the CA-broker wake
                 # is not implemented for the SDA architecture, so the refresh
                 # falls through to the normal SDA condition update.
-                return
-            if self._should_wake(vehicle_id, previous):
-                async with self._vehicle_wake_lock(vehicle_id):
-                    if not self._should_wake(vehicle_id, previous):
-                        return
-                    woke = await self._async_wake_and_wait(
-                        vehicle_id, wait_when_unconfirmed=True
+                return WakeResult.NOT_NEEDED
+            reason = self._wake_block_reason(vehicle_id, previous)
+            if reason is not None:
+                self._record_wake_result(
+                    vehicle_id, reason, wake_sent=False
+                )
+                return reason
+            async with self._vehicle_wake_lock(vehicle_id):
+                reason = self._wake_block_reason(vehicle_id, previous)
+                if reason is not None:
+                    self._record_wake_result(
+                        vehicle_id, reason, wake_sent=False
                     )
-                if woke is False:
-                    raise HomeAssistantError(
-                        "The vehicle did not report fresh data after the wake "
-                        "request; it may be offline or asleep",
-                        translation_domain=DOMAIN,
-                        translation_key="wake_no_fresh_report",
-                    )
-        else:
-            await self.async_condition_inquiry(vehicle_id)
+                    return reason
+                return await self._async_wake_and_wait(
+                    vehicle_id, wait_when_unconfirmed=True
+                )
+        await self.async_condition_inquiry(vehicle_id)
+        return WakeResult.NOT_NEEDED
 
     def _schedule_condition_inquiry(self, vehicle_id: str) -> None:
         """Nudge the vehicle for fresh data without delaying the command.
@@ -970,6 +1134,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _LOGGER.error("Error communicating with Deepal API: %s", err)
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
         self._track_charging(data)
+        self._sync_charging_read(data)
         return data
 
     def _track_charging(self, data: dict[str, VehicleCondition]) -> None:
@@ -985,6 +1150,101 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 condition.battery.remaining_range_km,
                 now,
             )
+
+    @staticmethod
+    def _charging_vehicle_ids(
+        data: dict[str, VehicleCondition],
+    ) -> list[str]:
+        """Return the vehicles that currently report an active charge."""
+        return [
+            car_id
+            for car_id, condition in data.items()
+            if charging_flag(condition) is True
+        ]
+
+    def _sync_charging_read(
+        self, data: dict[str, VehicleCondition], *, start: bool = True
+    ) -> None:
+        """Start, keep or stop the charging refresh loop.
+
+        ``start=False`` is used by the loop itself after a targeted read: it may
+        stop the loop when the charge ended, but must not create a replacement
+        task from inside the current one.
+        """
+        charging = self._charging_vehicle_ids(data)
+        current = asyncio.current_task()
+        if not charging:
+            stop = self._charging_read_stop
+            if stop is not None:
+                stop.set()
+            task = self._charging_read_task
+            if task is not None and task is not current and not task.done():
+                task.cancel()
+            if task is not current:
+                self._charging_read_task = None
+                self._charging_read_stop = None
+            return
+
+        task = self._charging_read_task
+        if not start or (task is not None and not task.done()):
+            return
+        self._charging_read_stop = asyncio.Event()
+        self._charging_read_task = self.entry.async_create_background_task(
+            self.hass,
+            self._async_charging_read_loop(),
+            "deepal charging read",
+        )
+        _LOGGER.debug(
+            "Deepal charging read loop started for %s",
+            ", ".join(charging),
+        )
+
+    async def _async_charging_read_loop(self) -> None:
+        """Read the charging vehicles every 10 minutes until charging ends."""
+        stop = self._charging_read_stop
+        if stop is None:
+            return
+        try:
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(
+                        stop.wait(), timeout=self._charging_read_interval
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+                charging = self._charging_vehicle_ids(self.data or {})
+                if not charging:
+                    return
+                for vehicle_id in charging:
+                    try:
+                        await self._async_read_charging_vehicle(vehicle_id)
+                    except (DeepalError, HomeAssistantError) as err:
+                        _LOGGER.warning(
+                            "Deepal charging read failed for %s: %s",
+                            vehicle_id,
+                            err,
+                        )
+                    except Exception:  # noqa: BLE001 - one read must not kill the loop
+                        _LOGGER.exception(
+                            "Deepal charging read failed unexpectedly for %s",
+                            vehicle_id,
+                        )
+                    if stop.is_set():
+                        return
+        finally:
+            if self._charging_read_task is asyncio.current_task():
+                self._charging_read_task = None
+                self._charging_read_stop = None
+
+    async def _async_read_charging_vehicle(self, vehicle_id: str) -> None:
+        """Read one charging vehicle without polling the parked ones."""
+        result = await self.async_refresh_vehicle(vehicle_id)
+        if result is WakeResult.FRESH:
+            return
+        condition = await self._async_fetch_condition(vehicle_id)
+        await self._async_apply_condition(vehicle_id, condition)
 
     def _vehicle_command_lock(self, vehicle_id: str) -> asyncio.Lock:
         """Return the per-vehicle command lock, creating it on first use."""
@@ -1287,6 +1547,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             now = loop.time()
             if now >= next_condition_at:
                 condition = await self._async_fetch_condition(vehicle_id)
+                # The command confirmation must not expose the unreliable MQTT
+                # steering wheel field: apply the last server-authored state,
+                # as the normal poll's comfort overlay does.
+                vehicle = self._vehicle(vehicle_id)
+                if vehicle is not None:
+                    self._apply_steering_wheel_state(vehicle, condition)
                 condition = self._apply_optimistic_hold(vehicle_id, condition)
                 next_condition_at = now + condition_interval
                 current = (self.data or {}).get(vehicle_id)

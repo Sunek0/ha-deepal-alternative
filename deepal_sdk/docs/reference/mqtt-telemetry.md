@@ -39,15 +39,18 @@ configuration and the MQTT password. All requests are POST with the same session
 | `get_mqtt_config(vehicle_id)` | `/user-apigw/vot-connect-conf-center/api/device/getConnConf` | `deviceId`, `carId`, `deviceType: 1`, `confTimestamp: 0`, `deviceTimestamp` (ms) | `mqttConnectionInfos[0]` with the broker URL/port and the topic maps |
 | `get_mqtt_token()` | `/user-apigw/vot-connect-auth-center/api/auth/getAuthTokenByUserId` | `userId` | `authToken`, used as the MQTT password |
 
-Fallbacks (recovered from the 1.12.0 app; on by default):
+Fallback (recovered from the 1.12.0 app; on by default):
 
 - If `getConnConf` fails with a non-authentication, non-rate-limit API error and
   `mqtt_config_fallback=True`, the SDK retries
   `/user-apigw/vot-connect-conf-center/api/device/appGetCarConfFunc` with the same body.
-- If `getAuthTokenByUserId` fails with an API error and `mqtt_token_fallback=True`, the SDK retries
-  `/app-apigw/vot-auth/api/token/getAuthTokenByUserId`.
 
-Authentication errors and rate limits are never masked by the fallbacks; both are re-raised.
+The CA auth token has no cross-gateway fallback. The `/app-apigw/vot-auth` route is served by the
+SDA gateway (`sda_base_url`) for the SDA broker flow; it does not exist on the CA gateway and its
+token is not valid for the CA broker (`ca-rtm`). When `getAuthTokenByUserId` fails, the SDK raises
+the original error (with its gateway code when present) so the coordinator can refresh the session
+and retry.
+
 `get_mqtt_token()` requires `user_id` and raises `DeepalAPIError` without it.
 
 The `X-Tsp-User-Token`/`X-VCS-User-Token` headers must carry the **access token**; the CA gateway
@@ -58,8 +61,7 @@ rejects the CAC token with `APIGW_-1_7_01_004` and an empty header with `APIGW_1
 
 | Constructor option | Default | Purpose |
 | --- | --- | --- |
-| `mqtt_config_fallback` | `True` | Allow the connection-config fallback endpoint |
-| `mqtt_token_fallback` | `True` | Allow the auth-token fallback endpoint |
+| `mqtt_config_fallback` | `True` | Allow the CA connection-config fallback endpoint |
 | `mqtt_client_id` | `None` | Override the MQTT client id; otherwise resolved from the connection config with a fallback to the login DID |
 | `mqtt_username` | `None` | Override the MQTT username; otherwise resolved from the connection config with a fallback to the login DID |
 | `mqtt_keepalive` | `60` | Keepalive seconds (`PINGREQ` is sent while waiting) |
@@ -112,7 +114,7 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `igniteCumulativeMileage` | `vehicleStatus.igniteCumulativeMileage` | `trip_mileage_km` |
 | `engineStatus` / `powerStatusFeedBack` / `electronichandbrakeStatus` | `vehicleStatus.engineSts` / `powerStatus` / `epbSts` | `engine_on` / `power_status` / `epb_status` |
 | `vehicleTemperature` | `hvac.insideTemp` (x10) | `climate.inside_temperature_c` |
-| `innerHumidity` | `hvac.insideHumidity` | `climate.humidity` |
+| `innerHumidity` | `hvac.insideHumidity` (raw tenths) | `climate.humidity` |
 | `airConditioningSetTemperature` | `hvac.remoteTemp` (x10) | `climate.target_temperature_c` |
 | `airStatus` | `hvac.acStatus` | `climate.power_on` |
 | `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
@@ -136,6 +138,9 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `passengerSeatHeatStatus` / `passengerSeatAirStatus` | `seat.rightFront.heatStatus` / `ventStatus` | `seats.front_right.*` |
 | `leftBackSeatHeatStatus` / `leftBackSeatVentilateStatus` | `seat.leftBack.heatStatus` / `ventStatus` | `seats.rear_left.*` |
 | `rightBackSeatHeatStatus` / `rightBackSeatVentilateStatus` | `seat.rightBack.heatStatus` / `ventStatus` | `seats.rear_right.*` |
+
+`innerHumidity` keeps the raw fixed-point value (0-1000 tenths of a percent) in the normalized
+payload; `parse_condition()` converts it to percent exactly once.
 
 `steeringWheelHeating` is intentionally **not mapped**: it reads `1` even with the wheel heater
 off. The real steering-wheel heater switch and level come from the REST condition

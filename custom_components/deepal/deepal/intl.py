@@ -17,7 +17,6 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from .endpoints import (
     DEFAULT_INTL_ENVIRONMENT,
-    INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
     INTL_CA_GET_AUTH_TOKEN,
     INTL_CA_GET_CAR_AUTH_LIST,
     INTL_CA_GET_CAR_CONF_FUNC,
@@ -112,6 +111,7 @@ from .mqtt import (
     SDA_CONDITION_SECTIONS,
     SDA_CONDITION_SERVICE,
     SDA_SERVICE_CODES,
+    WAKE_PACKET_ID,
     MqttExchangeResult,
     SdaBrokerConfig,
     SdaConditionPlan,
@@ -326,17 +326,14 @@ def _as_float(value: Any) -> Optional[float]:
 def _humidity_percent(value: Any) -> Optional[float]:
     """Return the cabin humidity as a percentage.
 
-    The S05 reports ``insideHumidity`` either as a percentage (``61``) or as
-    tenths of a percent (``453``), so a value above 100 is divided by ten.
-    Values outside 0 to 100 after that are unknown. Mirrors the MQTT
-    normalization in ``deepal.mqtt``.
+    The API reports ``insideHumidity`` as a fixed-point integer from 0 to 1000
+    with one implied decimal: ``453`` means 45.3 %. Values outside that range,
+    or non-numeric values, are unknown.
     """
     humidity = _as_float(value)
-    if humidity is None:
+    if humidity is None or not 0 <= humidity <= 1000:
         return None
-    if humidity > 100:
-        humidity /= 10
-    return humidity if 0 <= humidity <= 100 else None
+    return round(humidity / 10, 1)
 
 
 def _as_bool(value: Any) -> Optional[bool]:
@@ -433,7 +430,6 @@ class DeepalIntlClient:
         tsp_token_source: str = "access",
         environment: str = DEFAULT_INTL_ENVIRONMENT,
         mqtt_config_fallback: bool = True,
-        mqtt_token_fallback: bool = True,
         mqtt_client_id: Optional[str] = None,
         mqtt_username: Optional[str] = None,
         mqtt_keepalive: float = MQTT_DEFAULT_KEEPALIVE,
@@ -472,7 +468,6 @@ class DeepalIntlClient:
         self.app_id = environment_config.app_id
         self._intl_path_prefix = environment_config.intl_path_prefix
         self.mqtt_config_fallback = mqtt_config_fallback
-        self.mqtt_token_fallback = mqtt_token_fallback
         self.mqtt_client_id = mqtt_client_id
         self.mqtt_username = mqtt_username
         self.mqtt_keepalive = mqtt_keepalive
@@ -1570,6 +1565,26 @@ class DeepalIntlClient:
 
         location = find_location(raw)
 
+        warnings_condition = WarningLightsCondition(
+            battery_12v=_as_bool(warnings.get("battery12v")),
+            tpms=_as_bool(warnings.get("tpms")),
+            abs=_as_bool(warnings.get("abs")),
+            brake_fluid=_as_bool(warnings.get("brakeFluid")),
+            brake=_as_bool(warnings.get("brake")),
+            eps=_as_bool(warnings.get("eps")),
+            power_limit=_as_bool(warnings.get("powerLimit")),
+            power_system=_as_bool(warnings.get("powerSystem")),
+            traction_battery_low=_as_bool(
+                warnings.get("tractionBatteryLow")
+            ),
+        )
+        if power_status == 0:
+            # A sleeping car woken for a refresh reports the warning bits as 1
+            # on a healthy vehicle. The gate is applied here, next to the
+            # warning mapping, so the international REST and SDA conditions
+            # follow the same rule as the S05 MQTT normalization.
+            warnings_condition = WarningLightsCondition()
+
         return VehicleCondition(
             car_id=vehicle_id,
             vin=raw.get("vin") or vin or "",
@@ -1601,19 +1616,7 @@ class DeepalIntlClient:
             climate=climate,
             tires=tires_condition,
             lamps=lamps,
-            warnings=WarningLightsCondition(
-                battery_12v=_as_bool(warnings.get("battery12v")),
-                tpms=_as_bool(warnings.get("tpms")),
-                abs=_as_bool(warnings.get("abs")),
-                brake_fluid=_as_bool(warnings.get("brakeFluid")),
-                brake=_as_bool(warnings.get("brake")),
-                eps=_as_bool(warnings.get("eps")),
-                power_limit=_as_bool(warnings.get("powerLimit")),
-                power_system=_as_bool(warnings.get("powerSystem")),
-                traction_battery_low=_as_bool(
-                    warnings.get("tractionBatteryLow")
-                ),
-            ),
+            warnings=warnings_condition,
             key_battery_low=_as_bool(raw.get("keyBatteryLow")),
             air_recirculation=_as_bool(raw.get("airRecirculation")),
             window_openings=WindowOpeningsCondition(
@@ -1704,13 +1707,19 @@ class DeepalIntlClient:
         self._mqtt_configs.clear()
 
     async def get_mqtt_token(self, force: bool = False) -> str:
-        """Exchange the account user id for an MQTT auth token.
+        """Exchange the account user id for a CA MQTT auth token.
 
         The token is account level and is reused within ``mqtt_token_ttl`` (one
         minute by default), so a refresh cycle with several vehicles asks the CA
         gateway once instead of once per MQTT session. ``force`` bypasses the
         cache after a rejection, and a failed fetch never leaves a stale value
         behind.
+
+        The CA broker only accepts tokens issued by the CA
+        ``getAuthTokenByUserId`` endpoint. The SDA ``/app-apigw/vot-auth`` route
+        authenticates a different gateway and broker, so it is not a fallback
+        here; a failure propagates unchanged (with its gateway code when
+        present) so the coordinator can refresh the session and retry.
         """
         if not self.user_id:
             raise DeepalAPIError(
@@ -1723,28 +1732,12 @@ class DeepalIntlClient:
         ):
             return self._mqtt_token
         self._invalidate_mqtt_token()
-        try:
-            data = await self._request(
-                INTL_CA_GET_AUTH_TOKEN,
-                json_data={"userId": self.user_id},
-                auth_required=True,
-                base_url=self.ca_base_url,
-            )
-        except DeepalRateLimitError:
-            raise
-        except (DeepalAPIError, DeepalSessionInvalidated) as exc:
-            if not self.mqtt_token_fallback:
-                raise
-            logger.warning(
-                "getAuthTokenByUserId failed (%s); retrying with the app-apigw route",
-                exc,
-            )
-            data = await self._request(
-                INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
-                json_data={"userId": self.user_id},
-                auth_required=True,
-                base_url=self.ca_base_url,
-            )
+        data = await self._request(
+            INTL_CA_GET_AUTH_TOKEN,
+            json_data={"userId": self.user_id},
+            auth_required=True,
+            base_url=self.ca_base_url,
+        )
         if not isinstance(data, dict) or not data.get("authToken"):
             raise DeepalAPIError("S05 MQTT auth response did not include authToken.")
         token = str(data["authToken"])
@@ -2616,8 +2609,10 @@ class DeepalIntlClient:
             if packet_id is not None:
                 writer.write(build_puback_packet(packet_id))
                 await writer.drain()
-            if payload.get("r") != req_id:
-                continue
+            # The vehicle may answer the condition request directly or emit an
+            # asynchronous properties/report with its own request id. Both are
+            # valid sources as long as they decrypt and carry a newer report;
+            # the caller applies the timestamp check.
             params = self._s05_params_from_payload(payload, secret_key)
             if not params:
                 continue
@@ -2694,8 +2689,10 @@ class DeepalIntlClient:
                         ),
                         # QoS 1: the broker queues the wake for the vehicle
                         # session when the car is deeply asleep and offline,
-                        # instead of dropping it like a QoS 0 message.
+                        # instead of dropping it like a QoS 0 message. The
+                        # packet identifier is distinct from the SUBSCRIBE one.
                         qos=1,
+                        packet_id=WAKE_PACKET_ID,
                     )
                 )
                 await writer.drain()

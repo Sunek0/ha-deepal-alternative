@@ -162,7 +162,7 @@ four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
 | `power_on` | `bool?` | `None` | AC state; `None` when not reported (unknown, not off) |
 | `target_temperature_c` | `float?` | `None` | Target temperature (C) |
 | `inside_temperature_c` / `outside_temperature_c` | `float?` | `None` | Cabin / outside temperature (C) |
-| `humidity` | `float?` | `None` | Cabin humidity |
+| `humidity` | `float?` | `None` | Cabin humidity (%) |
 | `inside_pm25` | `float?` | `None` | PM2.5 |
 | `air_quality_level` | `int?` | `None` | Air quality level |
 | `defrost_on` | `bool?` | `None` | Front defrost; `None` when not reported |

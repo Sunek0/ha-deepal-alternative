@@ -76,13 +76,14 @@ acknowledges it; the car then reports fresh data within a few seconds. The wait 
 | --- | --- | --- |
 | `mqtt_keepalive` | `60` | Broker drops long idle waits; the SDK sends `PINGREQ` while waiting |
 | `mqtt_clean_start` | `True` | MQTT 5.0 clean-start flag, like the app |
-| `mqtt_config_fallback`, `mqtt_token_fallback` | `True` | Allow the recovered fallback endpoints when the primary CA route fails |
+| `mqtt_config_fallback` | `True` | Allow the CA `appGetCarConfFunc` fallback when `getConnConf` fails; the CA auth token has no cross-gateway fallback |
 | `mqtt_exchange_timeout` | `max(timeout, 20)` | Slow vehicles that need a longer read window |
 | `mqtt_token_ttl` | `60.0` | Reuse window of the account MQTT token across several vehicles |
 | `mqtt_tls_insecure` | `False` | **Diagnostics only**: disables certificate verification and logs a warning |
 | `mqtt_client_id`, `mqtt_username` | `None` | Override the broker identity resolved from the connection config |
 
-Authentication errors and rate limits are never masked by the fallbacks.
+Rate limits are never retried by the configuration fallback. A CA auth-token failure propagates
+(with its gateway code when present) so the coordinator can refresh the session and retry.
 
 ## 6. Reading the result
 

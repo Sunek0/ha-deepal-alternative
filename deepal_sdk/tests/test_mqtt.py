@@ -579,7 +579,7 @@ def test_normalize_s05_params_maps_telemetry():
         "airConditioningSetTemperature": 22.5,
         "airStatus": 1,
         "vehicleTemperature": 21.5,
-        "innerHumidity": 44,
+        "innerHumidity": 444,
         "frontDefrostStatus": 1,
         "airPurifierStatus": 3,
         "airConditioningHairRatings": 4,
@@ -654,7 +654,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["vehicleStatus"]["epbSts"] == 0
     assert condition["vehicleStatus"]["connectStatus"] == 1
     assert condition["hvac"]["insideTemp"] == 215
-    assert condition["hvac"]["insideHumidity"] == 44
+    assert condition["hvac"]["insideHumidity"] == 444
     assert condition["hvac"]["defrostStatus"] == 1
     assert condition["hvac"]["insideAirQualityLevel"] == 3
     assert condition["hvac"]["fanLevel"] == 4
@@ -866,17 +866,15 @@ def test_normalize_s05_params_maps_remain_charge_time_sentinel():
     assert normal["charge"]["remainChargeTime"] == 120
 
 
-def test_normalize_s05_params_normalizes_the_inner_humidity_scale():
-    percent = normalize_s05_params({"innerHumidity": 61})
-    tenths = normalize_s05_params({"innerHumidity": 453})
-    boundary = normalize_s05_params({"innerHumidity": 100})
+def test_normalize_s05_params_keeps_the_raw_inner_humidity():
+    raw = normalize_s05_params({"innerHumidity": 453})
+    boundary = normalize_s05_params({"innerHumidity": 1000})
     out_of_range = normalize_s05_params({"innerHumidity": 1200})
     absent = normalize_s05_params({})
 
-    assert percent["hvac"]["insideHumidity"] == 61
-    assert tenths["hvac"]["insideHumidity"] == 45.3
-    assert boundary["hvac"]["insideHumidity"] == 100
-    assert out_of_range["hvac"]["insideHumidity"] is None
+    assert raw["hvac"]["insideHumidity"] == 453
+    assert boundary["hvac"]["insideHumidity"] == 1000
+    assert out_of_range["hvac"]["insideHumidity"] == 1200
     assert absent["hvac"]["insideHumidity"] is None
 
 

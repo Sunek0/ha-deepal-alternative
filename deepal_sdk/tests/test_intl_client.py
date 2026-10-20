@@ -38,6 +38,7 @@ from deepal.mqtt import (
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_publish_packet,
+    normalize_s05_params,
     parse_publish,
     sda_condition_plan,
 )
@@ -46,7 +47,7 @@ from deepal.intl import (
     INTL_REFRESH_THROTTLE_SECONDS,
 )
 from deepal.endpoints import (
-    INTL_CA_APP_APIGW_GET_AUTH_TOKEN,
+    INTL_CA_GET_AUTH_TOKEN,
     INTL_CA_GET_CAR_CONF_FUNC,
     INTL_CA_GET_CONN_CONF,
     INTL_CHARGE_ADD_PLAN,
@@ -256,6 +257,43 @@ class _FakeMqttBroker:
 
     async def wait_closed(self) -> None:
         pass
+
+
+class _PushReportBroker(_FakeMqttBroker):
+    """Answer the condition request with an uncorrelated properties/report."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.push_timestamps: list[int] = []
+        self.push_count = 0
+
+    def _on_publish(self, first: int, body: bytes) -> None:
+        topic, payload, _packet_id = parse_publish(first, body)
+        if "properties/get/req" in topic:
+            self.condition_topic = topic
+            self.condition_payload = payload
+            self.condition_publishes.append(payload)
+            self.push_count += 1
+            push_timestamp = (
+                self.push_timestamps[self.push_count - 1]
+                if self.push_count <= len(self.push_timestamps)
+                else 7000
+            )
+            push_req_id = f"{payload['r']}-push"
+            push_params = {**self.params, "lastUpdatedTime": push_timestamp}
+            encrypted = aes_cbc_encrypt(
+                [{"service_code": self.service_code, "params": push_params}],
+                self.secret_key,
+                push_req_id,
+            )
+            self.reader.feed_data(
+                build_publish_packet(
+                    "$vdp/device-did/properties/report",
+                    {"r": push_req_id, "rs": encrypted},
+                )
+            )
+            return
+        super()._on_publish(first, body)
 
 
 def _install_fake_broker(monkeypatch, broker: _FakeMqttBroker) -> dict[str, Any]:
@@ -2624,6 +2662,46 @@ async def test_s05_wait_for_report_reuses_one_exchange(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_s05_wait_for_report_accepts_an_uncorrelated_push(monkeypatch):
+    broker = _PushReportBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=6000, interval=0.01, timeout=1.0
+    )
+    await client.close()
+
+    assert condition is not None
+    assert condition.last_updated_timestamp == 7000
+    assert broker.condition_payload is not None
+    assert condition.mqtt_raw_data["lastUpdatedTime"] == 7000
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_ignores_a_stale_push_and_keeps_polling(
+    monkeypatch,
+):
+    broker = _PushReportBroker(S05_BROKER_PARAMS)
+    broker.push_timestamps = [5000, 7000]
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=6000, interval=0.01, timeout=1.0
+    )
+    await client.close()
+
+    assert condition is not None
+    assert condition.last_updated_timestamp == 7000
+    assert len(broker.condition_publishes) == 2
+
+
+@pytest.mark.asyncio
 async def test_s05_wait_for_report_bootstraps_the_config_once(monkeypatch):
     stale_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 5000}
     fresh_params = {**S05_BROKER_PARAMS, "lastUpdatedTime": 7000}
@@ -2792,6 +2870,10 @@ async def test_wake_vehicle_publishes_wake_service(monkeypatch):
         packet for packet in broker.writes if b"properties/set/req" in packet
     )
     assert wake_packet[0] == 0x32  # PUBLISH with QoS 1
+    _wake_topic, _wake_body, wake_packet_id = parse_publish(
+        *_split_mqtt_packet(wake_packet)
+    )
+    assert wake_packet_id == 2
     assert broker.writes[-1] == b"\xe0\x02\x00\x00"
     assert broker.close_count == 1
 
@@ -3668,7 +3750,7 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
         "hvac": {
             "insideTemp": 215,
             "outsideTemp": 180,
-            "insideHumidity": 44.5,
+            "insideHumidity": 445,
             "insidePm25": 12,
             "insideAirQualityLevel": 3,
             "defrostStatus": 1,
@@ -3742,14 +3824,34 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [(61, 61.0), (453, 45.3), (-5, None), (1200, None)],
+    [
+        (0, 0.0),
+        (61, 6.1),
+        (100, 10.0),
+        (453, 45.3),
+        (1000, 100.0),
+        (-5, None),
+        (1001, None),
+        (None, None),
+    ],
 )
-def test_parse_condition_normalizes_the_humidity_scale(raw, expected):
+def test_parse_condition_converts_the_humidity_fixed_point_scale(raw, expected):
     client = _client(lambda request: httpx.Response(200, json={}))
 
     condition = client.parse_condition({"hvac": {"insideHumidity": raw}}, "car-1")
 
     assert condition.climate.humidity == expected
+
+
+def test_parse_condition_converts_mqtt_humidity_exactly_once():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    for raw, expected in ((61, 6.1), (453, 45.3), (1000, 100.0), (1001, None)):
+        condition = client.parse_condition(
+            normalize_s05_params({"innerHumidity": raw}), "car-1"
+        )
+
+        assert condition.climate.humidity == expected
 
 
 def test_parse_condition_maps_the_vehicle_location():
@@ -3811,6 +3913,50 @@ def test_parse_condition_maps_warnings_and_window_openings():
     assert condition.window_openings.front_left == 20
     assert condition.window_openings.rear_right == 92
     assert condition.window_openings.front_right is None
+
+
+def test_parse_condition_gates_warnings_when_the_rest_reports_off():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition(
+        {
+            "vehicleStatus": {"powerStatus": 0},
+            "warningLights": {"abs": True, "brake": True, "tpms": True},
+        },
+        "car-1",
+    )
+
+    assert condition.power_status == 0
+    assert condition.warnings.abs is None
+    assert condition.warnings.brake is None
+    assert condition.warnings.tpms is None
+
+
+def test_parse_condition_keeps_warnings_when_the_rest_reports_on():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition(
+        {
+            "vehicleStatus": {"powerStatus": 2},
+            "warningLights": {"abs": True, "brake": False},
+        },
+        "car-1",
+    )
+
+    assert condition.warnings.abs is True
+    assert condition.warnings.brake is False
+
+
+def test_parse_condition_keeps_warnings_without_a_power_state():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    condition = client.parse_condition(
+        {"warningLights": {"abs": True, "brake": False}},
+        "car-1",
+    )
+
+    assert condition.warnings.abs is True
+    assert condition.warnings.brake is False
 
 
 @pytest.mark.asyncio
@@ -5058,29 +5204,55 @@ async def test_mqtt_config_fallback_can_be_disabled():
 
 
 @pytest.mark.asyncio
-async def test_get_mqtt_token_falls_back_to_app_apigw():
-    paths = []
+async def test_get_mqtt_token_keeps_the_ca_error_without_an_sda_fallback():
+    requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        paths.append(request.url.path)
-        if request.url.path.startswith("/user-apigw/vot-connect-auth-center"):
-            return httpx.Response(
-                200,
-                json={"success": False, "code": "APIGW_-1_7_01_004", "msg": "nope"},
-            )
+        requests.append(request)
         return httpx.Response(
-            200, json={"success": True, "code": "0", "data": {"authToken": "tok-123"}}
+            200,
+            json={
+                "success": False,
+                "code": "APIGW_-1_7_01_004",
+                "msg": "gateway rejected the request",
+            },
         )
 
     client = _client(handler)
     client.access_token = "test_token_123"
     client.user_id = "user-1"
 
-    token = await client.get_mqtt_token()
+    with pytest.raises(DeepalAPIError) as err:
+        await client.get_mqtt_token()
     await client.close()
 
-    assert token == "tok-123"
-    assert paths[1] == INTL_CA_APP_APIGW_GET_AUTH_TOKEN
+    assert err.value.code == "APIGW_-1_7_01_004"
+    assert len(requests) == 1
+    assert requests[0].url.host == "ca-m.iov.changanauto.com.de"
+    assert requests[0].url.path == INTL_CA_GET_AUTH_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_get_mqtt_token_does_not_fallback_on_session_invalidation():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"success": False, "msg": "invalided token"},
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.user_id = "user-1"
+
+    with pytest.raises(DeepalSessionInvalidated):
+        await client.get_mqtt_token()
+    await client.close()
+
+    assert len(requests) == 1
+    assert requests[0].url.path == INTL_CA_GET_AUTH_TOKEN
 
 
 @pytest.mark.asyncio

@@ -70,7 +70,6 @@ DeepalIntlClient(
     tsp_token_source="access",
     environment="release_eu",
     mqtt_config_fallback=True,
-    mqtt_token_fallback=True,
     mqtt_client_id=None,
     mqtt_username=None,
     mqtt_keepalive=60,
@@ -100,7 +99,7 @@ DeepalIntlClient(
 | `app_version`, `app_type`, `device_type`, `os_version` | Declared app identity; defaults match the 1.12.0 app capture. Overridable for diagnostics. |
 | `tsp_token_source` | Which session value is sent as `X-Tsp-User-Token`/`X-VCS-User-Token`: `access` (default, verified live), `cac`, `cac_user_id` or `ca_user_id`. Diagnostic only. |
 | `environment` | Regional gateway set (see [Environments](#2-environments)). |
-| `mqtt_config_fallback`, `mqtt_token_fallback` | Allow the app's fallback endpoints when the CA bootstrap fails (see `mqtt-telemetry.md`). |
+| `mqtt_config_fallback` | Allow the CA `appGetCarConfFunc` fallback when `getConnConf` fails (see `mqtt-telemetry.md`). The CA auth-token request has no cross-gateway fallback. |
 | `mqtt_client_id`, `mqtt_username` | MQTT identity overrides; otherwise resolved from the connection config. |
 | `mqtt_keepalive` | MQTT keepalive seconds (default 60). |
 | `mqtt_clean_start` | MQTT clean-start flag (default `True`). |
@@ -316,7 +315,8 @@ Mapping:
 | `hvac.acStatus` | AC (`!= 0` on; absent stays unknown) | `climate.power_on` |
 | `hvac.remoteTemp` | Target temperature (tenths of degree) | `climate.target_temperature_c` |
 | `hvac.insideTemp` / `outsideTemp` | Cabin / outside temperature (tenths) | `climate.inside_temperature_c` / `outside_temperature_c` |
-| `hvac.insideHumidity` / `insidePm25` / `insideAirQualityLevel` | Air quality | `climate.humidity` / `inside_pm25` / `air_quality_level` |
+| `hvac.insideHumidity` | Cabin humidity (fixed-point tenths of a percent, `0-1000`) | `climate.humidity` |
+| `hvac.insidePm25` / `insideAirQualityLevel` | Air quality | `climate.inside_pm25` / `air_quality_level` |
 | `hvac.defrostStatus` / `fanLevel` | Defrost / fan | `climate.defrost_on` / `fan_level` |
 | `lamp.highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `leftTurn`, `rightTurn` | Exterior lamps | `lamps.*` |
 | `window.windows[0..3]` | Front left, front right, rear left, rear right | `windows.*_open` |
@@ -328,8 +328,8 @@ Notes:
 
 - Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
   valid snapshot.
-- `hvac.insideHumidity` from the S05 arrives either as a percentage (`61`) or as tenths of a
-  percent (`453`); values above 100 are divided by ten and anything outside 0-100 becomes unknown.
+- `hvac.insideHumidity` is a fixed-point integer from 0 to 1000 tenths of a percent (`453` is
+  45.3 %); values outside `0-1000` become unknown.
 - Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.

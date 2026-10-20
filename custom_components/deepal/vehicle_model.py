@@ -52,3 +52,19 @@ def supports_fuel(vehicle: Any, capabilities: Any) -> bool:
     if capabilities is None or not getattr(capabilities, "has_fuel", False):
         return False
     return not is_bev(vehicle)
+
+
+def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:
+    """Return whether the vehicle supports setting the AC charge limit.
+
+    Capability-first: a vehicle whose function configuration reports a
+    charge-limit code gets the control even when its model is otherwise
+    excluded (the S05 PHEV). The S05 keeps losing it when the capabilities are
+    unavailable or report no charge-limit code, because the signed charge_max
+    command is accepted without changing the limit on that model (verified on
+    the S05 EV). Every other model keeps the control, so a missing capability
+    list never removes it.
+    """
+    if capabilities is not None and getattr(capabilities, "has_charge_limit", False):
+        return True
+    return not is_s05(vehicle)

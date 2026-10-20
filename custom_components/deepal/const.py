@@ -68,6 +68,7 @@ DEFAULT_ENABLE_LOCATION = False
 WAKE_STALE_AFTER = 120  # seconds since the last report before waking
 WAKE_COOLDOWN = 300  # seconds between wakes per vehicle
 WAKE_REPORT_TIMEOUT = 60  # seconds to wait for the fresh report after a wake
+WAKE_BEFORE_COMMAND_TIMEOUT = 30  # seconds to wait before a PIN command
 
 # Device Info
 MANUFACTURER = "Changan Auto"

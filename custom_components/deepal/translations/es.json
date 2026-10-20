@@ -274,9 +274,6 @@
       "seat_ventilation_level_rear_right": {
         "name": "Nivel de ventilación del asiento trasero derecho"
       },
-      "steering_wheel_heater_level": {
-        "name": "Nivel de calefacción del volante"
-      },
       "speed": {
         "name": "Velocidad"
       },
@@ -308,8 +305,8 @@
       "charge_mode": {
         "name": "Tipo de carga",
         "state": {
-          "ac": "AC",
-          "dc": "DC"
+          "ac": "CA",
+          "dc": "CC"
         }
       },
       "charge_current": {
@@ -338,6 +335,9 @@
       },
       "fuel_range": {
         "name": "Autonomía de combustible"
+      },
+      "fuel_volume": {
+        "name": "Volumen de combustible"
       },
       "fuel_tank_capacity": {
         "name": "Capacidad del depósito de combustible"
@@ -391,31 +391,31 @@
         "name": "Cargador conectado"
       },
       "doors_lock_state": {
-        "name": "Estado del bloqueo"
+        "name": "Cierre centralizado"
       },
       "tire_alarm_front_left": {
-        "name": "Alarma del neumático delantero izquierdo"
+        "name": "Testigo de presión neumático delantero izquierdo"
       },
       "tire_alarm_front_right": {
-        "name": "Alarma del neumático delantero derecho"
+        "name": "Testigo de presión neumático delantero derecho"
       },
       "tire_alarm_rear_left": {
-        "name": "Alarma del neumático trasero izquierdo"
+        "name": "Testigo de presión neumático trasero izquierdo"
       },
       "tire_alarm_rear_right": {
-        "name": "Alarma del neumático trasero derecho"
+        "name": "Testigo de presión neumático trasero derecho"
       },
       "window_open_front_left": {
-        "name": "Ventanilla delantera izquierda abierta"
+        "name": "Ventanilla delantera izquierda"
       },
       "window_open_front_right": {
-        "name": "Ventanilla delantera derecha abierta"
+        "name": "Ventanilla delantera derecha"
       },
       "window_open_rear_left": {
-        "name": "Ventanilla trasera izquierda abierta"
+        "name": "Ventanilla trasera izquierda"
       },
       "window_open_rear_right": {
-        "name": "Ventanilla trasera derecha abierta"
+        "name": "Ventanilla trasera derecha"
       },
       "steering_wheel_heater": {
         "name": "Calefacción del volante"
@@ -465,12 +465,6 @@
       "hood": {
         "name": "Capó"
       },
-      "driver_door_unlocked": {
-        "name": "Puerta del conductor desbloqueada"
-      },
-      "passenger_door_unlocked": {
-        "name": "Puerta del acompañante desbloqueada"
-      },
       "dc_gun_connected": {
         "name": "Pistola DC conectada"
       },
@@ -508,34 +502,34 @@
         "name": "Recirculación de aire"
       },
       "rear_fog_lamp": {
-        "name": "Antiniebla trasera"
+        "name": "Luz antiniebla trasera"
       },
       "warning_12v_battery": {
-        "name": "Aviso batería de 12 V"
+        "name": "Testigo de batería de 12 V"
       },
       "warning_tpms": {
-        "name": "Aviso presión de neumáticos"
+        "name": "Testigo de presión de neumáticos"
       },
       "warning_abs": {
-        "name": "Aviso ABS"
+        "name": "Testigo de ABS"
       },
       "warning_brake_fluid": {
-        "name": "Aviso líquido de frenos"
+        "name": "Testigo de líquido de frenos"
       },
       "warning_brake": {
-        "name": "Aviso frenos"
+        "name": "Testigo de frenos"
       },
       "warning_eps": {
-        "name": "Aviso dirección asistida"
+        "name": "Testigo de dirección asistida"
       },
       "warning_power_limit": {
-        "name": "Aviso potencia limitada"
+        "name": "Testigo de potencia limitada"
       },
       "warning_power_system": {
-        "name": "Aviso sistema de propulsión"
+        "name": "Testigo de sistema de propulsión"
       },
       "warning_traction_battery_low": {
-        "name": "Aviso batería de tracción baja"
+        "name": "Testigo de batería de tracción baja"
       }
     },
     "button": {
@@ -554,7 +548,7 @@
     },
     "climate": {
       "cabin_climate": {
-        "name": "Climatización del habitáculo"
+        "name": "Climatización"
       }
     },
     "cover": {

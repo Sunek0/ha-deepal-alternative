@@ -22,6 +22,7 @@ from homeassistant.const import (
     UnitOfVolume,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -44,7 +45,7 @@ from .deepal.mqtt import (
     charge_state,
 )
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05, supports_fuel
+from .vehicle_model import is_s05, supports_charge_limit, supports_fuel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,7 +98,21 @@ S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
 S05_ENUM_SENSOR_KEYS = frozenset({"charge_status"})
 
 # Fuel sensors exist only for fuel vehicles (see supports_fuel).
-FUEL_SENSOR_KEYS = frozenset({"fuel_level", "fuel_range", "fuel_tank_capacity"})
+FUEL_SENSOR_KEYS = frozenset(
+    {"fuel_level", "fuel_range", "fuel_volume", "fuel_tank_capacity"}
+)
+
+# Keys retired from the platform. Their entity-registry entries are removed on
+# setup so they do not linger as orphaned entities.
+REMOVED_SENSOR_KEYS = frozenset({"steering_wheel_heater_level"})
+
+
+def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
+    """Remove entity-registry entries for keys retired from this platform."""
+    for key in REMOVED_SENSOR_KEYS:
+        unique_id = f"deepal_{vehicle.car_id}_{key}"
+        if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
+            registry.async_remove(entity_id)
 
 
 def format_hours_minutes(minutes: int | None) -> str | None:
@@ -151,21 +166,27 @@ def build_sensors(
                 DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level")
             )
 
-        entities.append(DeepalSteeringWheelHeaterLevelSensor(coordinator, vehicle))
+        capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
+        fuel = supports_fuel(vehicle, capabilities)
+        charge_limit = supports_charge_limit(vehicle, capabilities)
 
-        fuel = supports_fuel(
-            vehicle, coordinator.vehicle_capabilities(vehicle.car_id)
-        )
+        def supported(description: DeepalSensorDescription) -> bool:
+            if description.key in FUEL_SENSOR_KEYS and not fuel:
+                return False
+            if not s05:
+                return True
+            if description.key in S05_ENUM_SENSOR_KEYS:
+                return False
+            if description.key not in S05_UNSUPPORTED_SENSOR_KEYS:
+                return True
+            # The S05 normally has no charge-limit telemetry, but the PHEV
+            # reports it in the app condition and its capability enables it.
+            return description.key == "charge_limit" and charge_limit
 
         entities.extend(
             DeepalSensor(coordinator, vehicle, description)
             for description in SENSORS
-            if not (
-                s05
-                and description.key
-                in (S05_UNSUPPORTED_SENSOR_KEYS | S05_ENUM_SENSOR_KEYS)
-            )
-            and not (description.key in FUEL_SENSOR_KEYS and not fuel)
+            if supported(description)
         )
 
     return entities
@@ -178,10 +199,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up Deepal sensors based on a config entry."""
     coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
 
     entities: list[SensorEntity] = []
 
     for vehicle in coordinator.vehicles:
+        _remove_retired_entities(registry, vehicle)
         entities.extend(build_sensors(coordinator, vehicle))
 
     async_add_entities(entities)
@@ -330,6 +353,7 @@ class DeepalSeatLevelSensor(DeepalBaseSensor):
     """Seat heating or ventilation level sensor for international vehicles."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self,
@@ -351,23 +375,6 @@ class DeepalSeatLevelSensor(DeepalBaseSensor):
         if not cond:
             return None
         return getattr(getattr(cond.seats, self._position), self._kind)
-
-
-class DeepalSteeringWheelHeaterLevelSensor(DeepalBaseSensor):
-    """Steering wheel heater level sensor for international vehicles."""
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
-        super().__init__(coordinator, vehicle)
-        self._attr_unique_id = f"deepal_{vehicle.car_id}_steering_wheel_heater_level"
-        self._attr_translation_key = "steering_wheel_heater_level"
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the steering wheel heater level."""
-        cond = self.coordinator.data.get(self._car_id)
-        return cond.climate.steering_wheel_heater_level if cond else None
 
 
 class DeepalChargeStatusSensor(DeepalBaseSensor):
@@ -644,6 +651,14 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
+    ),
+    DeepalSensorDescription(
+        key="fuel_volume",
+        name="Fuel Volume",
+        value_fn=lambda cond, vehicle: cond.fuel.volume_l,
+        device_class=SensorDeviceClass.VOLUME,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfVolume.LITERS,
     ),
     DeepalSensorDescription(
         key="fuel_tank_capacity",

@@ -75,6 +75,10 @@ remains available on both.
   sleeping vehicle with the same service the official app uses and waits for a fresh report; wakes
   are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
   never wakes the car.
+- While a charging session is open, the integration reads only the charging vehicles every 10
+  minutes and stops as soon as the session closes. It uses the same wake option, per-vehicle
+  cooldown and condition paths as the refresh button, and it does not change the configured scan
+  interval.
 - Waking the vehicle can take up to 20 seconds before it reports again.
 - REST-backed and `SDA-MQTT` vehicles keep using the signed condition request; the MQTT wake is only
   available for CA/MQTT vehicles.

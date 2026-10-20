@@ -10,7 +10,7 @@ from .const import PERCENTAGE_UNIT
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05
+from .vehicle_model import supports_charge_limit
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
@@ -21,22 +21,6 @@ SEAT_FUNCTIONS = {
     "heating": ("control_seats_heat", "heating_level"),
     "ventilation": ("control_seats_wind", "ventilation_level"),
 }
-
-
-def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:
-    """Return whether the vehicle supports setting the AC charge limit.
-
-    Capability-first: a vehicle whose function configuration reports a
-    charge-limit code gets the control even when its model is otherwise
-    excluded (the S05 PHEV). The S05 keeps losing it when the capabilities
-    are unavailable or report no charge-limit code, because the signed
-    charge_max command is accepted without changing the limit on that model
-    (verified on the S05 EV). Every other model keeps the control, so a
-    missing capability list never removes it.
-    """
-    if capabilities is not None and getattr(capabilities, "has_charge_limit", False):
-        return True
-    return not is_s05(vehicle)
 
 
 def build_control_numbers(

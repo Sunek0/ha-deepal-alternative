@@ -39,9 +39,16 @@ S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
 # support the front defrost signal, and its airbag warning bit keeps toggling on
 # healthy cars while the coolant bit is a fuel-vehicle signal, so both warning
 # entities were retired again on 2026-10-18 (their codes stay visible in the
-# unmapped-parameter diagnostics).
+# unmapped-parameter diagnostics). The per-door unlocked entities are retired
+# in favour of the central locking state.
 REMOVED_BINARY_SENSOR_KEYS = frozenset(
-    {"defrost", "warning_airbag", "warning_coolant_temperature"}
+    {
+        "defrost",
+        "warning_airbag",
+        "warning_coolant_temperature",
+        "driver_door_unlocked",
+        "passenger_door_unlocked",
+    }
 )
 
 
@@ -207,6 +214,7 @@ class DeepalSteeringWheelHeaterBinarySensor(DeepalBaseBinarySensor):
     """Steering wheel heater binary sensor for international vehicles."""
 
     _attr_device_class = BinarySensorDeviceClass.HEAT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
         super().__init__(coordinator, vehicle)
@@ -253,7 +261,7 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         key="engine",
         name="Engine",
         value_fn=lambda cond, vehicle: cond.engine_on,
-        device_class=BinarySensorDeviceClass.RUNNING,
+        device_class=BinarySensorDeviceClass.POWER,
     ),
     DeepalBinarySensorDescription(
         key="climate_on",
@@ -266,6 +274,7 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         name="Cloud Connection",
         value_fn=lambda cond, vehicle: cond.connected,
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
         key="high_beam",
@@ -348,18 +357,6 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         device_class=BinarySensorDeviceClass.DOOR,
     ),
     DeepalBinarySensorDescription(
-        key="driver_door_unlocked",
-        name="Driver Door Unlocked",
-        value_fn=lambda cond, vehicle: _not_locked(cond.doors.driver_locked),
-        device_class=BinarySensorDeviceClass.LOCK,
-    ),
-    DeepalBinarySensorDescription(
-        key="passenger_door_unlocked",
-        name="Passenger Door Unlocked",
-        value_fn=lambda cond, vehicle: _not_locked(cond.doors.passenger_locked),
-        device_class=BinarySensorDeviceClass.LOCK,
-    ),
-    DeepalBinarySensorDescription(
         key="ac_gun_connected",
         name="AC Gun Connected",
         value_fn=lambda cond, vehicle: cond.battery.ac_gun_connected,
@@ -388,12 +385,14 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         name="Front Left Seat Heating",
         value_fn=_seat_level_on("front_left", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_heating",
         name="Front Right Seat Heating",
         value_fn=_seat_level_on("front_right", "heating_level"),
         device_class=BinarySensorDeviceClass.HEAT,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
         key="rear_left_seat_heating",
@@ -412,12 +411,14 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         name="Front Left Seat Ventilation",
         value_fn=_seat_level_on("front_left", "ventilation_level"),
         device_class=None,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
         key="front_right_seat_ventilation",
         name="Front Right Seat Ventilation",
         value_fn=_seat_level_on("front_right", "ventilation_level"),
         device_class=None,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     DeepalBinarySensorDescription(
         key="key_battery_low",

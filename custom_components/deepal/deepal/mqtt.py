@@ -1279,6 +1279,8 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
 # the properties/set/req topic makes the car publish a fresh report in ~20 s.
 WAKE_SERVICE_CODE = "TxWakeup"
 WAKE_COMMAND_CODE = "Cnr_ReWakeup"
+#: Packet identifier for the QoS 1 wake PUBLISH. The SUBSCRIBE exchange uses 1.
+WAKE_PACKET_ID = 2
 
 
 def wake_request_payload(
@@ -1402,21 +1404,6 @@ def _warning_light(value: Any, power_status: Optional[int]) -> Optional[bool]:
     if power_status == 0:
         return None
     return _as_bool(value)
-
-
-def _humidity_percent(value: Any) -> Optional[float]:
-    """Return the cabin humidity as a percentage.
-
-    The S05 reports ``innerHumidity`` either as a percentage (``61``) or as
-    tenths of a percent (``453``) depending on the moment, so a value above 100
-    is divided by ten. Values outside 0 to 100 after that are unknown.
-    """
-    humidity = _as_float(value)
-    if humidity is None:
-        return None
-    if humidity > 100:
-        humidity /= 10
-    return humidity if 0 <= humidity <= 100 else None
 
 
 def _first(params: dict[str, Any], *keys: str) -> Any:
@@ -1572,7 +1559,11 @@ def _to_millis(value: Any) -> int:
 
 
 def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
-    """Map S05 MQTT parameter names into the shared international condition shape."""
+    """Map S05 MQTT parameter names into the shared international condition shape.
+
+    Values keep the REST units (tenths for temperatures and humidity) so
+    ``parse_condition`` converts them exactly once.
+    """
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     charge_status = _as_int(params.get("ChrgSts"))
     ac_current, dc_current, active_current = charge_currents(
@@ -1611,7 +1602,8 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
             if _as_float(params.get("vehicleTemperature")) is not None
             else None,
-            "insideHumidity": _humidity_percent(params.get("innerHumidity")),
+            # Raw tenths of a percent; ``parse_condition`` applies the scale.
+            "insideHumidity": _as_float(params.get("innerHumidity")),
             "remoteTemp": _as_float(params.get("airConditioningSetTemperature")) * 10
             if _as_float(params.get("airConditioningSetTemperature")) is not None
             else None,
