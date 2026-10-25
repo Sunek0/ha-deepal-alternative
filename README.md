@@ -55,13 +55,14 @@ remains available on both.
   "Charging" sensor is on only for the charging states, the charge current is taken from the
   active charger and validated (`0-600 A`), and the power state is a translated off/on sensor.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
-  fields, the dashboard warning lights (12 V battery, tire pressure, ABS, brake fluid,
-  brakes, power steering, power limit, power system and traction battery low), the key fob
-  battery, the air recirculation state and the rear fog lamp.
+  fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
+  brakes, power steering, power limit, power system, traction battery low and coolant
+  temperature), the key fob battery, the air recirculation state and the rear fog lamp.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
-- Climate target temperature and fan level, the license plate and per-window opening-degree sensors
-  (the opening sensors ship disabled by default because the scale is not confirmed).
+- Climate target temperature, outside temperature (when the vehicle reports it), fan level, the
+  license plate and per-window opening-degree sensors (the opening sensors ship disabled by default
+  because the scale is not confirmed).
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - **Opt-in vehicle location**: enable *Fetch the vehicle location* in the options to request and
   expose the car position as a device tracker. European vehicles currently report no location, so
@@ -106,6 +107,9 @@ remains available on both.
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
   (S05, S07, E07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
+- The panel and dashboard cards prefer the official per-vehicle layered pack when the integration
+  can download and validate it, with the bundled art as a per-category fallback; animations stay
+  on the bundled WebM files.
 
 ### Using the dashboard, the panel and the cards
 
@@ -130,19 +134,19 @@ HACS cards, no helpers and no Lovelace resources to configure.
 2. Open **Deepal** in the sidebar; with several cars, switch them with the header selector. The
    panel discovers the vehicles and their entities from the Home Assistant registries, so any
    name, area or language works.
-3. The vitals strip (battery, range, general closure and freshness) stays on top and the tabs are
-   **Status** (layered picture of the car's model, state chips, the controls, tire pressures,
-   health warnings while one is active and the energy block on fuel cars), **Driving** on the
-   models that report it, **Climate** and **Charging**.
+3. The vitals strip (battery, range, central locking and freshness) stays on top and the tabs are
+   **Status** (layered picture of the car's model rotated 90° counter-clockwise and cropped to a
+   750:550 frame, the central-locking chip, the controls, tire pressures, health warnings while one
+   is active and the energy block on fuel cars), **Driving** on the models that report it,
+   **Climate** and **Charging**.
    Controls that need the remote control PIN (lock, windows, trunk) simply do not appear without
    it, and missing optional entities hide their own controls.
 
 **Cards** — for your own dashboards:
 
 1. **Edit dashboard → Add card** and pick **Deepal vehicle** (complete, with the panel's views and
-   controls) or **Deepal vehicle (compact)** (vitals with the closure, the vehicle picture with the
-   opening chips, a climate control, quick actions and a charging strip), then select the car in
-   the form.
+   controls) or **Deepal vehicle (compact)** (vitals with the closure, the state-aware vehicle
+   picture, a climate control, quick actions and a charging strip), then select the car in the form.
 2. By hand:
    ```yaml
    type: custom:deepal-card        # or custom:deepal-compact-card
@@ -165,6 +169,10 @@ Full walkthrough and troubleshooting:
   keys and the per-vehicle capability codes reported by the app backend. Credentials, personal
   identifiers, location values and the device id embedded in MQTT topics are redacted at any
   nesting depth, without distinguishing letter case.
+- Optional **full diagnostics capture** with every REST and MQTT exchange, stored as JSONL in
+  `/config/deepal_diagnostics/<entry_id>/`. The options form reports the active segment, a signed
+  download link and the action selector; files rotate at 10 MB and the five newest are kept. This
+  is the artifact to attach to an issue when the standard report is not enough.
 
 ## Recommended setup: use a secondary account
 
@@ -219,10 +227,18 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
-- **Scan interval**, **API logging** and **regional environment**: polling cadence and
-  troubleshooting helpers. Leave the defaults unless you are debugging. Every cycle reads each
-  vehicle over MQTT plus the app condition, so an account with several cars can raise the interval
-  (for example to 5 minutes) to make fewer cloud requests.
+- **Scan interval**, **API logging**, **full diagnostics capture** and **regional environment**:
+  polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging. Every
+  cycle reads each vehicle over MQTT plus the app condition, so an account with several cars can
+  raise the interval (for example to 5 minutes) to make fewer cloud requests.
+- **Full diagnostics capture**: writes every REST request/response and MQTT exchange to
+  `/config/deepal_diagnostics`, under the integration's **Diagnostics** section in the same options
+  form. The option is off by default. The section shows the active file and a signed download link,
+  and its action selector can start a new file, delete all files or refresh the link. Deleting
+  requires the confirmation checkbox. The files are redacted (tokens, keys, VIN, email, phone, PIN,
+  identifiers and location hidden), rotate at 10 MB and keep the five most recent segments. The
+  capture grows while it is enabled, so disable it when you have the file; the rotation keeps the
+  disk use bounded.
 
 ## Automation examples
 

@@ -2,6 +2,8 @@
 
 import logging
 import time
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Optional
 import httpx
 
@@ -42,12 +44,24 @@ class DeepalClient:
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 30.0,
         httpx_client: Optional[httpx.AsyncClient] = None,
+        on_exchange: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.access_token = access_token
         self.timeout = timeout
+        self.on_exchange = on_exchange
         self._external_client = httpx_client is not None
         self._client = httpx_client or httpx.AsyncClient(timeout=timeout)
+
+    def _emit_exchange(self, event: dict[str, Any]) -> None:
+        """Deliver one structured exchange event to the optional callback."""
+        callback = getattr(self, "on_exchange", None)
+        if callback is None:
+            return
+        try:
+            callback(event)
+        except Exception:  # noqa: BLE001 - diagnostics must never break a call
+            logger.exception("Deepal exchange callback failed")
 
     async def close(self) -> None:
         """Close the underlying HTTP client if managed internally."""
@@ -86,6 +100,8 @@ class DeepalClient:
 
         url = f"{self.base_url}{path}" if path.startswith("/") else path
         headers = self._get_headers()
+        method = method.upper()
+        started = time.monotonic()
 
         try:
             response = await self._client.request(
@@ -97,10 +113,43 @@ class DeepalClient:
                 timeout=self.timeout,
             )
         except httpx.RequestError as exc:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "error",
+                    "client": "sda",
+                    "method": method,
+                    "path": path,
+                    "url": url,
+                    "query": params,
+                    "request": json_data,
+                    "headers": headers,
+                    "error": str(exc),
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             logger.error("Network error requesting %s: %s", url, exc)
             raise DeepalConnectionError(f"Failed to connect to Deepal API: {exc}") from exc
 
         if response.status_code == 429:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "sda",
+                    "method": method,
+                    "path": path,
+                    "url": url,
+                    "query": params,
+                    "request": json_data,
+                    "headers": headers,
+                    "status": response.status_code,
+                    "response": response.text[:2000],
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             raise DeepalRateLimitError(
                 "Deepal rate limit: HTTP 429.",
                 status_code=429,
@@ -108,15 +157,68 @@ class DeepalClient:
             )
 
         if response.status_code in (401, 403):
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "sda",
+                    "method": method,
+                    "path": path,
+                    "url": url,
+                    "query": params,
+                    "request": json_data,
+                    "headers": headers,
+                    "status": response.status_code,
+                    "response": response.text[:2000],
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             raise DeepalAuthError("Authentication token expired or invalid.")
 
         try:
             data = response.json()
         except ValueError as exc:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "sda",
+                    "method": method,
+                    "path": path,
+                    "url": url,
+                    "query": params,
+                    "request": json_data,
+                    "headers": headers,
+                    "status": response.status_code,
+                    "response": response.text[:2000],
+                    "error": "invalid_json",
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             raise DeepalAPIError(
                 f"Invalid JSON response: {response.text[:200]}",
                 status_code=response.status_code,
             ) from exc
+
+        self._emit_exchange(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "kind": "rest",
+                "event": "response",
+                "client": "sda",
+                "method": method,
+                "path": path,
+                "url": url,
+                "query": params,
+                "request": json_data,
+                "headers": headers,
+                "status": response.status_code,
+                "response": data,
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
+            }
+        )
 
         if not response.is_success or (isinstance(data, dict) and data.get("code") not in (0, 200, "0", "200", None)):
             code = data.get("code") if isinstance(data, dict) else response.status_code
@@ -157,9 +259,12 @@ class DeepalClient:
 
         vehicles = []
         for c in car_list:
+            car_id = c.get("car_id") or c.get("carId") or c.get("id")
+            if not car_id:
+                continue
             vehicles.append(
                 Vehicle(
-                    car_id=str(c.get("car_id") or c.get("carId") or c.get("id")),
+                    car_id=str(car_id),
                     vin=c.get("vin") or "",
                     series_name=c.get("series_name") or c.get("carModelName") or "Deepal S05",
                     car_name=c.get("car_name") or c.get("nickName"),

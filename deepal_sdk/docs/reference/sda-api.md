@@ -44,6 +44,7 @@ DeepalClient(
     base_url="https://pre-acenter.sda.changan.com.cn",
     timeout=15.0,
     httpx_client=None,
+    on_exchange=None,
 )
 ```
 
@@ -51,6 +52,9 @@ DeepalClient(
   one raise `DeepalAuthError` before any request.
 - `httpx_client` injects an `httpx.AsyncClient`; the SDK uses it as-is and never closes it.
   Otherwise the client is created in the constructor and `close()` releases it.
+- `on_exchange` is an optional synchronous callback that receives one structured event per REST
+  exchange, with the same envelope as the international client. It is never called for MQTT
+  because this client is REST-only. Redact the event before persisting it.
 - The client is an async context manager (`async with DeepalClient(...) as client:`).
 
 ## 3. Authentication

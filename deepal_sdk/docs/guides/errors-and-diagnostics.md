@@ -83,7 +83,58 @@ import logging
 logging.getLogger("deepal_sdk").setLevel(logging.DEBUG)
 ```
 
-## 5. Keeping secrets out of your logs
+## 5. Structured exchange capture
+
+`on_exchange` gives your application the same structured events the Home Assistant integration uses
+for its full diagnostics capture:
+
+```python
+import asyncio
+import json
+from pathlib import Path
+
+from deepal import DeepalIntlClient
+from deepal.redact import redact_for_log, redact_mqtt_request_id, redact_topic
+
+
+def redact(event):
+    safe = redact_for_log(event, max_string_length=20_000)
+    # The SDK already masks keys; these two helpers cover MQTT values whose
+    # device identifier is embedded in a string instead of a key.
+    if isinstance(safe, dict):
+        for key in ("r", "request_id", "requestId", "reqId", "service_req_id"):
+            if key in safe:
+                safe[key] = redact_mqtt_request_id(safe[key])
+        if isinstance(safe.get("topic"), str):
+            safe["topic"] = redact_topic(safe["topic"])
+    return safe
+
+
+async def main():
+    with Path("deepal-events.jsonl").open("a", encoding="utf-8") as handle:
+        def record(event):
+            handle.write(json.dumps(redact(event), ensure_ascii=False) + "\n")
+
+        async with DeepalIntlClient(country="ES", on_exchange=record) as client:
+            await client.get_vehicles()
+
+
+asyncio.run(main())
+```
+
+- REST events have `kind="rest"` and include the method, path, status, request/response and
+  duration.
+- MQTT events have `kind="mqtt"` and include `session_open`, `session_close`, `publish`,
+  `receive`, `result`, `timeout` and `error` events with topics, payloads and decoded parameters.
+- The callback is synchronous: queue the event or return quickly. The example writes directly for
+  brevity; in production, hand the event to a queue and let a writer flush it. The SDK does not
+  await the callback.
+- A callback exception is logged but never changes the request result.
+- Raw events can contain credentials, personal identifiers and location. Always redact them before
+  saving or sharing them. `enable_api_logging=True` is still the simplest option for a redacted
+  human-readable log.
+
+## 6. Keeping secrets out of your logs
 
 - The SDK never logs credential values itself, but your application can: catch the exceptions and
   log `err.code` / `err.status_code`, not the payloads you passed in.

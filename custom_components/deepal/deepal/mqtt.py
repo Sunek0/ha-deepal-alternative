@@ -558,13 +558,21 @@ def _classify_topic(
     if kind in COMMAND_MSG_TYPES:
         return "command"
     if "loginout" in lowered:
-        if "/client/" in lowered or direction == "pub":
+        if (
+            "/client/" in lowered
+            or direction == "pub"
+            or lowered.endswith("/req")
+        ):
             return "login_publish"
         return "login_subscribe"
     if kind in {"loginout", "login"}:
         return "login_publish" if direction == "pub" else "login_subscribe"
     if "properties" in lowered:
-        if lowered.endswith("/res") or direction == "sub":
+        if direction == "sub" and not lowered.endswith("/req"):
+            return "properties_subscribe"
+        if direction != "pub" and (
+            lowered.endswith("/res") or lowered.endswith("/report")
+        ):
             return "properties_subscribe"
         return "properties_publish"
     if kind in {"properties", "property", "car_condition"}:
@@ -681,11 +689,25 @@ def resolve_mqtt_topics(
             continue
         if kind == "command":
             continue
+        if kind == "event":
+            # The broker exposes the event stream as a subTopic (``events/up``
+            # or ``<did>/<did>/server/event``); ``events/down`` is the client's
+            # publish topic and subscribing to it is rejected as not
+            # authorized. Only accept an event topic the configuration lists as
+            # a subscription; the template fallback covers the rest.
+            lowered = topic.lower()
+            is_subscription = direction == "sub" or (
+                direction is None
+                and (lowered.endswith("/up") or "/server/event" in lowered)
+            )
+            if is_subscription:
+                selected.setdefault(kind, topic)
+                subscriptions.append(topic)
+            continue
         selected.setdefault(kind, topic)
         if direction == "sub" or kind in {
             "login_subscribe",
             "properties_subscribe",
-            "event",
         }:
             subscriptions.append(topic)
 
@@ -862,10 +884,24 @@ def sda_session_topics(
 
 
 def parse_suback(first: int, body: bytes) -> tuple[Optional[int], list[int]]:
-    """Parse a SUBACK into ``(packet_id, reason_codes)``."""
+    """Parse an MQTT 5.0 SUBACK into ``(packet_id, reason_codes)``.
+
+    The SUBACK carries MQTT 5 properties between the packet identifier and the
+    reason codes. Reading the payload from ``body[2:]`` treats the properties
+    length as the first reason code and shifts every topic, so the properties
+    block must be skipped explicitly.
+    """
     if first >> 4 != 9 or len(body) < 3:
         return None, []
-    return int.from_bytes(body[:2], "big"), list(body[2:])
+    packet_id = int.from_bytes(body[:2], "big")
+    try:
+        properties_length, offset = read_variable_byte_integer(body, 2)
+    except ValueError:
+        return None, []
+    offset += properties_length
+    if offset > len(body):
+        return None, []
+    return packet_id, list(body[offset:])
 
 
 def _b64decode(value: str) -> bytes:
@@ -1006,6 +1042,11 @@ def login_request_payload(
     return payload
 
 
+def condition_request_services() -> list[dict[str, Any]]:
+    """Return the plaintext services carried by a legacy condition request."""
+    return [{"service_code": "car_condition", "params": {"fetchPropertyType": 0}}]
+
+
 def condition_request_payload(
     device_did: str,
     login_did: str,
@@ -1019,7 +1060,7 @@ def condition_request_payload(
     time_type: Optional[int] = None,
 ) -> dict[str, Any]:
     """Build the MQTT ``properties/get/req`` message that returns the condition."""
-    services = [{"service_code": "car_condition", "params": {"fetchPropertyType": 0}}]
+    services = condition_request_services()
     identifiers = dict(basic_info or {})
     identifiers.setdefault("ruid", login_did)
     payload: dict[str, Any] = {
@@ -1036,6 +1077,31 @@ def condition_request_payload(
     }
     _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
     return payload
+
+
+def sda_condition_request_services(
+    *,
+    condition_query_type: int = 0,
+    signal_list: Optional[list[str]] = None,
+    service_code: str = SDA_CONDITION_SERVICE,
+    command_code: str = SDA_CONDITION_COMMAND,
+    strategy_code: Optional[str] = None,
+    strategy_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return the plaintext services carried by an SDA condition request."""
+    params: dict[str, Any] = {"ConditionQueryType": condition_query_type}
+    if signal_list:
+        params["SignalList"] = list(signal_list)
+    service: dict[str, Any] = {
+        "service_code": service_code,
+        "command_code": command_code,
+        "params": params,
+    }
+    if strategy_code:
+        service["strategy_code"] = strategy_code
+    if strategy_id:
+        service["strategy_id"] = strategy_id
+    return [service]
 
 
 def sda_condition_request_payload(
@@ -1064,18 +1130,14 @@ def sda_condition_request_payload(
     ``ConditionQueryType`` plus an optional ``SignalList``. When the function
     tree provides service/command/strategy values, they replace the defaults.
     """
-    params: dict[str, Any] = {"ConditionQueryType": condition_query_type}
-    if signal_list:
-        params["SignalList"] = list(signal_list)
-    service: dict[str, Any] = {
-        "service_code": service_code,
-        "command_code": command_code,
-        "params": params,
-    }
-    if strategy_code:
-        service["strategy_code"] = strategy_code
-    if strategy_id:
-        service["strategy_id"] = strategy_id
+    services = sda_condition_request_services(
+        condition_query_type=condition_query_type,
+        signal_list=signal_list,
+        service_code=service_code,
+        command_code=command_code,
+        strategy_code=strategy_code,
+        strategy_id=strategy_id,
+    )
     identifiers = dict(basic_info or {})
     identifiers.setdefault("ruid", login_did)
     payload: dict[str, Any] = {
@@ -1088,7 +1150,7 @@ def sda_condition_request_payload(
         "tf": 0,
         "dt": iso_now(),
         "b": _filter_basic_info(identifiers),
-        "sers": aes_cbc_encrypt([service], secret_key, req_id),
+        "sers": aes_cbc_encrypt(services, secret_key, req_id),
     }
     _set_optional_fields(payload, rt=rt, ms=ms, st=st, time_type=time_type)
     return payload
@@ -1283,6 +1345,18 @@ WAKE_COMMAND_CODE = "Cnr_ReWakeup"
 WAKE_PACKET_ID = 2
 
 
+def wake_request_services(req_id: str) -> list[dict[str, Any]]:
+    """Return the plaintext services carried by a wake request."""
+    return [
+        {
+            "service_code": WAKE_SERVICE_CODE,
+            "command_code": WAKE_COMMAND_CODE,
+            "service_req_id": req_id,
+            "params": {},
+        }
+    ]
+
+
 def wake_request_payload(
     device_did: str,
     login_did: str,
@@ -1291,14 +1365,7 @@ def wake_request_payload(
     basic_info: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Build the MQTT ``properties/set/req`` message that wakes the vehicle."""
-    services = [
-        {
-            "service_code": WAKE_SERVICE_CODE,
-            "command_code": WAKE_COMMAND_CODE,
-            "service_req_id": req_id,
-            "params": {},
-        }
-    ]
+    services = wake_request_services(req_id)
     identifiers = dict(basic_info or {})
     identifiers.setdefault("ruid", login_did)
     return {
@@ -1329,19 +1396,24 @@ CHARGE_TIME_SENTINEL = 8191
 
 # S05 ChrgSts charging states (observed live on the reference car, 2026-10-15,
 # moving the gun through every state): 0 not charging, 1 AC gun connected,
-# 2 DC gun connected, 3 AC charging, 4 DC charging. Any other value means the
+# 2 DC gun connected, 3 AC charging, 4 DC charging. State 5 was observed on
+# 2026-10-25 with the AC wallbox disabled while the cable stayed connected:
+# the car reported 5, zero current and no remaining-time estimate, so 5 means
+# the charge stopped/finished and is not charging. Any other value means the
 # state is unknown and MUST NOT be translated into one.
 CHARGE_STATE_NOT_CHARGING = 0
 CHARGE_STATE_AC_CONNECTED = 1
 CHARGE_STATE_DC_CONNECTED = 2
 CHARGE_STATE_AC_CHARGING = 3
 CHARGE_STATE_DC_CHARGING = 4
+CHARGE_STATE_CHARGE_STOPPED = 5
 CHARGE_STATES = (
     CHARGE_STATE_NOT_CHARGING,
     CHARGE_STATE_AC_CONNECTED,
     CHARGE_STATE_DC_CONNECTED,
     CHARGE_STATE_AC_CHARGING,
     CHARGE_STATE_DC_CHARGING,
+    CHARGE_STATE_CHARGE_STOPPED,
 )
 CHARGING_STATES = frozenset({CHARGE_STATE_AC_CHARGING, CHARGE_STATE_DC_CHARGING})
 #: States that mean the AC gun is plugged in (charging or only connected).
@@ -1441,11 +1513,13 @@ def charge_is_active(value: Any) -> Optional[bool]:
 
 
 def clean_charge_current(value: Any, field: str = "chargeCurrent") -> Optional[float]:
-    """Return a believable charging current in amperes, or None.
+    """Return a positive charging current in amperes, or None.
 
     A reading outside ``0..MAX_CHARGE_CURRENT_A`` is a raw glitch (the live car
     published 2538 while parked), so it is logged at debug level and dropped
-    instead of being exposed as amperes.
+    instead of being exposed as amperes. The SDA ``BcuBattI`` mapping uses this
+    strict rule because that field is a signed battery current; the S05 and REST
+    paths use :func:`clean_charge_current_magnitude`.
     """
     current = _as_float(value)
     if current is None:
@@ -1461,6 +1535,33 @@ def clean_charge_current(value: Any, field: str = "chargeCurrent") -> Optional[f
     return current
 
 
+def clean_charge_current_magnitude(
+    value: Any, field: str = "chargeCurrent"
+) -> Optional[float]:
+    """Return the magnitude of a believable charging current, or None.
+
+    The car reports the current with the battery sign convention, so a negative
+    value can be a real charging current (for example ``-60.5`` while DC
+    charging). A reading is valid when its absolute value is within
+    ``0..MAX_CHARGE_CURRENT_A`` and the public model exposes its magnitude. A
+    reading whose absolute value exceeds the bound is a raw glitch (the live car
+    published 2538 while parked), so it is logged at debug level and dropped.
+    """
+    current = _as_float(value)
+    if current is None:
+        return None
+    magnitude = abs(current)
+    if magnitude > MAX_CHARGE_CURRENT_A:
+        logger.debug(
+            "Charge current %s=%r dropped: magnitude above %g A",
+            field,
+            value,
+            MAX_CHARGE_CURRENT_A,
+        )
+        return None
+    return magnitude
+
+
 def charge_currents(
     ac_value: Any, dc_value: Any, state_value: Any
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
@@ -1470,16 +1571,16 @@ def charge_currents(
     flat mapping used to pick the AC field first, so a present AC ``0`` hid the
     real DC current. Both fields are resolved against ``ChrgSts``: the field of
     the active mode is the active current, the other one is zeroed when the car
-    reported a value, and connected-without-charging (``1``, ``2``) or unplugged
-    (``0``) report ``0`` instead of a stale value or the post-session sentinel.
-    An unrecognized state keeps the sanitized readings, preferring a non-zero
-    one.
+    reported a value, and connected-without-charging (``1``, ``2``), stopped
+    (``5``) or unplugged (``0``) report ``0`` instead of a stale value or the
+    post-session sentinel. An unrecognized state keeps the sanitized readings,
+    preferring a non-zero one.
     """
     state = charge_state(state_value)
     ac_reported = _as_float(ac_value) is not None
     dc_reported = _as_float(dc_value) is not None
-    ac = clean_charge_current(ac_value, "BattACChrgInCurr")
-    dc = clean_charge_current(dc_value, "BattDCChrgInCurr")
+    ac = clean_charge_current_magnitude(ac_value, "BattACChrgInCurr")
+    dc = clean_charge_current_magnitude(dc_value, "BattDCChrgInCurr")
 
     if state == CHARGE_STATE_DC_CHARGING:
         return (0.0 if ac_reported else None), dc, dc
@@ -1501,14 +1602,17 @@ def charge_currents(
 def _gun_code_connected(value: Any) -> Optional[bool]:
     """Return whether a raw gun connection code means connected (None = absent).
 
-    The S05 gun fields use ``0`` and ``1`` for "not connected" and higher values
-    for a plugged gun; an absent value stays unknown, so callers can tell it
-    apart from a reported "not connected".
+    The live S05 reports ``0`` when no gun is connected and ``1`` while the AC
+    gun is connected (verified while AC charging at 25 A, 2026-10-25); higher
+    codes also mean connected. An absent value stays unknown, so callers can
+    tell it apart from a reported "not connected". The previous ``0``/``1``
+    not-connected rule made a connected gun look unplugged whenever the
+    charging state did not carry the gun type (states ``0`` and ``5``).
     """
     code = _as_int(value)
     if code is None:
         return None
-    return code not in (0, 1)
+    return code != 0
 
 
 def charge_gun_flags(
@@ -1519,19 +1623,17 @@ def charge_gun_flags(
 ) -> tuple[Optional[bool], Optional[bool], Optional[bool]]:
     """Return the (charger plugged, AC gun, DC gun) flags of one report.
 
-    The S05 charging state identifies the gun (`1`-`4` plugged, `2`/`4` DC,
-    `1`/`3` AC), so a recognized state wins and a stale raw gun field cannot
-    keep the flags on after unplugging. Snapshots without a recognized state
-    fall back to the raw gun fields, which the SDA and REST vehicles use, and
-    the charger is plugged when either reported gun is connected.
+    States ``1``-``4`` identify the gun (`2`/`4` DC, `1`/`3` AC) and are
+    authoritative. States ``0`` (not charging) and ``5`` (charge stopped) do
+    not identify a gun, so the raw gun fields decide the plug state; the live
+    car kept `acChargeGunConnectionState=1` with the cable connected in both
+    states. Unrecognized states also fall back to the raw fields. In that
+    fallback ``0`` means not connected and any other reported value means
+    connected.
     """
     state = charge_state(state_value)
-    if state is not None:
-        return (
-            state != CHARGE_STATE_NOT_CHARGING,
-            state in AC_GUN_STATES,
-            state in DC_GUN_STATES,
-        )
+    if state in AC_GUN_STATES | DC_GUN_STATES:
+        return True, state in AC_GUN_STATES, state in DC_GUN_STATES
 
     ac_gun = _gun_code_connected(ac_gun_value)
     dc_gun = _gun_code_connected(dc_gun_value)
@@ -1577,6 +1679,9 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
     )
     power_status = _as_int(params.get("powerStatusFeedBack"))
+    outside_temp = _as_float(
+        _first(params, "outsideTemperature", "externalTemperature")
+    )
     return {
         "lastUpdatedAt": _to_millis(latest),
         "vehicleStatus": {
@@ -1602,6 +1707,9 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10
             if _as_float(params.get("vehicleTemperature")) is not None
             else None,
+            # The S05 reports this in Celsius like the inside temperature; the
+            # shared condition keeps tenths, so ``parse_condition`` scales it.
+            "outsideTemp": outside_temp * 10 if outside_temp is not None else None,
             # Raw tenths of a percent; ``parse_condition`` applies the scale.
             "insideHumidity": _as_float(params.get("innerHumidity")),
             "remoteTemp": _as_float(params.get("airConditioningSetTemperature")) * 10
@@ -1659,6 +1767,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             "battery12v": _warning_light(params.get("batt12VLightStatus"), power_status),
             "tpms": _warning_light(params.get("tpmsLightStatus"), power_status),
             "abs": _warning_light(params.get("absLightStatus"), power_status),
+            "airbag": _warning_light(params.get("airBagLightStatus"), power_status),
             "brakeFluid": _warning_light(
                 params.get("brakeFluidLightStatus"), power_status
             ),
@@ -1672,6 +1781,9 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
             ),
             "tractionBatteryLow": _warning_light(
                 params.get("bcuBattSocLightStatus"), power_status
+            ),
+            "coolantTemperature": _warning_light(
+                params.get("coolanTemperatureLightStatus"), power_status
             ),
         },
         "windowOpenings": {
@@ -1755,6 +1867,8 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "electronichandbrakeStatus",
         # Climate
         "vehicleTemperature",
+        "outsideTemperature",
+        "externalTemperature",
         "innerHumidity",
         "airConditioningSetTemperature",
         "airStatus",
@@ -1802,12 +1916,14 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "batt12VLightStatus",
         "tpmsLightStatus",
         "absLightStatus",
+        "airBagLightStatus",
         "brakeFluidLightStatus",
         "brakeLightStatus",
         "epsLightStatus",
         "powerLimitLightStatus",
         "powerSystemLightStatus",
         "bcuBattSocLightStatus",
+        "coolanTemperatureLightStatus",
         "keyLowPower",
         # Air recirculation
         "airRecycleStatus",

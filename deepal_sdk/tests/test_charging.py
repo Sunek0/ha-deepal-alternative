@@ -33,7 +33,7 @@ def test_charging_flag_reads_the_status():
 
 
 def test_charging_flag_only_counts_the_s05_charging_states():
-    for status in ("0", "1", "2"):
+    for status in ("0", "1", "2", "5"):
         assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is False
     for status in ("3", "4"):
         assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is True

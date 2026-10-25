@@ -53,7 +53,20 @@ do not return it; it is exported for applications that persist account metadata.
 | `car_name` | `str?` | `None` | Custom nickname |
 | `license_plate` | `str?` | `None` | Plate |
 | `thumbnail_url` | `str?` | `None` | Vehicle image URL |
+| `car_platform` | `int?` | `None` | Backend car platform value used by the model-asset and manual endpoints |
 | `protocol_type` | `str?` | `None` | Backend telemetry protocol; `MQTT` marks MQTT-backed vehicles |
+
+### `VehicleModelAsset`
+
+Descriptor of the official layered vehicle-model ZIP.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_url` | `str` | required | HTTPS URL of the layered model ZIP |
+| `md5` | `str?` | `None` | MD5 checksum advertised by the gateway, when present |
+
+`download_vehicle_model_archive` returns the raw ZIP bytes after validating the scheme, redirects
+and checksum; it does not extract the archive.
 
 ### `SeatCapabilities` and `VehicleCapabilities`
 

@@ -2,14 +2,18 @@
 
 import asyncio
 import base64
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+import hashlib
+from ipaddress import ip_address
 import json
 import logging
 import secrets
+import socket
 import ssl
 import time
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -47,6 +51,7 @@ from .endpoints import (
     INTL_DEPARTURE_VALIDITY,
     INTL_GET_FUNCTION_CONFIG,
     INTL_GET_MY_CARS,
+    INTL_GET_VEHICLE_MODEL,
     INTL_GET_SERIAL_NO,
     INTL_GET_SECURITY_CODE_STATUS,
     INTL_GET_VEHICLE_CONDITION,
@@ -96,6 +101,7 @@ from .models import (
     VehicleAuthorizations,
     VehicleCapabilities,
     VehicleCondition,
+    VehicleModelAsset,
     WarningLightsCondition,
     WindowOpeningsCondition,
     WindowsCondition,
@@ -124,7 +130,9 @@ from .mqtt import (
     build_publish_packet,
     build_subscribe_packet,
     clean_charge_current,
+    clean_charge_current_magnitude,
     condition_request_payload,
+    condition_request_services,
     config_mqtt_identity,
     device_id_candidates,
     login_request_payload,
@@ -134,17 +142,20 @@ from .mqtt import (
     parse_connack,
     parse_publish,
     parse_sda_broker_config,
+    parse_suback,
     read_packet,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
     sda_broker_session,
     sda_condition_plan,
     sda_condition_request_payload,
+    sda_condition_request_services,
     sda_session_topics,
     secret_from_login_payload,
     topic_with_device,
     unmapped_s05_keys,
     wake_request_payload,
+    wake_request_services,
 )
 
 logger = logging.getLogger("deepal_sdk")
@@ -215,6 +226,10 @@ INTL_MQTT_TOKEN_TTL_SECONDS = 60.0
 #: reuse window.
 INTL_MQTT_CONFIG_TTL_SECONDS = 660.0
 CAR_CONTROL_REFRESH_THROTTLE_SECONDS = 3300.0
+
+#: The layered model archives are larger than JSON responses, so the explicit
+#: download keeps its own bound instead of inheriting the short API timeout.
+VEHICLE_MODEL_DOWNLOAD_TIMEOUT = 60.0
 
 #: Gateway result codes the app accepts as a completed vehicle wake when the
 #: response's ``success`` flag is missing or false. The upstream dec_deepal
@@ -364,20 +379,20 @@ def _fuel_range_km(fuel: dict[str, Any]) -> Optional[int]:
 def _is_charge_connection(value: Any) -> bool:
     """Return whether a charge connection state means a connected gun.
 
-    The app reports ``0`` and ``1`` for "not connected" and higher values for
-    the connected states (a charging AC gun reports ``3``); an absent value is
-    not connected. Verified on a parked car reporting ``0`` with nothing
-    plugged in.
+    The live S05 reports ``0`` with no gun, ``1`` with the DC gun connected and
+    ``3`` with the AC gun connected (2026-10-25 captures); any other reported
+    value is also a connected state and an absent value is not connected. The
+    old ``0``/``1`` not-connected rule marked a DC session as unplugged.
     """
-    return _as_int(value) not in (None, 0, 1)
+    return _as_int(value) not in (None, 0)
 
 
 def _gun_connected(value: Any) -> bool:
     """Return whether a gun value means connected, accepting codes or booleans.
 
     The normalizers resolve the S05 flags from the charging state and send
-    booleans; the raw connection fields keep their ``0``/``1`` not-connected
-    rule.
+    booleans; the raw connection fields use ``0`` for not connected and any
+    other reported value for connected.
     """
     if isinstance(value, bool):
         return value
@@ -416,6 +431,44 @@ def _to_millis(value: Any) -> Optional[int]:
     return None
 
 
+def _is_internal_address(value: str) -> bool:
+    """Return whether an IP literal is not globally routable."""
+    try:
+        return not ip_address(value).is_global
+    except ValueError:
+        return False
+
+
+def _is_local_hostname(host: str) -> bool:
+    """Return whether a hostname names the local machine or network."""
+    normalized = host.lower().rstrip(".")
+    return (
+        not normalized
+        or normalized == "localhost"
+        or normalized.endswith(".localhost")
+        or normalized.endswith(".local")
+    )
+
+
+async def _async_host_is_public(host: str, resolver: Any = None) -> bool:
+    """Return whether a URL host may be fetched by the SDK."""
+    if not host or _is_internal_address(host) or _is_local_hostname(host):
+        return False
+    try:
+        if resolver is None:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                host, 443, type=socket.SOCK_STREAM
+            )
+        else:
+            infos = await resolver(host)
+    except OSError:
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(
+        not _is_internal_address(address) for address in addresses
+    )
+
+
 class DeepalIntlClient:
     """Asynchronous client for the Deepal international email login flow."""
 
@@ -450,6 +503,7 @@ class DeepalIntlClient:
         enable_api_logging: bool = False,
         signing_policy: str = SIGNING_POLICY_APP,
         httpx_client: Optional[httpx.AsyncClient] = None,
+        on_exchange: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         if signing_policy not in SIGNING_POLICIES:
             supported = ", ".join(SIGNING_POLICIES)
@@ -490,6 +544,7 @@ class DeepalIntlClient:
         ).rstrip("/")
         self.timeout = timeout
         self.enable_api_logging = enable_api_logging
+        self.on_exchange = on_exchange
         self.signing_policy = signing_policy
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -535,6 +590,27 @@ class DeepalIntlClient:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.close()
+
+    def _emit_exchange(self, event: dict[str, Any]) -> None:
+        """Deliver one structured exchange event to the optional callback."""
+        callback = getattr(self, "on_exchange", None)
+        if callback is None:
+            return
+        try:
+            callback(event)
+        except Exception:  # noqa: BLE001 - diagnostics must never break a call
+            logger.exception("Deepal exchange callback failed")
+
+    def _emit_mqtt(self, event: str, **data: Any) -> None:
+        """Deliver one MQTT event with the common envelope."""
+        self._emit_exchange(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "kind": "mqtt",
+                "event": event,
+                **data,
+            }
+        )
 
     @staticmethod
     def _strip_pem_armor(pem: str) -> str:
@@ -583,14 +659,16 @@ class DeepalIntlClient:
 
         Stores the private PEM and resolves the app ``pubKey`` body: the
         provided public key when given, otherwise the public key derived from
-        the private PEM. Returns the resolved public key body.
+        the private PEM. The private key is parsed even when the caller brings
+        a public key, so an unusable stored key fails here instead of every
+        command. The client is only updated once the parse succeeds. Returns
+        the resolved public key body.
         """
         if not private_key_pem:
             raise ValueError("private_key_pem is required.")
+        derived_public_key = self.public_key_body_from_private(private_key_pem)
         self.private_key_pem = private_key_pem
-        self.public_key = public_key or self.public_key_body_from_private(
-            private_key_pem
-        )
+        self.public_key = public_key or derived_public_key
         return self.public_key
 
     @staticmethod
@@ -672,6 +750,7 @@ class DeepalIntlClient:
                 redact_for_log(json_data or {}),
             )
 
+        started = time.monotonic()
         try:
             http_client = await self._http_client()
             if method.upper() == "GET":
@@ -691,10 +770,43 @@ class DeepalIntlClient:
                     timeout=self.timeout,
                 )
         except httpx.RequestError as exc:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "error",
+                    "client": "intl",
+                    "method": method.upper(),
+                    "path": path,
+                    "url": url,
+                    "query": query,
+                    "request": json_data,
+                    "headers": headers,
+                    "error": str(exc),
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             logger.error("Network error requesting %s: %s", url, exc)
             raise DeepalConnectionError(f"Failed to connect to Deepal API: {exc}") from exc
 
         if response.status_code == 429:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "intl",
+                    "method": method.upper(),
+                    "path": path,
+                    "url": url,
+                    "query": query,
+                    "request": json_data,
+                    "headers": headers,
+                    "status": response.status_code,
+                    "response": response.text[:2000],
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             raise DeepalRateLimitError(
                 "Deepal rate limit: HTTP 429.",
                 status_code=429,
@@ -702,17 +814,60 @@ class DeepalIntlClient:
             )
 
         if response.status_code in (401, 403):
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "intl",
+                    "method": method.upper(),
+                    "path": path,
+                    "url": url,
+                    "query": query,
+                    "request": json_data,
+                    "headers": headers,
+                    "status": response.status_code,
+                    "response": response.text[:2000],
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
             raise DeepalAuthError(
                 f"Authentication failed with HTTP {response.status_code}."
             )
 
         try:
-            payload = response.json()
-        except ValueError as exc:
+            payload: Any = response.json()
+            response_body: Any = payload
+            invalid_json = False
+        except ValueError:
+            payload = None
+            response_body = response.text[:2000]
+            invalid_json = True
+
+        self._emit_exchange(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "kind": "rest",
+                "event": "response",
+                "client": "intl",
+                "method": method.upper(),
+                "path": path,
+                "url": url,
+                "query": query,
+                "request": json_data,
+                "headers": headers,
+                "status": response.status_code,
+                "response": response_body,
+                "error": "invalid_json" if invalid_json else None,
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
+            }
+        )
+
+        if invalid_json:
             raise DeepalAPIError(
                 f"Invalid JSON response: {response.text[:200]}",
                 status_code=response.status_code,
-            ) from exc
+            )
 
         if not isinstance(payload, dict):
             raise DeepalAPIError(
@@ -821,7 +976,7 @@ class DeepalIntlClient:
 
     def _log_session_fields(self) -> None:
         """Log which session fields are present, never their values."""
-        logger.warning(
+        logger.debug(
             "Deepal session fields present: token=%s refreshToken=%s cacToken=%s "
             "userId=%s caUserId=%s cacUserId=%s",
             bool(self.access_token),
@@ -1127,10 +1282,192 @@ class DeepalIntlClient:
                         or item.get("carImageUrl")
                         or item.get("modelImageUrl")
                     ),
+                    car_platform=(
+                        item.get("carPlatform")
+                        if item.get("carPlatform") is not None
+                        else item.get("car_platform")
+                    ),
                     protocol_type=item.get("protocolType") or item.get("protocol_type"),
                 )
             )
         return vehicles
+
+    async def get_vehicle_model(
+        self, vehicle_id: str, car_platform: Optional[int] = None
+    ) -> VehicleModelAsset:
+        """Fetch the official layered model descriptor of a vehicle.
+
+        The official app asks ``intl-app-user/api/car/get-vehicle-model`` for a
+        ZIP URL and MD5. The app sends the vehicle identifier and the platform
+        value it got from the vehicle list. The body was confirmed against a
+        live S05 BEV session on 2026-10-21: ``carId`` plus ``carPlatform`` 2 is
+        accepted and returns the layered ZIP. When the caller does not know the
+        platform, only the vehicle identifier is sent instead of inventing a
+        value.
+        """
+        body: dict[str, Any] = {"carId": vehicle_id}
+        if car_platform is not None:
+            body["carPlatform"] = car_platform
+
+        data = await self._request(
+            INTL_GET_VEHICLE_MODEL, json_data=body, auth_required=True
+        )
+        if not isinstance(data, dict):
+            raise DeepalAPIError(
+                "Vehicle model response did not contain a descriptor object."
+            )
+
+        model_url = data.get("modelUrl") or data.get("model_url")
+        if not isinstance(model_url, str) or not model_url.strip():
+            raise DeepalAPIError(
+                "Vehicle model response did not contain a modelUrl."
+            )
+
+        md5 = data.get("md5") or data.get("MD5")
+        return VehicleModelAsset(
+            model_url=model_url.strip(),
+            md5=str(md5).strip() if md5 else None,
+        )
+
+    async def download_vehicle_model_archive(
+        self, vehicle_id: str, car_platform: Optional[int] = None
+    ) -> bytes:
+        """Download the official layered model ZIP and verify its checksum.
+
+        The descriptor URL is treated as untrusted: only HTTPS is accepted,
+        redirects are not followed and the bytes must match the advertised MD5
+        before they are returned. The archive is returned raw; extracting it is
+        the caller's responsibility.
+        """
+        asset = await self.get_vehicle_model(vehicle_id, car_platform)
+        parsed_url = urlsplit(asset.model_url)
+        if parsed_url.scheme != "https" or not parsed_url.hostname:
+            raise DeepalAPIError(
+                "Vehicle model URL is not HTTPS; refusing to download it."
+            )
+        if not await _async_host_is_public(parsed_url.hostname):
+            raise DeepalAPIError(
+                "Vehicle model URL points to a local or internal host; "
+                "refusing to download it."
+            )
+
+        started = time.monotonic()
+        try:
+            http_client = await self._http_client()
+            response = await http_client.get(
+                asset.model_url,
+                timeout=VEHICLE_MODEL_DOWNLOAD_TIMEOUT,
+                follow_redirects=False,
+                headers={"accept": "application/zip, application/octet-stream, */*"},
+            )
+        except httpx.RequestError as exc:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "error",
+                    "client": "intl",
+                    "method": "GET",
+                    "path": asset.model_url,
+                    "url": asset.model_url,
+                    "vehicle_id": vehicle_id,
+                    "error": str(exc),
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
+            logger.error(
+                "Network error downloading vehicle model for %s: %s",
+                vehicle_id,
+                exc,
+            )
+            raise DeepalConnectionError(
+                f"Failed to download the vehicle model archive: {exc}"
+            ) from exc
+
+        if response.is_redirect:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "intl",
+                    "method": "GET",
+                    "path": asset.model_url,
+                    "url": asset.model_url,
+                    "vehicle_id": vehicle_id,
+                    "status": response.status_code,
+                    "bytes": len(response.content),
+                    "error": "redirect",
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
+            raise DeepalAPIError(
+                "Vehicle model download returned a redirect; refusing to follow it."
+            )
+        if not response.is_success:
+            self._emit_exchange(
+                {
+                    "ts": datetime.now(UTC).isoformat(),
+                    "kind": "rest",
+                    "event": "response",
+                    "client": "intl",
+                    "method": "GET",
+                    "path": asset.model_url,
+                    "url": asset.model_url,
+                    "vehicle_id": vehicle_id,
+                    "status": response.status_code,
+                    "bytes": len(response.content),
+                    "duration_ms": round((time.monotonic() - started) * 1000, 1),
+                }
+            )
+            raise DeepalAPIError(
+                f"Vehicle model download failed with HTTP {response.status_code}.",
+                status_code=response.status_code,
+            )
+
+        content = response.content
+        if asset.md5:
+            actual = hashlib.md5(content).hexdigest()
+            if actual.lower() != asset.md5.lower():
+                self._emit_exchange(
+                    {
+                        "ts": datetime.now(UTC).isoformat(),
+                        "kind": "rest",
+                        "event": "response",
+                        "client": "intl",
+                        "method": "GET",
+                        "path": asset.model_url,
+                        "url": asset.model_url,
+                        "vehicle_id": vehicle_id,
+                        "status": response.status_code,
+                        "bytes": len(content),
+                        "error": "checksum_mismatch",
+                        "duration_ms": round(
+                            (time.monotonic() - started) * 1000, 1
+                        ),
+                    }
+                )
+                raise DeepalAPIError(
+                    "Vehicle model archive checksum mismatch: "
+                    f"expected {asset.md5}, got {actual}."
+                )
+
+        self._emit_exchange(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "kind": "rest",
+                "event": "response",
+                "client": "intl",
+                "method": "GET",
+                "path": asset.model_url,
+                "url": asset.model_url,
+                "vehicle_id": vehicle_id,
+                "status": response.status_code,
+                "bytes": len(content),
+                "duration_ms": round((time.monotonic() - started) * 1000, 1),
+            }
+        )
+        return content
 
     async def get_vehicle_capabilities(
         self, vehicle_id: str, vin: Optional[str] = None
@@ -1405,13 +1742,13 @@ class DeepalIntlClient:
             ac_gun_connected=_gun_connected_optional(
                 charge.get("acChargeGunConnectStatus")
             ),
-            charge_current_a=clean_charge_current(
+            charge_current_a=clean_charge_current_magnitude(
                 charge.get("chargeCurrent"), "charge.chargeCurrent"
             ),
-            ac_charge_current_a=clean_charge_current(
+            ac_charge_current_a=clean_charge_current_magnitude(
                 charge.get("acChargeCurrent"), "charge.acChargeCurrent"
             ),
-            dc_charge_current_a=clean_charge_current(
+            dc_charge_current_a=clean_charge_current_magnitude(
                 charge.get("dcChargeCurrent"), "charge.dcChargeCurrent"
             ),
             remaining_charge_time_min=remaining_charge_time,
@@ -1569,6 +1906,7 @@ class DeepalIntlClient:
             battery_12v=_as_bool(warnings.get("battery12v")),
             tpms=_as_bool(warnings.get("tpms")),
             abs=_as_bool(warnings.get("abs")),
+            airbag=_as_bool(warnings.get("airbag")),
             brake_fluid=_as_bool(warnings.get("brakeFluid")),
             brake=_as_bool(warnings.get("brake")),
             eps=_as_bool(warnings.get("eps")),
@@ -1576,6 +1914,9 @@ class DeepalIntlClient:
             power_system=_as_bool(warnings.get("powerSystem")),
             traction_battery_low=_as_bool(
                 warnings.get("tractionBatteryLow")
+            ),
+            coolant_temperature=_as_bool(
+                warnings.get("coolantTemperature")
             ),
         )
         if power_status == 0:
@@ -1909,9 +2250,30 @@ class DeepalIntlClient:
                     config = {**config, "functionConfig": tree}
         token = await self.get_mqtt_token()
         try:
-            result = await self._read_s05_params(config, token, sda=sda)
-        except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
-            raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
+            try:
+                result = await self._read_s05_params(
+                    config, token, sda=sda, vehicle_id=vehicle_id
+                )
+            except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+                raise DeepalAPIError(f"S05 MQTT telemetry failed: {exc}") from exc
+        except Exception as exc:
+            self._emit_mqtt(
+                "error",
+                vehicle_id=vehicle_id,
+                stage="condition",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
+        self._emit_mqtt(
+            "result",
+            vehicle_id=vehicle_id,
+            stage="condition",
+            source=result.source,
+            variants=result.variants,
+            plan=result.plan.as_dict() if result.plan else None,
+            param_count=len(result.params),
+        )
         self.last_mqtt_exchange = result
         if not result.params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
@@ -2139,7 +2501,12 @@ class DeepalIntlClient:
         )
 
     async def _open_s05_mqtt(
-        self, config: dict[str, Any], token: str, *, sda: bool = False
+        self,
+        config: dict[str, Any],
+        token: str,
+        *,
+        sda: bool = False,
+        vehicle_id: Optional[str] = None,
     ) -> tuple[
         asyncio.StreamReader,
         asyncio.StreamWriter,
@@ -2179,6 +2546,20 @@ class DeepalIntlClient:
             username=self.mqtt_username,
         )
         basic_info = self._mqtt_basic_identifiers(config, login_did)
+        self._emit_mqtt(
+            "session_open",
+            vehicle_id=vehicle_id,
+            source="sda" if sda else "s05",
+            host=host,
+            port=port,
+            topics={
+                "login": login_topic,
+                "properties": properties_topic,
+                "properties_set": resolved.properties_set_publish,
+                "sda": sda_topic,
+                "subscriptions": list(resolved.subscriptions),
+            },
+        )
         context = await asyncio.to_thread(self._mqtt_ssl_context)
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=context, server_hostname=host),
@@ -2207,6 +2588,13 @@ class DeepalIntlClient:
                 # stale broker/topic set.
                 self._invalidate_mqtt_token()
                 self._invalidate_mqtt_config()
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="connack",
+                    reason_code=reason_code,
+                    reason=reason,
+                )
                 raise DeepalAPIError(
                     "S05 MQTT broker rejected connection: "
                     f"reason code {reason_code} ({reason})"
@@ -2222,17 +2610,43 @@ class DeepalIntlClient:
                 subscriptions.add(sda_response)
             writer.write(build_subscribe_packet(1, sorted(subscriptions)))
             await writer.drain()
-            await asyncio.wait_for(read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT)
+            first, body = await asyncio.wait_for(
+                read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT
+            )
+            packet_id, reasons = parse_suback(first, body)
+            if packet_id != 1 or not reasons or any(
+                reason >= 0x80 for reason in reasons
+            ):
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="suback",
+                    packet_id=packet_id,
+                    reasons=reasons,
+                )
+                raise DeepalAPIError(
+                    "S05 MQTT broker did not acknowledge the subscription."
+                )
 
             login_req_id = new_request_id(login_did)
-            writer.write(
-                build_publish_packet(
-                    login_topic,
-                    login_request_payload(
-                        login_did, login_req_id, basic_info=basic_info
-                    ),
-                )
+            login_payload = login_request_payload(
+                login_did, login_req_id, basic_info=basic_info
             )
+            self._emit_mqtt(
+                "publish",
+                vehicle_id=vehicle_id,
+                stage="login",
+                topic=login_topic,
+                payload=login_payload,
+                services=[
+                    {
+                        "service_code": "login",
+                        "params": {"encryptEnable": 1, "zipType": "gzip"},
+                    }
+                ],
+                request_id=login_req_id,
+            )
+            writer.write(build_publish_packet(login_topic, login_payload))
             await writer.drain()
 
             secret_key: Optional[str] = None
@@ -2251,7 +2665,7 @@ class DeepalIntlClient:
                 if first >> 4 != 3:
                     continue
                 try:
-                    _topic, payload, packet_id = parse_publish(first, body)
+                    topic, payload, packet_id = parse_publish(first, body)
                 except ValueError as err:
                     logger.debug(
                         "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
@@ -2260,15 +2674,33 @@ class DeepalIntlClient:
                 if packet_id is not None:
                     writer.write(build_puback_packet(packet_id))
                     await writer.drain()
-                secret_key = secret_from_login_payload(payload)
+                received_secret = secret_from_login_payload(payload)
+                self._emit_mqtt(
+                    "receive",
+                    vehicle_id=vehicle_id,
+                    stage="login",
+                    topic=topic,
+                    payload=payload,
+                    request_id=payload.get("r"),
+                    secret_received=bool(received_secret),
+                )
+                secret_key = received_secret
+            if secret_key is None:
+                self._emit_mqtt(
+                    "timeout",
+                    vehicle_id=vehicle_id,
+                    stage="login",
+                )
         except BaseException:
-            await self._close_s05_mqtt(writer)
+            await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
             raise
         return reader, writer, resolved, basic_info, secret_key, plan
 
-    @staticmethod
-    async def _close_s05_mqtt(writer: asyncio.StreamWriter) -> None:
+    async def _close_s05_mqtt(
+        self, writer: asyncio.StreamWriter, *, vehicle_id: Optional[str] = None
+    ) -> None:
         """Send DISCONNECT and close the one-shot MQTT session."""
+        self._emit_mqtt("session_close", vehicle_id=vehicle_id)
         try:
             writer.write(build_disconnect_packet())
             await writer.drain()
@@ -2281,7 +2713,12 @@ class DeepalIntlClient:
             pass
 
     async def _read_s05_params(
-        self, config: dict[str, Any], token: str, *, sda: bool = False
+        self,
+        config: dict[str, Any],
+        token: str,
+        *,
+        sda: bool = False,
+        vehicle_id: Optional[str] = None,
     ) -> MqttExchangeResult:
         """Run one MQTT 5.0 login + condition exchange and return the raw parameters."""
         (
@@ -2291,7 +2728,9 @@ class DeepalIntlClient:
             basic_info,
             secret_key,
             plan,
-        ) = await self._open_s05_mqtt(config, token, sda=sda)
+        ) = await self._open_s05_mqtt(
+            config, token, sda=sda, vehicle_id=vehicle_id
+        )
         try:
             properties_topic = resolved.properties_publish
             device_did = resolved.device_did
@@ -2332,6 +2771,25 @@ class DeepalIntlClient:
                 label, signal_list = probes[index]
                 req_id = new_request_id(sda_did or device_did)
                 if label.startswith("sda"):
+                    services = sda_condition_request_services(
+                        signal_list=list(signal_list) if signal_list else None,
+                        service_code=(
+                            plan.service_code if plan else SDA_CONDITION_SERVICE
+                        ),
+                        command_code=(
+                            plan.command_code if plan else SDA_CONDITION_COMMAND
+                        ),
+                        strategy_code=(
+                            plan.strategy_codes[0]
+                            if plan and plan.strategy_codes
+                            else None
+                        ),
+                        strategy_id=(
+                            plan.strategy_ids[0]
+                            if plan and plan.strategy_ids
+                            else None
+                        ),
+                    )
                     request = sda_condition_request_payload(
                         sda_did or device_did,
                         login_did,
@@ -2358,6 +2816,7 @@ class DeepalIntlClient:
                     )
                     topic = sda_topic or properties_topic
                 else:
+                    services = condition_request_services()
                     request = condition_request_payload(
                         device_did,
                         login_did,
@@ -2368,6 +2827,16 @@ class DeepalIntlClient:
                     topic = properties_topic
                 probe_labels[req_id] = label
                 probe_deadline = loop.time() + self.mqtt_sda_probe_grace
+                self._emit_mqtt(
+                    "publish",
+                    vehicle_id=vehicle_id,
+                    stage="condition",
+                    source=label,
+                    topic=topic,
+                    payload=request,
+                    services=services,
+                    request_id=req_id,
+                )
                 writer.write(build_publish_packet(topic, request))
 
             def advance_probe() -> bool:
@@ -2419,6 +2888,12 @@ class DeepalIntlClient:
                 try:
                     topic, payload, packet_id = parse_publish(first, body)
                 except ValueError as err:
+                    self._emit_mqtt(
+                        "error",
+                        vehicle_id=vehicle_id,
+                        stage="condition",
+                        error=f"malformed publish: {err}",
+                    )
                     logger.debug(
                         "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
                     )
@@ -2428,9 +2903,20 @@ class DeepalIntlClient:
                     await writer.drain()
 
                 params = self._s05_params_from_payload(payload, secret_key)
+                label = probe_labels.get(str(payload.get("r")), None)
+                self._emit_mqtt(
+                    "receive",
+                    vehicle_id=vehicle_id,
+                    stage="condition",
+                    source=label,
+                    topic=topic,
+                    payload=payload,
+                    params=params,
+                    decoded=bool(params),
+                    request_id=payload.get("r"),
+                )
                 if not params:
                     continue
-                label = probe_labels.get(str(payload.get("r")), None)
                 if label:
                     variants[label] = params
                     source = label
@@ -2453,6 +2939,14 @@ class DeepalIntlClient:
                     )
 
             self._log_s05_discovery(partial)
+            self._emit_mqtt(
+                "timeout",
+                vehicle_id=vehicle_id,
+                stage="condition",
+                source=source,
+                partial=partial,
+                variants=attempted_variants(),
+            )
             return MqttExchangeResult(
                 params=partial,
                 source=source,
@@ -2460,7 +2954,7 @@ class DeepalIntlClient:
                 plan=plan,
             )
         finally:
-            await self._close_s05_mqtt(writer)
+            await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
 
     async def s05_wait_for_report(
         self,
@@ -2493,8 +2987,17 @@ class DeepalIntlClient:
                     basic_info,
                     secret_key,
                     _plan,
-                ) = await self._open_s05_mqtt(config, token)
+                ) = await self._open_s05_mqtt(
+                    config, token, vehicle_id=vehicle_id
+                )
             except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="report_wait",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 raise DeepalAPIError(
                     f"S05 MQTT report wait failed: {exc}"
                 ) from exc
@@ -2526,6 +3029,13 @@ class DeepalIntlClient:
                         OSError,
                         ssl.SSLError,
                     ) as exc:
+                        self._emit_mqtt(
+                            "error",
+                            vehicle_id=vehicle_id,
+                            stage="report_wait",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
                         raise DeepalAPIError(
                             f"S05 MQTT report wait failed: {exc}"
                         ) from exc
@@ -2535,13 +3045,26 @@ class DeepalIntlClient:
                             timestamp is not None
                             and timestamp > previous_timestamp
                         ):
+                            self._emit_mqtt(
+                                "result",
+                                vehicle_id=vehicle_id,
+                                stage="report_wait",
+                                source="legacy-mqtt",
+                                timestamp=timestamp,
+                            )
                             return condition
                     remaining = deadline - loop.time()
                     if remaining <= 0:
+                        self._emit_mqtt(
+                            "timeout",
+                            vehicle_id=vehicle_id,
+                            stage="report_wait",
+                            previous_timestamp=previous_timestamp,
+                        )
                         return None
                     await asyncio.sleep(min(interval, remaining))
             finally:
-                await self._close_s05_mqtt(writer)
+                await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
 
     async def _request_condition_on_session(
         self,
@@ -2571,18 +3094,23 @@ class DeepalIntlClient:
                 "S05 MQTT session is missing the properties topic or the secretKey."
             )
         req_id = new_request_id(device_did)
-        writer.write(
-            build_publish_packet(
-                properties_topic,
-                condition_request_payload(
-                    device_did,
-                    login_did,
-                    secret_key,
-                    req_id,
-                    basic_info=basic_info,
-                ),
-            )
+        request = condition_request_payload(
+            device_did,
+            login_did,
+            secret_key,
+            req_id,
+            basic_info=basic_info,
         )
+        self._emit_mqtt(
+            "publish",
+            vehicle_id=vehicle_id,
+            stage="report_wait_request",
+            topic=properties_topic,
+            payload=request,
+            services=condition_request_services(),
+            request_id=req_id,
+        )
+        writer.write(build_publish_packet(properties_topic, request))
         await writer.drain()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait
@@ -2596,12 +3124,25 @@ class DeepalIntlClient:
                     self.mqtt_keepalive,
                 )
             except asyncio.TimeoutError:
+                self._emit_mqtt(
+                    "timeout",
+                    vehicle_id=vehicle_id,
+                    stage="report_wait_request",
+                    request_id=req_id,
+                    partial=partial,
+                )
                 return None
             if first >> 4 != 3:
                 continue
             try:
-                _topic, payload, packet_id = parse_publish(first, body)
+                topic, payload, packet_id = parse_publish(first, body)
             except ValueError as err:
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="report_wait_request",
+                    error=f"malformed publish: {err}",
+                )
                 logger.debug(
                     "Deepal MQTT: skipping a malformed PUBLISH packet (%s)", err
                 )
@@ -2614,17 +3155,42 @@ class DeepalIntlClient:
             # valid sources as long as they decrypt and carry a newer report;
             # the caller applies the timestamp check.
             params = self._s05_params_from_payload(payload, secret_key)
+            self._emit_mqtt(
+                "receive",
+                vehicle_id=vehicle_id,
+                stage="report_wait_request",
+                topic=topic,
+                payload=payload,
+                params=params,
+                decoded=bool(params),
+                request_id=payload.get("r"),
+            )
             if not params:
                 continue
             partial.update(params)
             if len(partial) > 10:
                 break
         else:
+            self._emit_mqtt(
+                "timeout",
+                vehicle_id=vehicle_id,
+                stage="report_wait_request",
+                request_id=req_id,
+                partial=partial,
+            )
             return None
         if require_timestamp and not any(
             key in partial
             for key in ("lastUpdatedTime", "lastUpdatedAt", "latestDate")
         ):
+            self._emit_mqtt(
+                "timeout",
+                vehicle_id=vehicle_id,
+                stage="report_wait_request",
+                request_id=req_id,
+                partial=partial,
+                reason="no_timestamp",
+            )
             return None
         condition = self.parse_condition(
             normalize_s05_params(partial), vehicle_id, vin=vin
@@ -2644,10 +3210,17 @@ class DeepalIntlClient:
         it with ``000000``. The vehicle then reports within a few seconds; the
         caller polls the condition for the fresh snapshot. Sessions are
         serialized per client because all vehicles of an account share the
-        broker client identity.
+        broker client identity. A failed wake drops the cached connection
+        configuration and auth token, so the next attempt does not reuse
+        material that may have caused the failure.
         """
         async with self._mqtt_lock:
-            await self._wake_vehicle_locked(vehicle_id)
+            try:
+                await self._wake_vehicle_locked(vehicle_id)
+            except Exception:
+                self._mqtt_configs.pop(vehicle_id, None)
+                self._invalidate_mqtt_token()
+                raise
 
     async def _wake_vehicle_locked(self, vehicle_id: str) -> None:
         config = await self.get_mqtt_config(vehicle_id)
@@ -2660,8 +3233,17 @@ class DeepalIntlClient:
                 basic_info,
                 secret_key,
                 _plan,
-            ) = await self._open_s05_mqtt(config, token)
+            ) = await self._open_s05_mqtt(
+                config, token, vehicle_id=vehicle_id
+            )
         except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+            self._emit_mqtt(
+                "error",
+                vehicle_id=vehicle_id,
+                stage="wake",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
 
         try:
@@ -2677,16 +3259,26 @@ class DeepalIntlClient:
                     raise DeepalAPIError("S05 MQTT login did not return a secretKey.")
 
                 req_id = new_request_id(device_did)
+                wake_payload = wake_request_payload(
+                    device_did,
+                    login_did,
+                    secret_key,
+                    req_id,
+                    basic_info=basic_info,
+                )
+                self._emit_mqtt(
+                    "publish",
+                    vehicle_id=vehicle_id,
+                    stage="wake",
+                    topic=set_topic,
+                    payload=wake_payload,
+                    services=wake_request_services(req_id),
+                    request_id=req_id,
+                )
                 writer.write(
                     build_publish_packet(
                         set_topic,
-                        wake_request_payload(
-                            device_did,
-                            login_did,
-                            secret_key,
-                            req_id,
-                            basic_info=basic_info,
-                        ),
+                        wake_payload,
                         # QoS 1: the broker queues the wake for the vehicle
                         # session when the car is deeply asleep and offline,
                         # instead of dropping it like a QoS 0 message. The
@@ -2732,6 +3324,16 @@ class DeepalIntlClient:
                         await writer.drain()
                     matched = payload.get("r") == req_id
                     result = self._service_result_from_payload(payload, secret_key)
+                    self._emit_mqtt(
+                        "receive",
+                        vehicle_id=vehicle_id,
+                        stage="wake",
+                        topic=topic,
+                        payload=payload,
+                        request_id=payload.get("r"),
+                        matched=matched,
+                        result=result,
+                    )
                     observed.append(
                         "topic={} r={} result={}".format(
                             "/".join(topic.rsplit("/", 2)[-2:]),
@@ -2743,6 +3345,14 @@ class DeepalIntlClient:
                         continue
                     code, success = result
                     if success or code in WAKE_OK_CODES:
+                        self._emit_mqtt(
+                            "result",
+                            vehicle_id=vehicle_id,
+                            stage="wake",
+                            code=code,
+                            success=success,
+                            duration_s=round(loop.time() - started, 1),
+                        )
                         logger.info(
                             "Deepal wake for %s acknowledged with code %s after "
                             "%.1f s",
@@ -2751,12 +3361,26 @@ class DeepalIntlClient:
                             loop.time() - started,
                         )
                         return
+                    self._emit_mqtt(
+                        "error",
+                        vehicle_id=vehicle_id,
+                        stage="wake",
+                        code=code,
+                        error=f"wake rejected with code {code}",
+                    )
                     raise DeepalAPIError(
                         f"Vehicle wake was rejected: {code}", code=code
                     )
                 summary = "; ".join(observed[:8])
                 if len(observed) > 8:
                     summary += f" (+{len(observed) - 8} more)"
+                self._emit_mqtt(
+                    "timeout",
+                    vehicle_id=vehicle_id,
+                    stage="wake",
+                    observed=observed[:8],
+                    wait_seconds=wait_seconds,
+                )
                 logger.warning(
                     "Deepal wake for %s got no acknowledgement within %.0f s: %s",
                     vehicle_id,
@@ -2765,9 +3389,16 @@ class DeepalIntlClient:
                 )
                 raise DeepalAPIError("Vehicle wake did not return a response.")
             except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="wake",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
         finally:
-            await self._close_s05_mqtt(writer)
+            await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
 
     @staticmethod
     def _service_result_from_payload(
@@ -2838,9 +3469,15 @@ class DeepalIntlClient:
             raise DeepalCommandNotReady(
                 "Login private key is required to sign commands."
             )
-        return serialization.load_pem_private_key(
-            self.private_key_pem.encode(), password=None
-        )
+        try:
+            return serialization.load_pem_private_key(
+                self.private_key_pem.encode(), password=None
+            )
+        except (ValueError, TypeError) as exc:
+            raise DeepalCommandAuthError(
+                "The stored login private key is not usable; log in again to "
+                "register a new command-signing key."
+            ) from exc
 
     def sign_payload(
         self, payload: dict[str, Any], omit_keys: Optional[set[str]] = None

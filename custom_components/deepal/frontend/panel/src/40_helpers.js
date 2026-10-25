@@ -24,8 +24,35 @@ function translate(language, key, values) {
   return text;
 }
 
-/** Absolute URL of a bundled asset, versioned for cache busting. */
-function assetUrl(path) {
+// Panel paths mapped to the directory names used by the official model ZIP.
+const DYNAMIC_ASSET_DIRS = {
+  estado_planta: "overlook",
+  overlook: "overlook",
+  side: "side",
+  aa: "ac",
+  bateria: "battery",
+  asientos: "seat",
+};
+const DYNAMIC_ASSET_CATEGORIES = {
+  estado_planta: "status",
+  overlook: "status",
+  side: "hero",
+  aa: "climate",
+  bateria: "charging",
+  asientos: "seats",
+};
+
+/** Absolute URL of an asset, preferring the vehicle's official pack. */
+function assetUrl(path, vehicle) {
+  const parts = String(path).split("/");
+  const directory = parts[1];
+  const category = DYNAMIC_ASSET_CATEGORIES[directory];
+  const assets = vehicle && vehicle.modelAssets;
+  if (assets && category && assets.categories.includes(category)) {
+    const mapped = DYNAMIC_ASSET_DIRS[directory];
+    const relative = parts.slice(2).join("/");
+    return `${assets.base}/${mapped}/${relative}?v=${assets.md5 || PANEL_VERSION}`;
+  }
   return `${PANEL_ASSETS_URL}/${path}?v=${PANEL_VERSION}`;
 }
 
@@ -123,6 +150,19 @@ function discoverVehicles(hass) {
   }
   for (const vehicle of vehicles.values()) {
     vehicle.profile = detectProfile(vehicle);
+    const imageId = vehicle.entities.image?.vehicle_image;
+    const imageState = imageId && hass.states ? hass.states[imageId] : null;
+    const attributes = (imageState && imageState.attributes) || {};
+    const base = attributes.model_assets_base;
+    const categories = attributes.model_assets_categories;
+    vehicle.modelAssets =
+      base && Array.isArray(categories)
+        ? {
+            base,
+            categories,
+            md5: attributes.model_assets_md5 || "",
+          }
+        : null;
   }
   return [...vehicles.values()].sort((left, right) =>
     left.name.localeCompare(right.name),

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 _REDACTED = "[redacted]"
 _MAX_STRING_LENGTH = 500
+_VDP_TOPIC_PREFIX = "$vdp/"
+_JWT = re.compile(r"^eyJ[\w-]+\.[\w-]+\.[\w-]+$")
 _SAFE_HEADER_KEYS = (
     "selectcountry",
     "appversion",
@@ -25,6 +28,9 @@ _SENSITIVE_EXACT_KEYS = {
     "brokerurl",
     "cac_token",
     "cactoken",
+    "car_id",
+    "carid",
+    "cid",
     "clientid",
     "control_pin",
     "credential",
@@ -57,6 +63,7 @@ _SENSITIVE_EXACT_KEYS = {
     "publickey",
     "rctoken",
     "refresh_token",
+    "ruid",
     "safecode",
     "secretkey",
     "serialno",
@@ -65,6 +72,7 @@ _SENSITIVE_EXACT_KEYS = {
     "smscode",
     "thumbnailurl",
     "token",
+    "uid",
     "user_id",
     "userid",
     "username",
@@ -92,6 +100,7 @@ _SENSITIVE_KEY_PARTS = (
     "rctoken",
     "secret",
     "serial",
+    "signature",
     "sms",
     "token",
     "vehicleid",
@@ -114,26 +123,54 @@ def is_sensitive_key(key: Any) -> bool:
     )
 
 
-def redact_for_log(value: Any) -> Any:
-    """Return a redacted, log-safe copy of an API payload."""
+def redact_for_log(value: Any, max_string_length: int = _MAX_STRING_LENGTH) -> Any:
+    """Return a redacted, log-safe copy of an API payload.
+
+    ``max_string_length`` bounds every string in the copy. The log default is
+    deliberately small; diagnostics capture can pass a larger bound.
+    """
     if isinstance(value, dict):
         return {
-            key: _REDACTED if is_sensitive_key(key) else redact_for_log(item)
+            key: _REDACTED if is_sensitive_key(key) else redact_for_log(
+                item, max_string_length
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [redact_for_log(item) for item in value]
+        return [redact_for_log(item, max_string_length) for item in value]
     if isinstance(value, tuple):
-        return tuple(redact_for_log(item) for item in value)
+        return tuple(redact_for_log(item, max_string_length) for item in value)
     if isinstance(value, str):
-        if len(value) > _MAX_STRING_LENGTH:
+        if _JWT.match(value):
+            return _REDACTED
+        if len(value) > max_string_length:
             return (
-                f"{value[:_MAX_STRING_LENGTH]}"
-                f"...[truncated {len(value) - _MAX_STRING_LENGTH} chars]"
+                f"{value[:max_string_length]}"
+                f"...[truncated {len(value) - max_string_length} chars]"
             )
         return value
     if isinstance(value, bytes):
         return f"<{len(value)} bytes>"
+    return value
+
+
+def redact_topic(topic: str) -> str:
+    """Mask the device segment of a ``$vdp/<did>/...`` MQTT topic."""
+    if not isinstance(topic, str) or not topic.startswith(_VDP_TOPIC_PREFIX):
+        return topic
+    parts = topic.split("/")
+    if len(parts) > 1:
+        parts[1] = _REDACTED
+    return "/".join(parts)
+
+
+def redact_mqtt_request_id(value: Any) -> Any:
+    """Mask the device prefix of an MQTT ``<did>_<timestamp>`` request id."""
+    if not isinstance(value, str):
+        return value
+    prefix, separator, suffix = value.rpartition("_")
+    if separator and prefix and suffix.isdigit():
+        return f"{_REDACTED}_{suffix}"
     return value
 
 

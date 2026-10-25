@@ -89,6 +89,7 @@ DeepalIntlClient(
     enable_api_logging=False,
     signing_policy="app",
     httpx_client=None,
+    on_exchange=None,
 )
 ```
 
@@ -114,6 +115,7 @@ DeepalIntlClient(
 | `enable_api_logging` | Log redacted requests and responses at `WARNING` level. |
 | `signing_policy` | `app` (default) or `legacy`; see [Signature](#103-signature). |
 | `httpx_client` | Inject an `httpx.AsyncClient`; the SDK uses it as-is and never closes it. |
+| `on_exchange` | Optional synchronous callback that receives one structured REST or MQTT event per exchange; see [Diagnostics and redaction](#12-diagnostics-and-redaction). |
 
 `base_url`, `ca_base_url` and `sda_base_url` default to the selected environment. The managed HTTP
 client is created lazily on the first request (TLS setup off the event loop); `close()` tolerates a
@@ -260,12 +262,49 @@ live traffic.
 | `nickName` | `car_name` |
 | `licensePlate` | `license_plate` |
 | `imgUrl` (and image aliases) | `thumbnail_url` |
+| `carPlatform` | `car_platform` |
 | `protocolType` | `protocol_type` (`MQTT` marks MQTT-backed telemetry) |
 
 `data` is a list or a `{ "list": [...] }` object. `is_mqtt_vehicle(vehicle)` is a static helper
 returning whether the vehicle reports over MQTT (the legacy `MQTT` protocol, for example the S05,
 or the SDA `SDA-MQTT` protocol, for example the E07); `is_sda_mqtt_vehicle(vehicle)` narrows that
 to `SDA-MQTT`.
+
+### 6.1 Layered model assets
+
+The official app downloads a per-vehicle ZIP of layered car images from
+`POST /intl-app-gw/intl-app-user/api/car/get-vehicle-model`. The app sends the `carId` and the
+`carPlatform` value from the vehicle list. The body was confirmed against a live S05 BEV session
+on 2026-10-21 (`carPlatform` 2): the gateway accepted `carId` plus `carPlatform` and returned a
+4.4 MB ZIP. The ZIP contains both `left/` and `right/` variants and the panel directories
+`ac/`, `battery/`, `overlook/`, `seat/` and `side/`; the S05 BEV images matched the bundled panel
+reference byte-for-byte for every required file.
+
+```python
+asset = await client.get_vehicle_model(vehicle.car_id, vehicle.car_platform)
+print(asset.model_url, asset.md5)
+
+archive = await client.download_vehicle_model_archive(
+    vehicle.car_id, vehicle.car_platform
+)
+```
+
+The response is `ModelEntity`-shaped:
+
+```json
+{"modelUrl": "https://.../model.zip", "md5": "..."}
+```
+
+`get_vehicle_model` returns a `VehicleModelAsset` (`model_url`, `md5`). When `car_platform` is
+unknown, the request sends only `carId` instead of inventing a platform. A response without a
+`modelUrl` raises `DeepalAPIError`.
+
+`download_vehicle_model_archive` fetches the URL itself: only HTTPS is accepted, redirects are not
+followed, the timeout is bounded, and a provided MD5 must match before the raw ZIP bytes are
+returned. The SDK does not extract the archive or write files; the example
+`examples/vehicle_model.py` shows a safe extraction to a caller-selected directory. The app stores
+the extracted layers under
+`Android/data/<package>/files/model/carmodel/unzip/<carId>/`.
 
 ## 7. REST telemetry
 
@@ -298,10 +337,10 @@ Mapping:
 | `vehicleStatus.connectStatus` | Cloud connection (`== 1`) | `connected` |
 | `vehicleStatus.steeringWheelHeater` | Steering wheel heater (`!= 0`) | `climate.steering_wheel_heater_on` |
 | `vehicleStatus.steeringWheelHeaterLevel` | Heater level | `climate.steering_wheel_heater_level` |
-| `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging; anything else unknown) | `battery.charging_status` (raw string) |
-| `charge.chargeConStatus` | Cable state (`0`/`1` disconnected) | `battery.charger_connected` fallback |
-| `charge.dcChargeGunConnectStatus` | DC gun (`0`/`1` disconnected) | `battery.dc_gun_connected` |
-| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated to `0-600 A`; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
+| `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` (raw string) |
+| `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state) | `battery.charger_connected` fallback |
+| `charge.dcChargeGunConnectStatus` | DC gun (`0` not connected, any nonzero value connected) | `battery.dc_gun_connected` |
+| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
 | `charge.maxSocPercent` | Charge limit (%) | `battery.charge_limit_percent` |
 | `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
@@ -493,6 +532,28 @@ phones, PINs, serial numbers and user ids, and truncates strings longer than 500
 
 The SDK also logs whether a login/refresh produced `cacToken`, `userId`, `caUserId` and
 `cacUserId` (booleans only, never values).
+
+### 12.1 Structured exchange events
+
+`on_exchange` receives structured events for REST and MQTT:
+
+```python
+events = []
+client = DeepalIntlClient(country="ES", on_exchange=events.append)
+```
+
+- REST events use `kind="rest"` and carry the method, path, query/body, headers, status, response
+  body or error, duration and a `client` marker.
+- MQTT events use `kind="mqtt"` and report `session_open`, `session_close`, `publish`, `receive`,
+  `result`, `timeout` and `error`. They carry the vehicle, topic, payload, decoded parameters or
+  service result and the request id.
+- The callback is synchronous and must return quickly. It is wrapped: a callback exception never
+  changes the API result.
+- The event objects may contain credentials and personal identifiers. Apply
+  `deepal.redact.redact_for_log`, `redact_topic` and `redact_mqtt_request_id` before persisting or
+  sharing them. The Home Assistant integration does this for its full capture file.
+
+The same callback is available on `DeepalClient` (SDA), where it reports REST events only.
 
 ## 13. Public method index
 

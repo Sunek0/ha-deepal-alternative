@@ -183,7 +183,10 @@
     },
     "abort": {
       "already_configured": "Esta conta já está configurada.",
-      "reauth_successful": "Reautenticação bem-sucedida."
+      "cannot_connect": "Não foi possível contactar a API Changan Deepal; o fluxo foi fechado. Inicie novamente a reautenticação.",
+      "no_vehicles": "A conta não tem veículos associados.",
+      "reauth_successful": "Reautenticação bem-sucedida.",
+      "wrong_account": "A conta iniciada não corresponde a esta entrada de integração."
     }
   },
   "options": {
@@ -199,7 +202,7 @@
           "environment": "Ambiente regional",
           "show_panel": "Mostrar o painel lateral"
         },
-        "description": "Ajusta a consulta e o diagnóstico. O PIN de controlo ativa os comandos remotos assinados; as opções de diagnóstico alteram a forma como a API vê o cliente e só devem ser mexidas durante a resolução de problemas.",
+        "description": "Ajusta a consulta e o diagnóstico. O PIN de controlo ativa os comandos remotos assinados; as opções de diagnóstico alteram a forma como a API vê o cliente e só devem ser mexidas durante a resolução de problemas.\n\n{diagnostics_status}",
         "data_description": {
           "scan_interval": "Com que frequência o Home Assistant consulta o veículo quando não há telemetria MQTT, em segundos (30-3600).",
           "control_pin": "PIN de controlo remoto da My Changan. Necessário para trancar/destrancar, mover os vidros ou abrir a bagageira.",
@@ -208,12 +211,31 @@
           "enable_location": "Pede e expõe a posição do veículo. Atualmente os veículos europeus não a enviam, pelo que o rastreador pode ficar desconhecido; a opção destina-se a servidores que a exponham.",
           "environment": "Conjunto de gateways regionais usado para a API internacional. Europa por omissão.",
           "show_panel": "Adiciona uma página Deepal na barra lateral para todos os utilizadores do Home Assistant."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Diagnóstico completo",
+            "description": "Guarda num ficheiro local todos os pedidos REST e trocas MQTT desta entrada. Usa a ação abaixo para iniciar um novo segmento, apagar os ficheiros ou atualizar a ligação de descarga. Os ficheiros estão ocultados e destinam-se apenas à resolução de problemas.",
+            "data": {
+              "enable_diagnostics_capture": "Guardar diagnóstico completo",
+              "diagnostics_action": "Ação de diagnóstico",
+              "diagnostics_confirm_delete": "Confirmar eliminação"
+            },
+            "data_description": {
+              "enable_diagnostics_capture": "Escreve cada pedido/resposta REST e cada troca MQTT na pasta de diagnóstico, com tokens, chaves, VIN, email, telefone, PIN, identificadores e localização ocultos. Ativa apenas durante a resolução de problemas.",
+              "diagnostics_action": "Seleciona uma ação e prime Guardar. As opções também são guardadas. A ligação de descarga continua disponível no estado acima.",
+              "diagnostics_confirm_delete": "Necessário para apagar todos os ficheiros de diagnóstico desta entrada. Não pode ser anulado."
+            }
+          }
         }
       }
     },
     "error": {
       "invalid_pin": "O PIN de controlo não é válido para esta conta.",
-      "pin_rate_limited": "Não restam tentativas de PIN; aguarde antes de tentar novamente."
+      "pin_rate_limited": "Não restam tentativas de PIN; aguarde antes de tentar novamente.",
+      "confirm_delete": "Marca «Confirmar eliminação» para apagar os ficheiros de diagnóstico.",
+      "no_diagnostics_file": "Ainda não existe nenhum ficheiro para descarregar.",
+      "diagnostics_action_failed": "Não foi possível concluir a ação de diagnóstico. Verifica o log do Home Assistant."
     }
   },
   "entity": {
@@ -299,7 +321,8 @@
           "connected_ac": "Cabo CA ligado",
           "connected_dc": "Cabo CC ligado",
           "charging_ac": "Carga em CA",
-          "charging_dc": "Carga em CC"
+          "charging_dc": "Carga em CC",
+          "charge_stopped": "Carregamento parado"
         }
       },
       "charge_mode": {
@@ -513,6 +536,9 @@
       "warning_abs": {
         "name": "Aviso ABS"
       },
+      "warning_airbag": {
+        "name": "Aviso airbag"
+      },
       "warning_brake_fluid": {
         "name": "Aviso líquido dos travões"
       },
@@ -530,6 +556,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Aviso bateria de tração fraca"
+      },
+      "warning_coolant_temperature": {
+        "name": "Aviso temperatura do refrigerante"
       }
     },
     "button": {
@@ -613,6 +642,28 @@
       "location": {
         "name": "Localização"
       }
+    }
+  },
+  "selector": {
+    "diagnostics_action": {
+      "options": {
+        "none": "Não fazer nada",
+        "new": "Criar um ficheiro novo",
+        "delete": "Apagar todos os ficheiros",
+        "download": "Atualizar a ligação de descarga"
+      }
+    }
+  },
+  "common": {
+    "diagnostics_status": {
+      "enabled": "**Diagnóstico completo:** ativado",
+      "disabled": "**Diagnóstico completo:** desativado",
+      "active_file": "**Ficheiro ativo:** `{name}` ({size})",
+      "files": "**Ficheiros:** {count} · {size}",
+      "no_file": "Ainda não existe ficheiro de diagnóstico.",
+      "download": "Descarregar ficheiro de diagnóstico",
+      "dropped": "**Eventos descartados:** {count}",
+      "last_error": "**Último erro de captura:** `{error}`"
     }
   }
 }

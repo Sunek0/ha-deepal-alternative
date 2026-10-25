@@ -407,6 +407,17 @@ const PANEL_CSS = `
 }
 
 .stage-status { aspect-ratio: 1 / 1; }
+/* The rotated status picture is cropped top and bottom to a 750:550 frame;
+   the square source stays centred and is not scaled down. */
+.stage-status.stage-rotated { aspect-ratio: 750 / 550; }
+.stage-status.stage-rotated img {
+  inset: auto 0;
+  top: 50%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  transform: translateY(-50%) rotate(-90deg);
+}
+.stage-compact { aspect-ratio: 3 / 2; }
 .stage-climate { aspect-ratio: 1125 / 642; }
 .stage-charging { aspect-ratio: 3 / 2; }
 .stage-seats {
@@ -451,6 +462,12 @@ const PANEL_CSS = `
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* The isometric angle can hide an open front door behind its own panel; the
+   pre-rendered outline piece is stacked on top of the open door. */
+.stage .open-door-outline {
+  opacity: 0.92;
 }
 
 .vehicle-photo {

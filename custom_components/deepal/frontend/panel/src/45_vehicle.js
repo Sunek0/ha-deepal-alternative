@@ -47,7 +47,7 @@ function browserLanguage() {
  * Every piece is drawn, closed or open: the base image (Ocar1) is the bare
  * body and the doors, hood and trunk come as separate layers.
  */
-function vehicleStageHtml(hass, vehicle) {
+function vehicleStageHtml(hass, vehicle, options = {}) {
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const layout = layoutFor(vehicle);
 
@@ -80,10 +80,11 @@ function vehicleStageHtml(hass, vehicle) {
       layers.push("lights_on");
     }
     const stage = layout.status;
-    return `<div class="stage stage-status">
-      <img src="${assetUrl(stage.base)}" alt="">
+    const stageClass = `stage stage-status${options.rotate ? " stage-rotated" : ""}`;
+    return `<div class="${stageClass}">
+      <img src="${assetUrl(stage.base, vehicle)}" alt="">
       ${layers
-        .map((name) => `<img src="${assetUrl(stage.layers[name])}" alt="">`)
+        .map((name) => `<img src="${assetUrl(stage.layers[name], vehicle)}" alt="">`)
         .join("")}
     </div>`;
   }
@@ -92,6 +93,64 @@ function vehicleStageHtml(hass, vehicle) {
   const picture = imageId ? attributeFor(hass, imageId, "entity_picture") : null;
   if (!picture) return "";
   return vehiclePhotoHtml(hass, vehicle);
+}
+
+/**
+ * State-aware 3/4 picture for the compact card, or "" when the model has no
+ * compact artwork.
+ *
+ * The staged isometric pack is drawn in its documented order: the far-side
+ * doors and the closed trunk stay behind the bare body, then the open trunk,
+ * hood and near-side doors go in front. Window glass is drawn only while the
+ * window is up, with a variant for an open door. Open doors get their outline
+ * piece on top, which is what makes the state readable at this angle.
+ */
+function vehicleCompactStageHtml(hass, vehicle) {
+  const layout = layoutFor(vehicle)?.compact;
+  if (!layout) return "";
+  const entity = (domain, key) => entityFor(vehicle, domain, key);
+  const on = (key) => isOn(hass, entity("binary_sensor", key));
+  const layers = layout.layers;
+  const images = [];
+  const outlines = [];
+
+  const add = (name) => {
+    if (name) images.push(`<img src="${assetUrl(name)}" alt="">`);
+  };
+  const side = (position) => {
+    const doorOpen = on(`door_${position}`);
+    const windowOpen = on(`window_${position}`);
+    if (!windowOpen) {
+      add(
+        layers[
+          doorOpen
+            ? `window_${position}_closed_door_open`
+            : `window_${position}_closed`
+        ],
+      );
+    }
+    add(layers[doorOpen ? `door_${position}_open` : `door_${position}_closed`]);
+    if (doorOpen) outlines.push(layers[`door_${position}_outline`]);
+  };
+
+  side("rear_right");
+  side("front_right");
+  if (!on("trunk")) add(layers.trunk_closed);
+  add(layout.base);
+  if (on("trunk")) add(layers.trunk_open);
+  add(on("hood") ? layers.hood_open : layers.hood_closed);
+  side("rear_left");
+  side("front_left");
+  if (["low_beam", "high_beam", "position_lamp"].some((key) => on(key))) {
+    add(layers.lights_on);
+  }
+  for (const name of outlines) {
+    if (!name) continue;
+    images.push(
+      `<img class="open-door-outline" src="${assetUrl(name)}" alt="">`,
+    );
+  }
+  return `<div class="stage stage-compact">${images.join("")}</div>`;
 }
 
 /** Vehicle image entity as a picture ("" when the image is unavailable). */
@@ -104,80 +163,36 @@ function vehiclePhotoHtml(hass, vehicle) {
   return `<img class="vehicle-photo" src="${escapeHtml(picture)}" alt="">`;
 }
 
-/** Profile hero picture (its 3/4 view), or "" when the model has none. */
+/** Official hero picture (3/4 view), or "" when the model has none. */
 function vehicleHeroHtml(vehicle) {
   const hero = layoutFor(vehicle)?.hero;
-  return hero ? `<img class="vehicle-photo" src="${assetUrl(hero)}" alt="">` : "";
+  if (hero) {
+    return `<img class="vehicle-photo" src="${assetUrl(hero, vehicle)}" alt="">`;
+  }
+  // S05 has no bundled hero, but the official pack may provide one.
+  if (
+    vehicle.modelAssets &&
+    vehicle.modelAssets.categories.includes("hero")
+  ) {
+    return `<img class="vehicle-photo" src="${assetUrl("s05/side/carDefault.png", vehicle)}" alt="">`;
+  }
+  return "";
 }
 
 /**
- * State chips shared by the panel status view and the dashboard cards.
- * `options.lock` puts the general closure (padlock) first — the complete card
- * uses it because its vitals carry no lock state; `options.openingsOnly` keeps
- * just the door, window, trunk and hood chips for the compact card.
+ * Central-locking chip displayed below the status picture, or "" when the
+ * vehicle has no lock entity or its state is unknown.
  */
-function vehicleChipsHtml(hass, vehicle, t, options = {}) {
-  const entity = (domain, key) => entityFor(vehicle, domain, key);
-  const chips = [];
-  const chip = (label, stateText, active, warn = false) =>
-    `<span class="chip ${active ? (warn ? "warn" : "on") : ""}">${escapeHtml(label)}: ${escapeHtml(stateText)}</span>`;
-  const chipFor = (labelKey, active) =>
-    chip(t(labelKey), active ? t("open") : t("closed"), active, active);
-
-  if (options.lock) {
-    const locked = lockStateFor(hass, vehicle);
-    if (locked !== null) {
-      chips.push(
-        `<span class="chip ${locked ? "" : "warn"}">
-          <ha-icon icon="${locked ? PANEL_ICONS.lock : PANEL_ICONS.unlock}"></ha-icon>
-          ${escapeHtml(locked ? t("locked") : t("unlocked"))}
-        </span>`,
-      );
-    }
-  }
-
-  const anyDoorOpen = [
-    "door_front_left",
-    "door_front_right",
-    "door_rear_left",
-    "door_rear_right",
-  ].some((key) => isOn(hass, entity("binary_sensor", key)));
-  chips.push(chipFor("doors", anyDoorOpen));
-
-  const anyWindowOpen = [
-    "window_front_left",
-    "window_front_right",
-    "window_rear_left",
-    "window_rear_right",
-  ].some((key) => isOn(hass, entity("binary_sensor", key)));
-  chips.push(chipFor("windows", anyWindowOpen));
-
-  chips.push(chipFor("trunk", isOn(hass, entity("binary_sensor", "trunk"))));
-  chips.push(chipFor("hood", isOn(hass, entity("binary_sensor", "hood"))));
-
-  if (options.openingsOnly) return chips.join("");
-
-  const lightKeys = [
-    "low_beam",
-    "high_beam",
-    "position_lamp",
-    "rear_fog_lamp",
-  ].filter((key) => isOn(hass, entity("binary_sensor", key)));
-  chips.push(
-    chip(
-      t("lights"),
-      lightKeys.length ? lightKeys.map((key) => t(key)).join(", ") : t("off"),
-      lightKeys.length > 0,
-    ),
-  );
-
-  const engineOn = isOn(hass, entity("binary_sensor", "engine"));
-  chips.push(chip(t("engine"), engineOn ? t("on") : t("off"), engineOn));
-
-  return chips.join("");
+function vehicleLockChipHtml(hass, vehicle, t) {
+  const locked = lockStateFor(hass, vehicle);
+  if (locked === null) return "";
+  return `<span class="chip ${locked ? "" : "warn"}">
+    <ha-icon icon="${locked ? PANEL_ICONS.lock : PANEL_ICONS.unlock}"></ha-icon>
+    ${escapeHtml(locked ? t("locked") : t("unlocked"))}
+  </span>`;
 }
 
-/** Locked state shared by the chips, the vitals strip and the lock control. */
+/** Locked state shared by the vitals strip and the lock control. */
 function lockStateFor(hass, vehicle) {
   const lockId = entityFor(vehicle, "lock", "doors");
   const lockState = lockId ? stateFor(hass, lockId) : null;

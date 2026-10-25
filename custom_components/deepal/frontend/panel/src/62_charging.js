@@ -16,10 +16,10 @@ DeepalPanel.prototype._renderCharging = function (vehicle) {
   const layout = layoutFor(vehicle)?.charging;
   const stageHtml = layout
     ? `<div class="stage stage-charging">
-        <img src="${assetUrl(layout.base)}" alt="">
+        <img src="${assetUrl(layout.base, vehicle)}" alt="">
         ${
           plugged
-            ? `<img src="${assetUrl(charging ? layout.layers.charging : layout.layers.plugged)}" alt="">`
+            ? `<img src="${assetUrl(charging ? layout.layers.charging : layout.layers.plugged, vehicle)}" alt="">`
             : ""
         }
         <span class="anim-slot" data-anim="charging_on"></span>

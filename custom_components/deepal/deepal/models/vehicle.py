@@ -44,8 +44,21 @@ class Vehicle(BaseModel):
     car_name: Optional[str] = Field(default=None, description="Custom vehicle nickname")
     license_plate: Optional[str] = Field(default=None, description="License plate number")
     thumbnail_url: Optional[str] = Field(default=None, description="Image URL of the vehicle model")
+    car_platform: Optional[int] = Field(
+        default=None,
+        description="Backend car platform value used by the model-asset and manual endpoints",
+    )
     protocol_type: Optional[str] = Field(
         default=None, description="Backend telemetry protocol, 'MQTT' for MQTT-backed vehicles"
+    )
+
+
+class VehicleModelAsset(BaseModel):
+    """Official layered vehicle-model archive descriptor."""
+
+    model_url: str = Field(..., description="HTTPS URL of the layered model ZIP")
+    md5: Optional[str] = Field(
+        default=None, description="MD5 checksum advertised by the gateway"
     )
 
 
@@ -232,12 +245,14 @@ class WarningLightsCondition(BaseModel):
     battery_12v: Optional[bool] = None
     tpms: Optional[bool] = None
     abs: Optional[bool] = None
+    airbag: Optional[bool] = None
     brake_fluid: Optional[bool] = None
     brake: Optional[bool] = None
     eps: Optional[bool] = None
     power_limit: Optional[bool] = None
     power_system: Optional[bool] = None
     traction_battery_low: Optional[bool] = None
+    coolant_temperature: Optional[bool] = None
 
 
 class LampsCondition(BaseModel):

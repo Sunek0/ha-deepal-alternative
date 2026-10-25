@@ -105,7 +105,7 @@ def _connack(reason: int) -> bytes:
 
 
 def _suback(packet_id: int, reasons: list[int]) -> bytes:
-    body = packet_id.to_bytes(2, "big") + bytes(reasons)
+    body = packet_id.to_bytes(2, "big") + b"\x00" + bytes(reasons)
     return bytes([0x90, len(body)]) + body
 
 

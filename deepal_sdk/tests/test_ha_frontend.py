@@ -8,6 +8,8 @@ config entries.
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +76,7 @@ class FakeResources:
     def __init__(self, items=None) -> None:
         self.items = list(items or [])
         self.created: list[dict] = []
+        self.updated: list[tuple[str, dict]] = []
         self.deleted: list[str] = []
 
     async def async_get_info(self) -> None:
@@ -87,6 +90,13 @@ class FakeResources:
         item = {"id": f"item-{len(self.created)}", **data}
         self.items.append(item)
         return item
+
+    async def async_update_item(self, item_id, updates):
+        self.updated.append((item_id, updates))
+        for item in self.items:
+            if item.get("id") == item_id:
+                item.update(updates)
+        return next(item for item in self.items if item.get("id") == item_id)
 
     async def async_delete_item(self, item_id) -> None:
         self.deleted.append(item_id)
@@ -166,11 +176,13 @@ async def test_bundle_resource_is_registered_once() -> None:
     await frontend_module.async_register_frontend(hass)
 
     resources = hass.data[LOVELACE_DATA].resources
-    assert resources.created == [{"res_type": "module", "url": FRONTEND_JS_URL}]
+    assert resources.created == [
+        {"res_type": "module", "url": f"{FRONTEND_JS_URL}?v={VERSION}"}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_existing_bundle_resource_is_not_duplicated() -> None:
+async def test_existing_bundle_resource_is_moved_to_the_current_version() -> None:
     hass = _fake_hass()
     resources = hass.data[LOVELACE_DATA].resources
     resources.items.append(
@@ -180,6 +192,25 @@ async def test_existing_bundle_resource_is_not_duplicated() -> None:
     await frontend_module.async_register_frontend(hass)
 
     assert resources.created == []
+    assert resources.updated == [
+        ("old", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unversioned_bundle_resource_is_moved_to_the_current_version() -> None:
+    hass = _fake_hass()
+    resources = hass.data[LOVELACE_DATA].resources
+    resources.items.append(
+        {"id": "legacy", "url": FRONTEND_JS_URL, "res_type": "module"}
+    )
+
+    await frontend_module.async_register_frontend(hass)
+
+    assert resources.created == []
+    assert resources.updated == [
+        ("legacy", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
+    ]
 
 
 @pytest.mark.asyncio
@@ -503,6 +534,237 @@ def test_profile_layout_assets_ship_on_disk() -> None:
     assert any(path.endswith(".webm") for path in assets)
     missing = [path for path in assets if not (PANEL_ASSETS / path).is_file()]
     assert missing == []
+
+
+def test_asset_url_prefers_the_dynamic_pack_and_falls_back(tmp_path: Path) -> None:
+    """The built asset resolver maps panel paths to the official pack."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    constants = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
+    helpers = (PANEL_SRC / "40_helpers.js").read_text(encoding="utf-8")
+    script = f"""
+const vm = require("vm");
+const source = {json.dumps(constants + "\n" + helpers)};
+const sandbox = {{ PANEL_VERSION: "1" }};
+vm.createContext(sandbox);
+vm.runInContext(
+  source + "\\n;globalThis.__assetUrl = assetUrl; globalThis.__discoverVehicles = discoverVehicles;",
+  sandbox,
+);
+const vehicle = {{
+  modelAssets: {{
+    base: "/deepal/vehicle_model/car-1",
+    categories: ["status", "hero", "climate", "charging", "seats"],
+    md5: "abc123",
+  }},
+}};
+const cases = [
+  ["s05/estado_planta/Ocar1.png", "/deepal/vehicle_model/car-1/overlook/Ocar1.png?v=abc123"],
+  ["s07/aa/carAc.png", "/deepal/vehicle_model/car-1/ac/carAc.png?v=abc123"],
+  ["s07/bateria/carBattery.png", "/deepal/vehicle_model/car-1/battery/carBattery.png?v=abc123"],
+  ["s07/asientos/carSeat.png", "/deepal/vehicle_model/car-1/seat/carSeat.png?v=abc123"],
+  ["s07/anim/anim_air_start_left.webm", "/deepal/frontend/assets/s07/anim/anim_air_start_left.webm?v=1"],
+];
+for (const [path, expected] of cases) {{
+  const actual = sandbox.__assetUrl(path, vehicle);
+  if (actual !== expected) {{
+    console.error(path, "->", actual, "expected", expected);
+    process.exit(1);
+  }}
+}}
+const fallback = sandbox.__assetUrl("s07/aa/carAc.png", {{ modelAssets: null }});
+if (fallback !== "/deepal/frontend/assets/s07/aa/carAc.png?v=1") process.exit(1);
+
+const hass = {{
+  entities: {{
+    "image.car-1": {{
+      platform: "deepal",
+      device_id: "dev-1",
+      translation_key: "vehicle_image",
+      entity_id: "image.car-1",
+    }},
+  }},
+  devices: {{ "dev-1": {{ name: "My S05", model: "Deepal S05" }} }},
+  states: {{
+    "image.car-1": {{
+      attributes: {{
+        model_assets_base: "/deepal/vehicle_model/car-1",
+        model_assets_categories: ["status", "hero"],
+        model_assets_md5: "abc123",
+      }},
+    }},
+  }},
+}};
+const [discovered] = sandbox.__discoverVehicles(hass);
+if (!discovered || discovered.modelAssets.base !== "/deepal/vehicle_model/car-1") {{
+  process.exit(1);
+}}
+if (discovered.profile !== "s05_ev") process.exit(1);
+"""
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+COMPACT_ASSETS = [
+    "s05/estado_isometrico/car1.png",
+    "s05/estado_isometrico/hood0.png",
+    "s05/estado_isometrico/hood1.png",
+    "s05/estado_isometrico/trunk0.png",
+    "s05/estado_isometrico/trunk1.png",
+    "s05/estado_isometrico/LF0.png",
+    "s05/estado_isometrico/LF1.png",
+    "s05/estado_isometrico/RF0.png",
+    "s05/estado_isometrico/RF1.png",
+    "s05/estado_isometrico/LB0.png",
+    "s05/estado_isometrico/LB1.png",
+    "s05/estado_isometrico/RB0.png",
+    "s05/estado_isometrico/RB1.png",
+    "s05/estado_isometrico/LF0-outline.png",
+    "s05/estado_isometrico/RF0-outline.png",
+    "s05/estado_isometrico/LB0-outline.png",
+    "s05/estado_isometrico/RB0-outline.png",
+    "s05/estado_isometrico/windowsLF0.png",
+    "s05/estado_isometrico/openDoor-windowsLF0.png",
+    "s05/estado_isometrico/windowsRF0.png",
+    "s05/estado_isometrico/openDoor-windowsRF0.png",
+    "s05/estado_isometrico/windowsLB0.png",
+    "s05/estado_isometrico/openDoor-windowsLB0.png",
+    "s05/estado_isometrico/windowsRB0.png",
+    "s05/estado_isometrico/openDoor-windowsRB0.png",
+    "s05/estado_isometrico/lowBeam1.png",
+]
+
+COMPACT_LAYER_KEYS = [
+    "hood_closed",
+    "hood_open",
+    "trunk_closed",
+    "trunk_open",
+    "door_front_left_closed",
+    "door_front_left_open",
+    "door_front_left_outline",
+    "door_front_right_closed",
+    "door_front_right_open",
+    "door_front_right_outline",
+    "door_rear_left_closed",
+    "door_rear_left_open",
+    "door_rear_left_outline",
+    "door_rear_right_closed",
+    "door_rear_right_open",
+    "door_rear_right_outline",
+    "window_front_left_closed",
+    "window_front_left_closed_door_open",
+    "window_front_right_closed",
+    "window_front_right_closed_door_open",
+    "window_rear_left_closed",
+    "window_rear_left_closed_door_open",
+    "window_rear_right_closed",
+    "window_rear_right_closed_door_open",
+    "lights_on",
+]
+
+
+def test_compact_layout_ships_every_state_layer() -> None:
+    """The S05 compact block references all isometric state pieces."""
+    source = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
+    start = source.index("compact: {")
+    end = source.index("climate: {", start)
+    compact = source[start:end]
+
+    assert "base: \"s05/estado_isometrico/car1.png\"" in compact
+    for key in COMPACT_LAYER_KEYS:
+        assert f"{key}:" in compact, key
+    for path in COMPACT_ASSETS:
+        assert f'"{path}"' in compact, path
+
+
+def test_compact_assets_share_the_isometric_canvas() -> None:
+    """Every compact layer must align on the 750x500 isometric canvas."""
+    from PIL import Image
+
+    for path in COMPACT_ASSETS:
+        asset = PANEL_ASSETS / path
+        assert asset.is_file(), path
+        with Image.open(asset) as image:
+            assert image.size == (750, 500), path
+            assert image.convert("RGBA").getchannel("A").getbbox() is not None, path
+
+
+def test_compact_card_prefers_state_artwork() -> None:
+    """The compact card must try the layered picture before the API image."""
+    source = (PANEL_SRC / "70_card.js").read_text(encoding="utf-8")
+    compact = "vehicleCompactStageHtml(this._hass, vehicle)"
+    photo = "vehiclePhotoHtml(this._hass, vehicle)"
+
+    assert compact in source
+    assert photo in source
+    assert source.index(compact) < source.index(photo)
+
+
+def test_compact_renderer_keeps_the_documented_layer_order() -> None:
+    """The isometric layers must stay in their staged behind/front order."""
+    source = (PANEL_SRC / "45_vehicle.js").read_text(encoding="utf-8")
+    markers = [
+        'side("rear_right");',
+        'side("front_right");',
+        "add(layers.trunk_closed);",
+        "add(layout.base);",
+        "add(layers.trunk_open);",
+        'add(on("hood") ? layers.hood_open : layers.hood_closed);',
+        'side("rear_left");',
+        'side("front_left");',
+        "open-door-outline",
+    ]
+    positions = [source.index(marker) for marker in markers]
+
+    assert positions == sorted(positions)
+    assert "outlines.push(layers[`door_${position}_outline`]);" in source
+
+
+def test_status_view_rotates_the_stage_and_keeps_only_the_lock_chip() -> None:
+    """The complete card and panel share the rotated, lock-only status view."""
+    source = (PANEL_SRC / "60_status.js").read_text(encoding="utf-8")
+
+    assert "vehicleStageHtml(hass, vehicle, { rotate: true })" in source
+    assert "vehicleLockChipHtml(hass, vehicle, t)" in source
+    assert "vehicleChipsHtml" not in source
+
+
+def test_stage_rotation_is_limited_to_the_status_class() -> None:
+    """Rotation and the 750:550 crop are a status-only class."""
+    source = (PANEL_SRC / "30_styles.js").read_text(encoding="utf-8")
+
+    assert ".stage-status.stage-rotated { aspect-ratio: 750 / 550; }" in source
+    assert "transform: translateY(-50%) rotate(-90deg);" in source
+    assert ".stage-status { aspect-ratio: 1 / 1; }" in source
+
+
+def test_status_uses_the_lock_chip_helper_without_the_old_chip_row() -> None:
+    """The shared chip helper is only the central-locking chip now."""
+    source = (PANEL_SRC / "45_vehicle.js").read_text(encoding="utf-8")
+
+    assert "function vehicleLockChipHtml(hass, vehicle, t)" in source
+    assert "vehicleChipsHtml" not in source
+    assert "anyDoorOpen" not in source
+
+
+def test_compact_card_has_no_chips_under_the_picture() -> None:
+    """The compact card keeps the state in the picture, not in a chip row."""
+    source = (PANEL_SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert "vehicleCompactStageHtml(this._hass, vehicle)" in source
+    assert "vehicleChipsHtml" not in source
+    assert '<div class="chips">' not in source
+
+
+def test_spanish_lock_label_is_centralizado() -> None:
+    """The Spanish vitals label reads 'Cierre centralizado'."""
+    texts = json.loads(
+        (PANEL_SRC.parent / "texts" / "es.json").read_text(encoding="utf-8")
+    )
+
+    assert texts["central_lock"] == "Cierre centralizado"
 
 
 # --- Dashboard strategies --------------------------------------------------

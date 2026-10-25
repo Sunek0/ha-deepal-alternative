@@ -98,9 +98,53 @@ def _fake_hass(client: FakeHttpClient) -> SimpleNamespace:
         return func(*args)
 
     return SimpleNamespace(
-        data={DATA_ASYNC_CLIENT: {(False, SSL_ALPN_HTTP11): client}},
+        data={
+            DATA_ASYNC_CLIENT: {
+                (False, SSL_ALPN_HTTP11): client,
+                (True, SSL_ALPN_HTTP11): client,
+            }
+        },
         async_add_executor_job=async_add_executor_job,
     )
+
+
+_REAL_HOST_IS_PUBLIC = image_platform._async_host_is_public
+
+
+@pytest.fixture(autouse=True)
+def _allow_public_image_hosts(monkeypatch):
+    """Keep the fetch tests independent from DNS."""
+
+    async def _public(hass, host, resolver=None):
+        return True
+
+    monkeypatch.setattr(image_platform, "_async_host_is_public", _public)
+
+
+@pytest.mark.asyncio
+async def test_image_host_policy_rejects_internal_hosts():
+    hass = _fake_hass(FakeHttpClient())
+
+    for host in (
+        "127.0.0.1",
+        "10.0.0.5",
+        "169.254.1.1",
+        "::1",
+        "fe80::1",
+        "localhost",
+        "camera.local",
+        "",
+    ):
+        assert await _REAL_HOST_IS_PUBLIC(hass, host) is False
+
+    async def public_resolver(host):
+        return [(None, None, None, None, ("93.184.216.34", 443))]
+
+    async def internal_resolver(host):
+        return [(None, None, None, None, ("10.0.0.5", 443))]
+
+    assert await _REAL_HOST_IS_PUBLIC(hass, "example.com", public_resolver) is True
+    assert await _REAL_HOST_IS_PUBLIC(hass, "evil.example", internal_resolver) is False
 
 
 def _vehicle(
@@ -122,20 +166,53 @@ def _vehicle(
 class FakeCoordinator:
     """Coordinator double with the attributes the image entity reads."""
 
-    def __init__(self, hass: SimpleNamespace, data: dict | None = None) -> None:
+    def __init__(
+        self,
+        hass: SimpleNamespace,
+        data: dict | None = None,
+        model_assets=None,
+    ) -> None:
         self.hass = hass
         self.data = data or {}
+        self.model_assets = model_assets
+
+
+class FakeModelAssets:
+    """Small manager double for the image-entity attributes."""
+
+    def __init__(self, status=None) -> None:
+        self._status = status
+        self.listeners: list = []
+
+    def status(self, car_id: str):
+        return self._status
+
+    def add_listener(self, listener) -> None:
+        self.listeners.append(listener)
+
+    def remove_listener(self, listener) -> None:
+        if listener in self.listeners:
+            self.listeners.remove(listener)
 
 
 def _entity(
     client: FakeHttpClient,
     vehicle: SimpleNamespace,
     data: dict | None = None,
+    model_assets=None,
 ) -> DeepalVehicleImage:
     hass = _fake_hass(client)
-    entity = DeepalVehicleImage(FakeCoordinator(hass, data), vehicle)
+    entity = DeepalVehicleImage(
+        FakeCoordinator(hass, data, model_assets), vehicle
+    )
     entity.hass = hass
     return entity
+
+
+def test_model_asset_base_is_not_recorded():
+    entity = _entity(FakeHttpClient(), _vehicle())
+
+    assert "model_assets_base" in entity._unrecorded_attributes
 
 
 @pytest.mark.parametrize(
@@ -158,6 +235,31 @@ def test_vehicle_image_asset_resolution(
     asset = vehicle_image_asset(series, None, model_name=model)
     assert asset.name == expected
     assert asset.exists()
+
+
+def test_model_asset_attributes_are_exposed_when_available() -> None:
+    manager = FakeModelAssets(
+        SimpleNamespace(
+            categories=("status", "climate", "charging"),
+            base_url="/deepal/vehicle_model/car-1",
+            md5="abc123",
+        )
+    )
+    entity = _entity(
+        FakeHttpClient(), _vehicle(thumbnail_url=None), model_assets=manager
+    )
+
+    assert entity.extra_state_attributes == {
+        "model_assets_base": "/deepal/vehicle_model/car-1",
+        "model_assets_categories": ["status", "climate", "charging"],
+        "model_assets_md5": "abc123",
+    }
+    assert len(manager.listeners) == 1
+
+
+def test_model_asset_attributes_are_empty_without_a_manager() -> None:
+    entity = _entity(FakeHttpClient(), _vehicle(thumbnail_url=None))
+    assert entity.extra_state_attributes == {}
 
 
 @pytest.mark.asyncio

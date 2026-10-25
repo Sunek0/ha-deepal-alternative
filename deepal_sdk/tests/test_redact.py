@@ -222,3 +222,52 @@ def test_safe_headers_keeps_timestamps():
         "x-tsp-timestamp": "1700000000000",
         "x-vcs-timestamp": "1700000000000",
     }
+
+
+def test_identifier_keys_are_sensitive():
+    payload = {
+        "uid": "user-1",
+        "cid": "car-1",
+        "ruid": "device-1",
+        "carId": "car-1",
+        "car_id": "car-1",
+        "soc": 50,
+    }
+
+    out = redact_for_log(payload)
+
+    for key in ("uid", "cid", "ruid", "carId", "car_id"):
+        assert out[key] == "[redacted]", key
+    assert out["soc"] == 50
+
+
+def test_redact_topic_masks_the_device_segment():
+    from deepal.redact import redact_topic
+
+    assert redact_topic("$vdp/device-did/properties/get/res") == (
+        "$vdp/[redacted]/properties/get/res"
+    )
+    assert redact_topic("$vdp/device-did") == "$vdp/[redacted]"
+    assert redact_topic("not-a-vdp-topic") == "not-a-vdp-topic"
+
+
+def test_redact_mqtt_request_id_masks_the_device_prefix():
+    from deepal.redact import redact_mqtt_request_id
+
+    assert redact_mqtt_request_id("device-did_1720000000000000") == (
+        "[redacted]_1720000000000000"
+    )
+    assert redact_mqtt_request_id("plain-request-id") == "plain-request-id"
+
+
+def test_jwt_like_values_are_masked_under_innocent_keys():
+    token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature"
+    out = redact_for_log({"note": token})
+
+    assert out["note"] == "[redacted]"
+
+
+def test_redact_for_log_accepts_a_larger_string_limit():
+    out = redact_for_log({"note": "x" * 600}, max_string_length=1000)
+
+    assert out["note"] == "x" * 600

@@ -45,6 +45,9 @@ CONF_DEVICE_ID = "device_id"
 CONF_ENVIRONMENT = "environment"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_API_LOGGING = "enable_api_logging"
+CONF_ENABLE_DIAGNOSTICS_CAPTURE = "enable_diagnostics_capture"
+CONF_DIAGNOSTICS_ACTION = "diagnostics_action"
+CONF_DIAGNOSTICS_CONFIRM_DELETE = "diagnostics_confirm_delete"
 CONF_ENABLE_LOCATION = "enable_location"
 CONF_WAKE = "wake"
 CONF_SHOW_PANEL = "show_panel"
@@ -69,6 +72,27 @@ WAKE_STALE_AFTER = 120  # seconds since the last report before waking
 WAKE_COOLDOWN = 300  # seconds between wakes per vehicle
 WAKE_REPORT_TIMEOUT = 60  # seconds to wait for the fresh report after a wake
 WAKE_BEFORE_COMMAND_TIMEOUT = 30  # seconds to wait before a PIN command
+
+# Full diagnostics capture
+DIAGNOSTICS_ACTION_NONE = "none"
+DIAGNOSTICS_ACTION_NEW = "new"
+DIAGNOSTICS_ACTION_DELETE = "delete"
+DIAGNOSTICS_ACTION_DOWNLOAD = "download"
+DIAGNOSTICS_ACTIONS = (
+    DIAGNOSTICS_ACTION_NONE,
+    DIAGNOSTICS_ACTION_NEW,
+    DIAGNOSTICS_ACTION_DELETE,
+    DIAGNOSTICS_ACTION_DOWNLOAD,
+)
+DIAGNOSTICS_DIR = "deepal_diagnostics"
+DIAGNOSTICS_SCHEMA_VERSION = 1
+DIAGNOSTICS_MAX_FILE_BYTES = 10 * 1024 * 1024
+DIAGNOSTICS_MAX_FILES = 5
+DIAGNOSTICS_MAX_STRING_LENGTH = 20_000
+DIAGNOSTICS_MAX_EVENT_BYTES = 512 * 1024
+DIAGNOSTICS_RECENT_EVENTS = 200
+DIAGNOSTICS_DOWNLOAD_URL = "/api/deepal/diagnostics"
+DIAGNOSTICS_DOWNLOAD_TTL_MINUTES = 10
 
 # Device Info
 MANUFACTURER = "Changan Auto"

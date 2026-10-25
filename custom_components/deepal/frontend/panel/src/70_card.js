@@ -47,10 +47,6 @@ class DeepalCard extends DeepalPanel {
     return false;
   }
 
-  get _chipsShowLock() {
-    return true;
-  }
-
   _titleHtml() {
     const vehicle = this._vehicle;
     const refresh = vehicle
@@ -227,8 +223,7 @@ class DeepalCompactCard extends DeepalCard {
           vehicle
             ? `${vitalsHtml(this._hass, vehicle, (key) => this._t(key))}
                <div class="section">
-                 ${vehiclePhotoHtml(this._hass, vehicle) || vehicleHeroHtml(vehicle) || vehicleStageHtml(this._hass, vehicle)}
-                 <div class="chips">${vehicleChipsHtml(this._hass, vehicle, (key) => this._t(key), { openingsOnly: true })}</div>
+                 ${vehicleCompactStageHtml(this._hass, vehicle) || vehiclePhotoHtml(this._hass, vehicle) || vehicleHeroHtml(vehicle) || vehicleStageHtml(this._hass, vehicle)}
                </div>
                ${this._climateHtml(vehicle)}
                ${this._actionsHtml(vehicle)}

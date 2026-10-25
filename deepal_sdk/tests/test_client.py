@@ -30,6 +30,33 @@ async def test_sda_client_timeout_defaults_to_30_seconds():
     await client.close()
 
 
+@pytest.mark.asyncio
+async def test_sda_get_vehicles_skips_entries_without_an_id():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "code": 200,
+                "data": [
+                    {"carId": "car-1", "vin": "VIN-1"},
+                    {"vin": "VIN-2"},
+                ],
+            },
+        )
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalClient(
+        access_token="test_token_123", httpx_client=http_client
+    )
+    try:
+        vehicles = await client.get_vehicles()
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert [vehicle.car_id for vehicle in vehicles] == ["car-1"]
+
+
 def test_vehicle_model():
     v = Vehicle(car_id="12345", vin="LS5AXXXXX123456", series_name="Deepal S05 Max")
     assert v.car_id == "12345"
@@ -173,3 +200,82 @@ def test_condition_accessors_share_the_coordinator_call_convention():
     for client_class in (DeepalClient, DeepalIntlClient):
         parameters = inspect.signature(client_class.get_vehicle_condition).parameters
         assert "vin" in parameters, client_class.__name__
+
+
+@pytest.mark.asyncio
+async def test_sda_exchange_callback_reports_request_and_response():
+    events: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": 200, "data": []})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalClient(
+        access_token="test_token_123",
+        httpx_client=http_client,
+        on_exchange=events.append,
+    )
+    try:
+        await client.get_vehicles()
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["kind"] == "rest"
+    assert event["client"] == "sda"
+    assert event["method"] == "GET"
+    assert event["status"] == 200
+    assert event["request"] is None
+    assert event["response"] == {"code": 200, "data": []}
+    assert "Authorization" in event["headers"]
+    assert isinstance(event["duration_ms"], float)
+
+
+@pytest.mark.asyncio
+async def test_sda_exchange_callback_reports_rate_limit_status():
+    events: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="slow down")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalClient(
+        access_token="test_token_123",
+        httpx_client=http_client,
+        on_exchange=events.append,
+    )
+    try:
+        with pytest.raises(DeepalRateLimitError):
+            await client.get_vehicles()
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert events[-1]["status"] == 429
+    assert events[-1]["response"] == "slow down"
+
+
+@pytest.mark.asyncio
+async def test_sda_exchange_callback_error_does_not_change_the_result(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": 200, "data": []})
+
+    def broken_callback(event: dict) -> None:
+        raise RuntimeError("callback boom")
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = DeepalClient(
+        access_token="test_token_123",
+        httpx_client=http_client,
+        on_exchange=broken_callback,
+    )
+    try:
+        vehicles = await client.get_vehicles()
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert vehicles == []
+    assert "Deepal exchange callback failed" in caplog.text

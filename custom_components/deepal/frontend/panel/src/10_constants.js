@@ -35,12 +35,13 @@ const PANEL_S07_MODEL_TOKENS = ["S07"];
 // range extender), so their presence is the EV/PHEV discriminator.
 const PANEL_FUEL_ENTITY_KEYS = ["fuel_level", "fuel_range"];
 
-// Per-model artwork, keyed by model family. Every file in `status`, `climate`,
-// `charging` and `seats` shares the canvas size of its base image, so the
-// panel only stacks them in order. `tabs` is the model-conditional tab list;
-// `hero` is the 3/4 picture the compact card falls back to when the vehicle
-// image is unavailable; `animations` maps a transition key to the clip played
-// when that transition happens, always over the matching static layer.
+// Per-model artwork, keyed by model family. Every file in `status`, `compact`,
+// `climate`, `charging` and `seats` shares the canvas size of its base image,
+// so the panel only stacks them in order. `tabs` is the model-conditional tab
+// list; `compact` is the state-aware 3/4 artwork the compact card prefers;
+// `hero` is its static fallback when the vehicle image is unavailable;
+// `animations` maps a transition key to the clip played when that transition
+// happens, always over the matching static layer.
 const PANEL_MODEL_LAYOUTS = {
   s05: {
     tabs: PANEL_TABS,
@@ -70,6 +71,42 @@ const PANEL_MODEL_LAYOUTS = {
         door_window_rear_left_open: "s05/estado_planta/OopenDoor-windowsLB1.png",
         door_window_rear_right_open: "s05/estado_planta/OopenDoor-windowsRB1.png",
         lights_on: "s05/estado_planta/OlowBeam1.png",
+      },
+    },
+    // The compact card's 3/4 isometric view. The base is the bare body; the
+    // doors, hood and trunk are separate pieces drawn in the order below.
+    compact: {
+      base: "s05/estado_isometrico/car1.png",
+      layers: {
+        hood_closed: "s05/estado_isometrico/hood0.png",
+        hood_open: "s05/estado_isometrico/hood1.png",
+        trunk_closed: "s05/estado_isometrico/trunk0.png",
+        trunk_open: "s05/estado_isometrico/trunk1.png",
+        door_front_left_closed: "s05/estado_isometrico/LF0.png",
+        door_front_left_open: "s05/estado_isometrico/LF1.png",
+        door_front_left_outline: "s05/estado_isometrico/LF0-outline.png",
+        door_front_right_closed: "s05/estado_isometrico/RF0.png",
+        door_front_right_open: "s05/estado_isometrico/RF1.png",
+        door_front_right_outline: "s05/estado_isometrico/RF0-outline.png",
+        door_rear_left_closed: "s05/estado_isometrico/LB0.png",
+        door_rear_left_open: "s05/estado_isometrico/LB1.png",
+        door_rear_left_outline: "s05/estado_isometrico/LB0-outline.png",
+        door_rear_right_closed: "s05/estado_isometrico/RB0.png",
+        door_rear_right_open: "s05/estado_isometrico/RB1.png",
+        door_rear_right_outline: "s05/estado_isometrico/RB0-outline.png",
+        window_front_left_closed: "s05/estado_isometrico/windowsLF0.png",
+        window_front_left_closed_door_open:
+          "s05/estado_isometrico/openDoor-windowsLF0.png",
+        window_front_right_closed: "s05/estado_isometrico/windowsRF0.png",
+        window_front_right_closed_door_open:
+          "s05/estado_isometrico/openDoor-windowsRF0.png",
+        window_rear_left_closed: "s05/estado_isometrico/windowsLB0.png",
+        window_rear_left_closed_door_open:
+          "s05/estado_isometrico/openDoor-windowsLB0.png",
+        window_rear_right_closed: "s05/estado_isometrico/windowsRB0.png",
+        window_rear_right_closed_door_open:
+          "s05/estado_isometrico/openDoor-windowsRB0.png",
+        lights_on: "s05/estado_isometrico/lowBeam1.png",
       },
     },
     climate: {

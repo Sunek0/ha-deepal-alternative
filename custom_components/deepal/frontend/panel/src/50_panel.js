@@ -54,11 +54,6 @@ class DeepalPanel extends HTMLElement {
     return true;
   }
 
-  /** Whether the state chips carry the general closure chip (complete card). */
-  get _chipsShowLock() {
-    return false;
-  }
-
   _syncVehicles() {
     this._vehicles = discoverVehicles(this._hass || {});
     if (!this._vehicles.some((vehicle) => vehicle.deviceId === this._deviceId)) {

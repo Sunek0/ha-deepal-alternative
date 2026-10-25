@@ -183,7 +183,10 @@
     },
     "abort": {
       "already_configured": "Questo account è già configurato.",
-      "reauth_successful": "Riautenticazione riuscita."
+      "cannot_connect": "Impossibile raggiungere l'API Changan Deepal; il flusso è stato chiuso. Riavvia la riautenticazione.",
+      "no_vehicles": "L'account non ha veicoli collegati.",
+      "reauth_successful": "Riautenticazione riuscita.",
+      "wrong_account": "L'account connesso non corrisponde a questa voce di integrazione."
     }
   },
   "options": {
@@ -199,7 +202,7 @@
           "environment": "Ambiente regionale",
           "show_panel": "Mostra il pannello laterale"
         },
-        "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.",
+        "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.\n\n{diagnostics_status}",
         "data_description": {
           "scan_interval": "Ogni quanto Home Assistant interroga il veicolo quando non è disponibile la telemetria MQTT, in secondi (30-3600).",
           "control_pin": "PIN di controllo remoto di My Changan. Necessario per bloccare/sbloccare, muovere i finestrini o aprire il bagagliaio.",
@@ -208,12 +211,31 @@
           "enable_location": "Richiede ed espone la posizione del veicolo. Attualmente i veicoli europei non la inviano, quindi il tracker può restare sconosciuto; l'opzione è pensata per i server che la espongono.",
           "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita.",
           "show_panel": "Aggiunge una pagina Deepal nella barra laterale per tutti gli utenti di Home Assistant."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Cattura diagnostica completa",
+            "description": "Registra ogni richiesta REST e ogni scambio MQTT di questa voce in un file locale. Usa l'azione qui sotto per iniziare un nuovo segmento, eliminare i file o aggiornare il link di download. I file sono oscurati e servono solo per la diagnosi.",
+            "data": {
+              "enable_diagnostics_capture": "Salva diagnostica completa",
+              "diagnostics_action": "Azione diagnostica",
+              "diagnostics_confirm_delete": "Conferma eliminazione"
+            },
+            "data_description": {
+              "enable_diagnostics_capture": "Scrive ogni richiesta/risposta REST e ogni scambio MQTT nella cartella di diagnostica, con token, chiavi, VIN, email, telefono, PIN, identificatori e posizione nascosti. Attivalo solo durante la risoluzione dei problemi.",
+              "diagnostics_action": "Seleziona un'azione e premi Salva. Anche le opzioni vengono salvate. Il link di download resta disponibile nello stato qui sopra.",
+              "diagnostics_confirm_delete": "Necessario per eliminare tutti i file di diagnostica di questa voce. Non può essere annullato."
+            }
+          }
         }
       }
     },
     "error": {
       "invalid_pin": "Il PIN di controllo non è valido per questo account.",
-      "pin_rate_limited": "Nessun tentativo PIN rimasto; attendi prima di riprovare."
+      "pin_rate_limited": "Nessun tentativo PIN rimasto; attendi prima di riprovare.",
+      "confirm_delete": "Seleziona «Conferma eliminazione» per eliminare i file di diagnostica.",
+      "no_diagnostics_file": "Non c'è ancora nessun file da scaricare.",
+      "diagnostics_action_failed": "Impossibile completare l'azione diagnostica. Controlla il log di Home Assistant."
     }
   },
   "entity": {
@@ -299,7 +321,8 @@
           "connected_ac": "Cavo CA collegato",
           "connected_dc": "Cavo CC collegato",
           "charging_ac": "In carica in CA",
-          "charging_dc": "In carica in CC"
+          "charging_dc": "In carica in CC",
+          "charge_stopped": "Ricarica interrotta"
         }
       },
       "charge_mode": {
@@ -513,6 +536,9 @@
       "warning_abs": {
         "name": "Spia ABS"
       },
+      "warning_airbag": {
+        "name": "Spia airbag"
+      },
       "warning_brake_fluid": {
         "name": "Spia liquido freni"
       },
@@ -530,6 +556,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Spia batteria di trazione scarica"
+      },
+      "warning_coolant_temperature": {
+        "name": "Spia temperatura refrigerante"
       }
     },
     "button": {
@@ -613,6 +642,28 @@
       "location": {
         "name": "Posizione"
       }
+    }
+  },
+  "selector": {
+    "diagnostics_action": {
+      "options": {
+        "none": "Non fare nulla",
+        "new": "Crea un nuovo file",
+        "delete": "Elimina tutti i file",
+        "download": "Aggiorna il link di download"
+      }
+    }
+  },
+  "common": {
+    "diagnostics_status": {
+      "enabled": "**Diagnostica completa:** attiva",
+      "disabled": "**Diagnostica completa:** disattivata",
+      "active_file": "**File attivo:** `{name}` ({size})",
+      "files": "**File:** {count} · {size}",
+      "no_file": "Nessun file di diagnostica disponibile.",
+      "download": "Scarica il file di diagnostica",
+      "dropped": "**Eventi scartati:** {count}",
+      "last_error": "**Ultimo errore di cattura:** `{error}`"
     }
   }
 }

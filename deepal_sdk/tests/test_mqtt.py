@@ -8,6 +8,7 @@ import re
 import pytest
 
 from deepal.mqtt import (
+    CHARGE_STATE_CHARGE_STOPPED,
     MAPPED_S05_KEYS,
     aes_cbc_decrypt,
     aes_cbc_encrypt,
@@ -17,6 +18,11 @@ from deepal.mqtt import (
     build_puback_packet,
     build_publish_packet,
     build_subscribe_packet,
+    charge_currents,
+    charge_is_active,
+    charge_state,
+    clean_charge_current,
+    clean_charge_current_magnitude,
     condition_request_payload,
     device_id_candidates,
     login_request_payload,
@@ -223,6 +229,129 @@ def test_resolve_mqtt_topics_from_topic_infos():
     assert "$vdp/device-did/properties/get/res" in resolved.subscriptions
     assert all("/commands/" not in topic for topic in resolved.subscriptions)
     assert all("/set/" not in topic for topic in resolved.subscriptions)
+
+
+def test_resolve_mqtt_topics_does_not_subscribe_to_publish_topics():
+    """The broker's event subscription is ``events/up``, not ``events/down``.
+
+    The live S05 connection configuration lists ``events/down`` as the client's
+    publish topic and ``events/up`` as the subscription. Subscribing to the
+    publish topic made the broker answer 0x87 (not authorized), and the SUBACK
+    validation then aborted the whole telemetry session.
+    """
+    config = {
+        "mqttConnectionInfos": [
+            {
+                "topicInfos": [
+                    {
+                        "msgType": "loginout",
+                        "pubTopics": ["$vdp/device-did/loginout/req"],
+                        "subTopics": ["$vdp/device-did/loginout/res"],
+                    },
+                    {
+                        "msgType": "properties",
+                        "pubTopics": [
+                            "$vdp/device-did/properties/set/req",
+                            "$vdp/device-did/properties/get/req",
+                        ],
+                        "subTopics": [
+                            "$vdp/device-did/properties/set/res",
+                            "$vdp/device-did/properties/get/res",
+                            "$vdp/device-did/properties/report",
+                        ],
+                    },
+                    {
+                        "msgType": "commands",
+                        "pubTopics": ["$vdp/device-did/commands/req"],
+                        "subTopics": ["$vdp/device-did/commands/res"],
+                    },
+                    {
+                        "msgType": "events",
+                        "pubTopics": ["$vdp/device-did/events/down"],
+                        "subTopics": ["$vdp/device-did/events/up"],
+                    },
+                    {
+                        "msgType": "msg",
+                        "pubTopics": ["$vdp/device-did/msg/down"],
+                        "subTopics": ["$vdp/device-did/msg/up"],
+                    },
+                    {
+                        "msgType": "strategy",
+                        "pubTopics": ["$vdp/device-did/strategy/req"],
+                        "subTopics": ["$vdp/device-did/strategy/res"],
+                    },
+                ],
+            }
+        ]
+    }
+
+    resolved = resolve_mqtt_topics(config)
+
+    assert resolved.event_subscribe == "$vdp/device-did/events/up"
+    assert "$vdp/device-did/events/down" not in resolved.subscriptions
+    assert set(resolved.subscriptions) == {
+        "$vdp/device-did/loginout/res",
+        "$vdp/device-did/properties/set/res",
+        "$vdp/device-did/properties/get/res",
+        "$vdp/device-did/properties/report",
+        "$vdp/device-did/events/up",
+        "$vdp/device-did/msg/up",
+        "$vdp/device-did/strategy/res",
+    }
+
+
+def test_resolve_mqtt_topics_derives_event_when_only_publish_topic_is_listed():
+    config = {
+        "mqttConnectionInfos": [
+            {
+                "topicInfos": [
+                    {
+                        "msgType": "loginout",
+                        "pubTopics": ["$vdp/device-did/loginout/req"],
+                        "subTopics": ["$vdp/device-did/loginout/res"],
+                    },
+                    {
+                        "msgType": "events",
+                        "pubTopics": ["$vdp/device-did/events/down"],
+                    },
+                ],
+            }
+        ]
+    }
+
+    resolved = resolve_mqtt_topics(config)
+
+    assert resolved.event_subscribe == "$vdp/device-did/device-did/server/event"
+    assert "$vdp/device-did/events/down" not in resolved.subscriptions
+    assert "$vdp/device-did/device-did/server/event" in resolved.subscriptions
+
+
+def test_resolve_mqtt_topics_uses_subscription_suffixes_without_direction():
+    config = {
+        "mqttConnectionInfos": [
+            {
+                "topicToMsgtype": {
+                    "$vdp/device-did/loginout/req": "loginout",
+                    "$vdp/device-did/loginout/res": "loginout",
+                    "$vdp/device-did/properties/get/req": "properties",
+                    "$vdp/device-did/properties/report": "properties",
+                    "$vdp/device-did/events/down": "events",
+                    "$vdp/device-did/events/up": "events",
+                }
+            }
+        ]
+    }
+
+    resolved = resolve_mqtt_topics(config)
+
+    assert resolved.login_publish == "$vdp/device-did/loginout/req"
+    assert resolved.login_subscribe == "$vdp/device-did/loginout/res"
+    assert resolved.properties_publish == "$vdp/device-did/properties/get/req"
+    assert "$vdp/device-did/loginout/req" not in resolved.subscriptions
+    assert "$vdp/device-did/properties/get/req" not in resolved.subscriptions
+    assert "$vdp/device-did/properties/report" in resolved.subscriptions
+    assert "$vdp/device-did/events/up" in resolved.subscriptions
+    assert "$vdp/device-did/events/down" not in resolved.subscriptions
 
 
 def test_resolve_mqtt_topics_distinguishes_properties_get_and_set():
@@ -713,6 +842,50 @@ def test_normalize_s05_params_drops_an_out_of_range_current_while_charging():
     assert condition["charge"]["chargeCurrent"] is None
 
 
+def test_clean_charge_current_magnitude_accepts_negative_readings():
+    assert clean_charge_current(-60.5) is None
+    assert clean_charge_current_magnitude(-60.5) == 60.5
+    assert clean_charge_current_magnitude(60.5) == 60.5
+    assert clean_charge_current_magnitude(-2538) is None
+    assert clean_charge_current_magnitude(2538) is None
+
+
+def test_charge_currents_keep_the_magnitude_of_a_negative_dc_current():
+    assert charge_currents(0, -60.5, 4) == (0.0, 60.5, 60.5)
+
+
+def test_normalize_s05_params_accepts_a_negative_dc_current():
+    condition = normalize_s05_params({"ChrgSts": 4, "BattDCChrgInCurr": -60.5})
+
+    assert condition["charge"]["chargeCurrent"] == 60.5
+    assert condition["charge"]["dcChargeCurrent"] == 60.5
+    assert condition["charge"]["acChargeCurrent"] is None
+
+
+def test_normalize_s05_params_drops_a_negative_sentinel_while_charging():
+    condition = normalize_s05_params({"ChrgSts": 4, "BattDCChrgInCurr": -2538})
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+
+def test_normalize_sda_params_keeps_the_generic_current_strict():
+    condition = normalize_sda_params(
+        {
+            "BcuChrgSts": 1,
+            "AcChrgCnctrSts": 1,
+            "DcChrgCnctrSts": 0,
+            "BcuBattI": "-8.4",
+            "ObcChrgInpAcIL1": "28.3",
+            "ObcChrgDcI": "8.5",
+        }
+    )
+
+    assert condition["charge"]["chargeCurrent"] is None
+    assert condition["charge"]["acChargeCurrent"] == 28.3
+    assert condition["charge"]["dcChargeCurrent"] == 8.5
+
+
 def test_normalize_s05_params_keeps_reported_currents_for_an_unknown_state():
     condition = normalize_s05_params(
         {"ChrgSts": 9, "BattACChrgInCurr": 0, "BattDCChrgInCurr": 60.5}
@@ -739,18 +912,56 @@ def test_normalize_s05_params_maps_the_ac_gun_from_the_state():
     assert condition["charge"]["dcChargeGunConnectStatus"] is False
 
 
-def test_normalize_s05_params_ignores_stale_gun_fields_when_unplugged():
-    condition = normalize_s05_params(
+def test_normalize_s05_params_uses_the_gun_fields_when_not_charging():
+    connected = normalize_s05_params(
         {
             "ChrgSts": 0,
-            "acChargeGunConnectionState": 3,
-            "dcDhargeGunConnectionState": 3,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
         }
     )
 
-    assert condition["charge"]["chargeConStatus"] is False
-    assert condition["charge"]["acChargeGunConnectStatus"] is False
+    assert connected["charge"]["chargeConStatus"] is True
+    assert connected["charge"]["acChargeGunConnectStatus"] is True
+    assert connected["charge"]["dcChargeGunConnectStatus"] is False
+
+    unplugged = normalize_s05_params(
+        {
+            "ChrgSts": 0,
+            "acChargeGunConnectionState": 0,
+            "dcChargeGunConnectionState": 0,
+        }
+    )
+
+    assert unplugged["charge"]["chargeConStatus"] is False
+    assert unplugged["charge"]["acChargeGunConnectStatus"] is False
+    assert unplugged["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_maps_the_charging_stopped_state():
+    condition = normalize_s05_params(
+        {
+            "ChrgSts": 5,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+            "BattACChrgInCurr": 0,
+            "BattDCChrgInCurr": 0,
+        }
+    )
+
+    assert condition["charge"]["chargeStatus"] == 5
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is True
     assert condition["charge"]["dcChargeGunConnectStatus"] is False
+    assert condition["charge"]["chargeCurrent"] == 0.0
+
+
+def test_charge_state_recognizes_the_charging_stopped_state():
+    assert charge_state(5) == CHARGE_STATE_CHARGE_STOPPED
+    assert charge_is_active(5) is False
+    assert charge_is_active("5") is False
+    assert charge_state(9) is None
+    assert charge_is_active(9) is None
 
 
 def test_normalize_s05_params_falls_back_to_the_gun_fields_without_a_state():
@@ -771,17 +982,30 @@ def test_normalize_s05_params_falls_back_to_the_gun_fields_without_a_state():
     assert unrecognized["charge"]["dcChargeGunConnectStatus"] is None
 
 
+def test_normalize_s05_params_maps_outside_temperature():
+    normalized = normalize_s05_params({"outsideTemperature": 18.5})
+
+    assert normalized["hvac"]["outsideTemp"] == 185.0
+
+    fallback = normalize_s05_params({"externalTemperature": 20.0})
+
+    assert fallback["hvac"]["outsideTemp"] == 200.0
+    assert normalize_s05_params({})["hvac"]["outsideTemp"] is None
+
+
 def test_normalize_s05_params_maps_warnings_and_window_openings():
     params = {
         "batt12VLightStatus": 0,
         "tpmsLightStatus": 1,
         "absLightStatus": 0,
+        "airBagLightStatus": 1,
         "brakeFluidLightStatus": 0,
         "brakeLightStatus": 0,
         "epsLightStatus": 0,
         "powerLimitLightStatus": 0,
         "powerSystemLightStatus": 0,
         "bcuBattSocLightStatus": 0,
+        "coolanTemperatureLightStatus": 0,
         "keyLowPower": 1,
         "airRecycleStatus": 1,
         "leftAnteriorWindowDegree": 20,
@@ -794,6 +1018,8 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
 
     assert normalized["warningLights"]["tpms"] is True
     assert normalized["warningLights"]["battery12v"] is False
+    assert normalized["warningLights"]["airbag"] is True
+    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["keyBatteryLow"] is True
     assert normalized["airRecirculation"] is True
     assert normalized["windowOpenings"] == {
@@ -809,12 +1035,14 @@ def test_normalize_s05_params_maps_warnings_and_window_openings():
         "battery12v",
         "tpms",
         "abs",
+        "airbag",
         "brakeFluid",
         "brake",
         "eps",
         "powerLimit",
         "powerSystem",
         "tractionBatteryLow",
+        "coolantTemperature",
     }
     assert empty["warningLights"]["tpms"] is None
     assert empty["keyBatteryLow"] is None
@@ -826,15 +1054,19 @@ def test_normalize_s05_params_blanks_warnings_while_the_vehicle_is_off():
     normalized = normalize_s05_params(
         {
             "absLightStatus": 1,
+            "airBagLightStatus": 1,
             "brakeLightStatus": 1,
             "tpmsLightStatus": 1,
+            "coolanTemperatureLightStatus": 1,
             "powerStatusFeedBack": 0,
         }
     )
 
     assert normalized["warningLights"]["abs"] is None
+    assert normalized["warningLights"]["airbag"] is None
     assert normalized["warningLights"]["brake"] is None
     assert normalized["warningLights"]["tpms"] is None
+    assert normalized["warningLights"]["coolantTemperature"] is None
     assert normalized["vehicleStatus"]["powerStatus"] == 0
 
 
@@ -842,13 +1074,17 @@ def test_normalize_s05_params_keeps_warnings_while_the_vehicle_is_on():
     normalized = normalize_s05_params(
         {
             "absLightStatus": 1,
+            "airBagLightStatus": 1,
             "brakeLightStatus": 0,
+            "coolanTemperatureLightStatus": 0,
             "powerStatusFeedBack": 2,
         }
     )
 
     assert normalized["warningLights"]["abs"] is True
+    assert normalized["warningLights"]["airbag"] is True
     assert normalized["warningLights"]["brake"] is False
+    assert normalized["warningLights"]["coolantTemperature"] is False
     assert normalized["vehicleStatus"]["powerStatus"] == 2
 
 
@@ -1080,7 +1316,7 @@ def _connack(reason: int) -> bytes:
 
 
 def _suback(packet_id: int, reasons: list[int]) -> bytes:
-    body = packet_id.to_bytes(2, "big") + bytes(reasons)
+    body = packet_id.to_bytes(2, "big") + b"\x00" + bytes(reasons)
     return bytes([0x90, len(body)]) + body
 
 
@@ -1169,8 +1405,12 @@ def test_sda_session_topics_uses_the_car_id_event_topic():
 
 
 def test_parse_suback_returns_packet_id_and_reason_codes():
-    assert parse_suback(0x90, b"\x00\x01\x00\x01") == (1, [0, 1])
+    assert parse_suback(0x90, b"\x00\x01\x00\x01") == (1, [1])
+    assert parse_suback(0x90, b"\x00\x01\x00\x87\x01") == (1, [0x87, 1])
+    assert parse_suback(0x90, b"\x00\x01\x00") == (1, [])
+    assert parse_suback(0x90, b"\x00\x01\x02\x11\x22\x01") == (1, [1])
     assert parse_suback(0x90, b"\x00") == (None, [])
+    assert parse_suback(0x90, b"\x00\x01\x80") == (None, [])
     assert parse_suback(0x30, b"\x00\x01\x00") == (None, [])
 
 

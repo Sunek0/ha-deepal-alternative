@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import ssl
@@ -46,6 +47,7 @@ from deepal.intl import (
     CAR_CONTROL_REFRESH_THROTTLE_SECONDS,
     INTL_REFRESH_THROTTLE_SECONDS,
 )
+import deepal.intl as intl_module
 from deepal.endpoints import (
     INTL_CA_GET_AUTH_TOKEN,
     INTL_CA_GET_CAR_CONF_FUNC,
@@ -69,6 +71,7 @@ from deepal.endpoints import (
     INTL_DEPARTURE_VALIDITY,
     INTL_GET_MY_CARS,
     INTL_GET_SECURITY_CODE_STATUS,
+    INTL_GET_VEHICLE_MODEL,
     INTL_GET_SERIAL_NO,
     INTL_CHARGE_MODIFY_PLAN,
     INTL_CHARGE_PERCENTAGE,
@@ -90,6 +93,18 @@ from deepal.endpoints import (
 
 EMAIL = "test.user@example.com"
 CODE = "123456"
+
+_REAL_MODEL_HOST_IS_PUBLIC = intl_module._async_host_is_public
+
+
+@pytest.fixture(autouse=True)
+def _allow_public_model_hosts(monkeypatch):
+    """Keep the model-download tests independent from DNS."""
+
+    async def _public(host, resolver=None):
+        return True
+
+    monkeypatch.setattr(intl_module, "_async_host_is_public", _public)
 
 
 def _client(handler) -> DeepalIntlClient:
@@ -130,6 +145,7 @@ class _FakeMqttBroker:
         service_code: str = "car_condition",
         condition_sequence: Optional[list[Optional[dict[str, Any]]]] = None,
         wake_reply: bool = True,
+        suback_packet: Optional[bytes] = None,
     ) -> None:
         self.reader = asyncio.StreamReader()
         self.writes: list[bytes] = []
@@ -146,6 +162,7 @@ class _FakeMqttBroker:
         self.wake_code = "200"
         self.wake_success = True
         self.wake_reply = wake_reply
+        self.suback_packet = suback_packet
         self.condition_publishes: list[dict[str, Any]] = []
         self.condition_sequence = (
             list(condition_sequence) if condition_sequence is not None else None
@@ -168,7 +185,11 @@ class _FakeMqttBroker:
             )
         elif first == 0x82:
             self.subscribe_packet = data
-            self.reader.feed_data(b"\x90\x05\x00\x01\x00\x00\x00")
+            self.reader.feed_data(
+                self.suback_packet
+                if self.suback_packet is not None
+                else b"\x90\x05\x00\x01\x00\x00\x00"
+            )
         elif first & 0xF0 == 0x30:
             self._on_publish(first, body)
         elif first == 0xC0:
@@ -671,6 +692,24 @@ def test_set_login_keypair_keeps_provided_public_key():
     assert client.public_key == "test_pub_key"
 
 
+def test_set_login_keypair_rejects_an_invalid_private_key_even_with_public_key():
+    client = _client(lambda request: httpx.Response(200, json={}))
+
+    with pytest.raises(ValueError):
+        client.set_login_keypair("not-a-pem", public_key="test_pub_key")
+
+    assert client.private_key_pem is None
+    assert client.public_key is None
+
+
+def test_load_private_key_wraps_a_corrupt_pem_as_command_auth_error():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.private_key_pem = "not-a-pem"
+
+    with pytest.raises(DeepalCommandAuthError):
+        client._load_private_key()
+
+
 @pytest.mark.asyncio
 async def test_constructor_restores_keypair_and_device_id():
     private_pem, pub_body = DeepalIntlClient.generate_login_keypair()
@@ -1038,6 +1077,7 @@ async def test_get_vehicles_maps_international_fields():
             "nickName": "Mi coche",
             "licensePlate": "1234ABC",
             "imgUrl": "https://img.example/test.png",
+            "carPlatform": 2,
             "protocolType": "MQTT",
         },
         {
@@ -1068,8 +1108,284 @@ async def test_get_vehicles_maps_international_fields():
     assert vehicle.car_name == "Mi coche"
     assert vehicle.license_plate == "1234ABC"
     assert vehicle.thumbnail_url == "https://img.example/test.png"
+    assert vehicle.car_platform == 2
     assert vehicle.protocol_type == "MQTT"
     assert vehicles[1].thumbnail_url == "https://img.example/s05.png"
+    assert vehicles[1].car_platform is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_model_posts_car_id_and_platform():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {
+                    "modelUrl": "https://cdn.example/model.zip",
+                    "md5": "0123456789abcdef0123456789abcdef",
+                },
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    asset = await client.get_vehicle_model("test-car-1", 2)
+    await client.close()
+
+    assert captured["path"] == INTL_GET_VEHICLE_MODEL
+    assert captured["body"] == {"carId": "test-car-1", "carPlatform": 2}
+    assert asset.model_url == "https://cdn.example/model.zip"
+    assert asset.md5 == "0123456789abcdef0123456789abcdef"
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_model_without_platform_sends_car_id_only():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"modelUrl": "https://cdn.example/model.zip"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    asset = await client.get_vehicle_model("test-car-1")
+    await client.close()
+
+    assert captured["body"] == {"carId": "test-car-1"}
+    assert asset.md5 is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_model_requires_model_url():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": {"md5": "abc"}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="modelUrl"):
+        await client.get_vehicle_model("test-car-1", 1)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_model_auth_rejected():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"success": False, "code": "auth"})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAuthError):
+        await client.get_vehicle_model("test-car-1", 1)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_model_parameter_error_is_reported():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": False,
+                "code": "COMMON_1_1_01_002",
+                "msg": "Parameter error",
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="COMMON_1_1_01_002"):
+        await client.get_vehicle_model("test-car-1", 2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_verifies_md5():
+    archive = b"PK\x03\x04 layered model bytes"
+    archive_md5 = hashlib.md5(archive).hexdigest()
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, str(request.url)))
+        if request.method == "POST":
+            assert json.loads(request.content) == {
+                "carId": "test-car-1",
+                "carPlatform": 2,
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {
+                        "modelUrl": "https://cdn.example/model.zip",
+                        "md5": archive_md5,
+                    },
+                },
+            )
+        return httpx.Response(200, content=archive)
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    content = await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
+
+    assert content == archive
+    assert requests == [
+        ("POST", "https://m.iov.changanauto.com.de" + INTL_GET_VEHICLE_MODEL),
+        ("GET", "https://cdn.example/model.zip"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_rejects_md5_mismatch():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {
+                        "modelUrl": "https://cdn.example/model.zip",
+                        "md5": "deadbeef",
+                    },
+                },
+            )
+        return httpx.Response(200, content=b"unexpected")
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="checksum mismatch"):
+        await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_rejects_non_https():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"modelUrl": "http://cdn.example/model.zip"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="not HTTPS"):
+        await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
+
+    assert calls == ["POST"]
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_rejects_redirect():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"modelUrl": "https://cdn.example/model.zip"},
+                },
+            )
+        return httpx.Response(302, headers={"location": "https://evil.example/x"})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="redirect"):
+        await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_model_host_policy_rejects_internal_hosts():
+    for host in (
+        "127.0.0.1",
+        "10.0.0.5",
+        "169.254.1.1",
+        "::1",
+        "fe80::1",
+        "localhost",
+        "camera.local",
+        "",
+    ):
+        assert await _REAL_MODEL_HOST_IS_PUBLIC(host) is False
+
+    async def public_resolver(host):
+        return [(None, None, None, None, ("93.184.216.34", 443))]
+
+    async def internal_resolver(host):
+        return [(None, None, None, None, ("192.168.1.10", 443))]
+
+    assert await _REAL_MODEL_HOST_IS_PUBLIC("cdn.example", public_resolver) is True
+    assert await _REAL_MODEL_HOST_IS_PUBLIC("evil.example", internal_resolver) is False
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_rejects_an_internal_host(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"modelUrl": "https://127.0.0.1/model.zip"},
+            },
+        )
+
+    monkeypatch.setattr(
+        intl_module, "_async_host_is_public", _REAL_MODEL_HOST_IS_PUBLIC
+    )
+    client = _client(handler)
+    client.access_token = "test_token_123"
+
+    with pytest.raises(DeepalAPIError, match="internal host"):
+        await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_download_vehicle_model_archive_rejects_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": {"modelUrl": "https://cdn.example/model.zip"},
+                },
+            )
+        return httpx.Response(500, content=b"error")
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    with pytest.raises(DeepalAPIError, match="HTTP 500"):
+        await client.download_vehicle_model_archive("test-car-1", 2)
+    await client.close()
 
 
 @pytest.mark.asyncio
@@ -2879,6 +3195,65 @@ async def test_wake_vehicle_publishes_wake_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_wake_rejects_a_missing_suback(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        suback_packet=b"\x30\x02{}",
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError, match="acknowledge the subscription"):
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_rejects_a_failed_suback_reason(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        suback_packet=b"\x90\x04\x00\x01\x00\x80",
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError, match="acknowledge the subscription"):
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_wake_invalidates_the_cached_session(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    broker.wake_success = False
+    broker.wake_code = "VVCC_-1_-1_02_023"
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+    await client.get_mqtt_config("car-1")
+    await client.get_mqtt_token()
+    assert "car-1" in client._mqtt_configs
+    assert client._mqtt_token is not None
+
+    with pytest.raises(DeepalAPIError):
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert "car-1" not in client._mqtt_configs
+    assert client._mqtt_token is None
+    assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
 async def test_wake_vehicle_raises_on_rejected_service(monkeypatch):
     broker = _FakeMqttBroker(S05_BROKER_PARAMS)
     broker.wake_success = False
@@ -2943,7 +3318,7 @@ async def test_mqtt_sessions_are_serialized():
     active = 0
     peak = 0
 
-    async def fake_open(config, token, *, sda=False):
+    async def fake_open(config, token, *, sda=False, vehicle_id=None):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -3822,6 +4197,44 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.rear_fog is False
 
 
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_exposes_negative_charge_current_as_magnitude():
+    payload = {
+        "charge": {
+            "chargeCurrent": -60.5,
+            "acChargeCurrent": -16.2,
+            "dcChargeCurrent": -60.5,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charge_current_a == 60.5
+    assert condition.battery.ac_charge_current_a == 16.2
+    assert condition.battery.dc_charge_current_a == 60.5
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_drops_the_negative_charge_current_sentinel():
+    payload = {"charge": {"chargeCurrent": -2538}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charge_current_a is None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -3897,7 +4310,12 @@ def test_parse_condition_maps_warnings_and_window_openings():
 
     condition = client.parse_condition(
         {
-            "warningLights": {"tpms": True, "battery12v": False},
+            "warningLights": {
+                "tpms": True,
+                "battery12v": False,
+                "airbag": True,
+                "coolantTemperature": False,
+            },
             "windowOpenings": {"frontLeft": 20, "rearRight": 92},
             "keyBatteryLow": True,
             "airRecirculation": False,
@@ -3907,6 +4325,8 @@ def test_parse_condition_maps_warnings_and_window_openings():
 
     assert condition.warnings.tpms is True
     assert condition.warnings.battery_12v is False
+    assert condition.warnings.airbag is True
+    assert condition.warnings.coolant_temperature is False
     assert condition.warnings.abs is None
     assert condition.key_battery_low is True
     assert condition.air_recirculation is False
@@ -3921,15 +4341,23 @@ def test_parse_condition_gates_warnings_when_the_rest_reports_off():
     condition = client.parse_condition(
         {
             "vehicleStatus": {"powerStatus": 0},
-            "warningLights": {"abs": True, "brake": True, "tpms": True},
+            "warningLights": {
+                "abs": True,
+                "airbag": True,
+                "brake": True,
+                "tpms": True,
+                "coolantTemperature": True,
+            },
         },
         "car-1",
     )
 
     assert condition.power_status == 0
     assert condition.warnings.abs is None
+    assert condition.warnings.airbag is None
     assert condition.warnings.brake is None
     assert condition.warnings.tpms is None
+    assert condition.warnings.coolant_temperature is None
 
 
 def test_parse_condition_keeps_warnings_when_the_rest_reports_on():
@@ -3938,25 +4366,41 @@ def test_parse_condition_keeps_warnings_when_the_rest_reports_on():
     condition = client.parse_condition(
         {
             "vehicleStatus": {"powerStatus": 2},
-            "warningLights": {"abs": True, "brake": False},
+            "warningLights": {
+                "abs": True,
+                "airbag": True,
+                "brake": False,
+                "coolantTemperature": False,
+            },
         },
         "car-1",
     )
 
     assert condition.warnings.abs is True
+    assert condition.warnings.airbag is True
     assert condition.warnings.brake is False
+    assert condition.warnings.coolant_temperature is False
 
 
 def test_parse_condition_keeps_warnings_without_a_power_state():
     client = _client(lambda request: httpx.Response(200, json={}))
 
     condition = client.parse_condition(
-        {"warningLights": {"abs": True, "brake": False}},
+        {
+            "warningLights": {
+                "abs": True,
+                "airbag": True,
+                "brake": False,
+                "coolantTemperature": False,
+            }
+        },
         "car-1",
     )
 
     assert condition.warnings.abs is True
+    assert condition.warnings.airbag is True
     assert condition.warnings.brake is False
+    assert condition.warnings.coolant_temperature is False
 
 
 @pytest.mark.asyncio
@@ -3988,6 +4432,28 @@ async def test_get_vehicle_condition_maps_connected_guns():
             "chargeStatus": 0,
             "chargeConStatus": 2,
             "dcChargeGunConnectStatus": 3,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("test-car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is True
+    assert condition.battery.dc_gun_connected is True
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_maps_code_one_as_connected():
+    payload = {
+        "charge": {
+            "chargeStatus": 0,
+            "chargeConStatus": 1,
+            "dcChargeGunConnectStatus": 1,
         }
     }
 
@@ -4990,7 +5456,7 @@ async def test_login_logs_session_fields_without_values(caplog):
         )
 
     client = _client(handler)
-    with caplog.at_level(logging.INFO, logger="deepal_sdk"):
+    with caplog.at_level(logging.DEBUG, logger="deepal_sdk"):
         await client.login_with_email_code(EMAIL, CODE)
     await client.close()
 
@@ -5860,3 +6326,69 @@ async def test_open_sda_session_requires_a_device_did():
         await client.close()
 
     assert "device DID" in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_intl_exchange_callback_reports_rest_exchange():
+    events: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "data": []})
+
+    client = DeepalIntlClient(
+        country="GB",
+        language="en_GB",
+        device_id="test-device-id",
+        httpx_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        on_exchange=events.append,
+    )
+    client.access_token = "test_token_123"
+    try:
+        await client.get_vehicles()
+    finally:
+        await client.close()
+        await client._client.aclose()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["kind"] == "rest"
+    assert event["client"] == "intl"
+    assert event["method"] == "POST"
+    assert event["path"] == "/intl-app-gw/intl-app-user/api/car/vehicles"
+    assert event["status"] == 200
+    assert event["response"] == {"success": True, "data": []}
+    assert "authorization" in event["headers"]
+
+
+@pytest.mark.asyncio
+async def test_intl_exchange_callback_reports_mqtt_exchange(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    events: list[dict[str, Any]] = []
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+    client.on_exchange = events.append
+
+    await client._read_s05_params(
+        _mqtt_config(), "test-mqtt-token", vehicle_id="car-1"
+    )
+    await client.close()
+
+    names = [event.get("event") for event in events]
+    assert "session_open" in names
+    assert "publish" in names
+    assert "receive" in names
+    condition = next(
+        event
+        for event in events
+        if event.get("event") == "publish" and event.get("stage") == "condition"
+    )
+    assert condition["topic"] == "$vdp/device-did/properties/get/req"
+    assert condition["services"][0]["service_code"] == "car_condition"
+    receive = next(
+        event
+        for event in events
+        if event.get("event") == "receive" and event.get("stage") == "condition"
+    )
+    assert receive["params"]["soc"] == 71
+    assert receive["decoded"] is True

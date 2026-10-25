@@ -68,13 +68,25 @@ async def _async_register_resource(hass: HomeAssistant) -> None:
             )
             return
         await resources.async_get_info()
-        if any(
-            str(item.get("url", "")).split("?")[0] == FRONTEND_JS_URL
-            for item in resources.async_items()
-        ):
+        resource_url = f"{FRONTEND_JS_URL}?v={VERSION}"
+        for item in resources.async_items():
+            if str(item.get("url", "")).split("?")[0] != FRONTEND_JS_URL:
+                continue
+            if str(item.get("url", "")) == resource_url:
+                return
+            # The version query is the cache buster. Keep the resource entry
+            # but move it to the current bundle URL after an update; otherwise
+            # the browser can keep serving the previous module from cache.
+            if hasattr(resources, "async_update_item"):
+                await resources.async_update_item(item["id"], {"url": resource_url})
+            else:
+                await resources.async_delete_item(item["id"])
+                await resources.async_create_item(
+                    {"res_type": "module", "url": resource_url}
+                )
             return
         await resources.async_create_item(
-            {"res_type": "module", "url": FRONTEND_JS_URL}
+            {"res_type": "module", "url": resource_url}
         )
     except Exception as err:  # noqa: BLE001 - the card must never break setup
         _LOGGER.warning("Deepal frontend resource registration failed: %s", err)

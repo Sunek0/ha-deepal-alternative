@@ -4,7 +4,8 @@ from typing import Any
 
 # Series codes of the models known to lack some telemetry and controls: the S05
 # reports charging info but no SOC-set code, and its MQTT payload carries no
-# speed, gear, outside temperature, PM2.5, air quality or mileage fields.
+# speed, gear, PM2.5, air quality or mileage fields. Outside temperature is
+# optional: the sensor is created but stays unknown until a report carries it.
 S05_MODEL_CODES = ("S05", "C857")
 
 

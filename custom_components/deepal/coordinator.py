@@ -22,6 +22,8 @@ from .deepal import (
     DeepalAPIError,
     DeepalAuthError,
     DeepalClient,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
     DeepalError,
     DeepalIntlClient,
     DeepalRateLimitError,
@@ -36,6 +38,7 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
+    CONF_USER_ID,
     WAKE_BEFORE_COMMAND_TIMEOUT,
     WAKE_COOLDOWN,
     WAKE_REPORT_TIMEOUT,
@@ -55,6 +58,10 @@ _VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CHARGING_READ_INTERVAL = 600.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
+# Home Assistant's statistics code treats a total_increasing drop below this
+# fraction of the previous value as a meter reset; smaller drops are precision
+# dips that trigger a warning and subtract the delta from the long-term sum.
+_ODOMETER_RESET_RATIO = 0.9
 
 
 class WakeResult(StrEnum):
@@ -202,6 +209,40 @@ def _retain_seat_levels(
                 setattr(seat, field, getattr(previous_seat, field))
 
 
+def _retain_odometer(previous: Any, condition: Any) -> None:
+    """Keep the last odometer when a report would move it backwards.
+
+    The odometer is a ``total_increasing`` value, but the MQTT and REST sources
+    can disagree by their sub-kilometre precision and an MQTT snapshot can be
+    older than the REST condition it replaces. Home Assistant only accepts a
+    decrease as a meter reset when it falls below 90 % of the previous value;
+    smaller drops are logged as precision dips and subtract the delta from the
+    long-term sum. Mirror that threshold so the published series stays valid,
+    retain the previous value when the field is missing, and still accept a real
+    reset or a normal increase.
+    """
+    previous_value = previous.total_odometer_km
+    value = condition.total_odometer_km
+    if previous_value is None:
+        return
+    if value is None:
+        condition.total_odometer_km = previous_value
+        return
+    if value >= previous_value:
+        return
+    previous_timestamp = previous.last_updated_timestamp
+    current_timestamp = condition.last_updated_timestamp
+    if (
+        previous_timestamp is not None
+        and current_timestamp is not None
+        and current_timestamp < previous_timestamp
+    ):
+        condition.total_odometer_km = previous_value
+        return
+    if value >= _ODOMETER_RESET_RATIO * previous_value:
+        condition.total_odometer_km = previous_value
+
+
 _FUEL_FIELDS = (
     "level_percent",
     "remaining_range_km",
@@ -210,6 +251,139 @@ _FUEL_FIELDS = (
     "temperature_c",
 )
 _FUEL_STATIC_FIELDS = ("volume_l", "tank_capacity_l", "temperature_c")
+
+_S05_GROUP_KEYS: dict[str, frozenset[str]] = {
+    "doors": frozenset(
+        {
+            "driverDoor",
+            "passengerDoor",
+            "leftRearDoor",
+            "rightRearDoor",
+            "trunk",
+            "hood",
+            "hoodStatus",
+            "driverDoorLock",
+            "passengerDoorLock",
+        }
+    ),
+    "windows": frozenset(
+        {
+            "diverWindow",
+            "passengerWindow",
+            "leftRearWindow",
+            "rightRearWindow",
+        }
+    ),
+    "lamps": frozenset(
+        {
+            "highBeam",
+            "lowBeam",
+            "positionLamp",
+            "frontFoglamp",
+            "rearFoglamp",
+            "turnLndicatorLeft",
+            "turnLndicatorRight",
+        }
+    ),
+    "tires": frozenset(
+        {
+            "lfTyrePressure",
+            "leftFrontTireTemperature",
+            "lfPressureWarning",
+            "rfTyrePressure",
+            "rightFrontTireTemperature",
+            "rfPressureWarning",
+            "lrTyrePressure",
+            "leftRearTireTemperature",
+            "lrPressureWarning",
+            "rrTyrePressure",
+            "rightRearTireTemperature",
+            "rrPressureWarning",
+        }
+    ),
+    "charge": frozenset(("ChrgSts", *S05_CHARGE_GUN_KEYS)),
+}
+
+_SDA_GROUP_KEYS: dict[str, frozenset[str]] = {
+    "doors": frozenset(
+        {
+            "DrvrDoorSts",
+            "PassDoorSts",
+            "LeReDoorSts",
+            "RiReDoorSts",
+            "ObjStTypePLGDoorSt",
+            "FrtGateSts",
+            "DrvrDoorLockLogicSts",
+            "PassDoorLockLogicSts",
+        }
+    ),
+    "windows": frozenset(
+        {"DrvrWinPos", "PassWinPos", "LeReWinPos", "RiReWinPos"}
+    ),
+    "lamps": frozenset(
+        {"HCM_LeHiBeSt", "HCM_RiHiBeSt", "HCM_LeLoBeSt", "HCM_RiLoBeSt"}
+    ),
+    "charge": frozenset({"BcuChrgSts", "AcChrgCnctrSts", "DcChrgCnctrSts"}),
+}
+
+_REST_GROUP_KEYS = {
+    "doors": "door",
+    "windows": "window",
+    "lamps": "lamp",
+    "tires": "tire",
+    "charge": "charge",
+}
+
+
+def _group_was_reported(condition: VehicleCondition, group: str) -> bool:
+    """Return whether the source payload carried one telemetry group."""
+    mqtt_raw = condition.mqtt_raw_data
+    if mqtt_raw:
+        key_sets = (
+            _SDA_GROUP_KEYS
+            if (condition.condition_source or "").startswith("sda")
+            else _S05_GROUP_KEYS
+        )
+        keys = key_sets.get(group, frozenset())
+        return bool(keys) and any(key in mqtt_raw for key in keys)
+    raw = condition.raw_data or {}
+    return _REST_GROUP_KEYS[group] in raw
+
+
+def _retain_unreported_groups(
+    previous: VehicleCondition,
+    condition: VehicleCondition,
+    pending: set[str] | None = None,
+) -> None:
+    """Keep the last known groups a partial payload did not carry."""
+    group_prefixes = {
+        "doors": "doors.",
+        "windows": "windows.",
+        "lamps": "lamps.",
+        "tires": "tires.",
+    }
+    for group, prefix in group_prefixes.items():
+        if pending and any(path.startswith(prefix) for path in pending):
+            continue
+        if not _group_was_reported(condition, group):
+            setattr(
+                condition,
+                group,
+                getattr(previous, group).model_copy(deep=True),
+            )
+    charge_paths = {
+        "battery.charging_status",
+        "battery.charger_connected",
+        "battery.dc_gun_connected",
+        "battery.ac_gun_connected",
+    }
+    if pending and charge_paths & pending:
+        return
+    if not _group_was_reported(condition, "charge"):
+        condition.battery.charging_status = previous.battery.charging_status
+        condition.battery.charger_connected = previous.battery.charger_connected
+        condition.battery.dc_gun_connected = previous.battery.dc_gun_connected
+        condition.battery.ac_gun_connected = previous.battery.ac_gun_connected
 
 
 def _copy_missing_fields(target: Any, source: Any, fields: tuple[str, ...]) -> None:
@@ -237,6 +411,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=DOMAIN,
             update_interval=update_interval,
         )
@@ -257,6 +432,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._wake_report_timeout = WAKE_REPORT_TIMEOUT
         self._last_wake_result: dict[str, dict[str, Any]] = {}
         self._mqtt_attempts: dict[str, dict[str, Any]] = {}
+        self.model_assets: Any = None
         self.charging: ChargingSessionManager | None = None
         self._charging_read_task: asyncio.Task[None] | None = None
         self._charging_read_stop: asyncio.Event | None = None
@@ -314,14 +490,34 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         await self._async_maybe_refresh_vehicles()
 
         data: dict[str, VehicleCondition] = {}
+        failures: list[tuple[str, DeepalError]] = []
         for vehicle in self.vehicles:
-            await self._async_maybe_fetch_capabilities(vehicle)
-            condition = await self._async_fetch_condition(vehicle.car_id)
-            condition = await self._overlay_app_comfort(vehicle, condition)
-            data[vehicle.car_id] = self._apply_optimistic_hold(
-                vehicle.car_id, condition
-            )
+            try:
+                await self._async_maybe_fetch_capabilities(vehicle)
+                condition = await self._async_fetch_condition(vehicle.car_id)
+                condition = await self._overlay_app_comfort(vehicle, condition)
+                data[vehicle.car_id] = self._apply_optimistic_hold(
+                    vehicle.car_id, condition
+                )
+            except (DeepalRateLimitError, DeepalAuthError):
+                # Rate limits need the coordinator backoff and session errors
+                # need the refresh/reauth path, so they are never isolated.
+                raise
+            except DeepalError as err:
+                failures.append((vehicle.car_id, err))
+                previous = (self.data or {}).get(vehicle.car_id)
+                if previous is not None:
+                    data[vehicle.car_id] = previous
+                _LOGGER.warning(
+                    "Deepal condition fetch failed for %s: %s",
+                    vehicle.car_id,
+                    err,
+                )
 
+        if not data and failures:
+            # Nothing could be published, not even a previous condition: let
+            # the coordinator report the poll as failed.
+            raise failures[-1][1]
         return data
 
     async def _async_maybe_fetch_capabilities(self, vehicle: Vehicle) -> None:
@@ -575,26 +771,34 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                         return self._merge_condition(vehicle_id, condition)
                     except DeepalAPIError as retry_err:
                         err = retry_err
-                exchange = getattr(self.client, "last_mqtt_exchange", None)
-                if exchange is not None:
-                    self._mqtt_attempts[vehicle_id] = {
-                        "source": exchange.source,
-                        "variants": exchange.variants,
-                        "plan": (
-                            exchange.plan.as_dict() if exchange.plan else None
-                        ),
-                    }
-                _LOGGER.warning(
-                    "Deepal MQTT telemetry unavailable for %s (%s); using the "
-                    "REST condition endpoint",
-                    vehicle_id,
-                    err,
-                )
+                self._record_mqtt_failure(vehicle_id, err)
+            except DeepalError as err:
+                # A broker connection or session failure is not a reason to
+                # fail the poll while the REST condition endpoint is available.
+                self._record_mqtt_failure(vehicle_id, err)
         condition = await self.client.get_vehicle_condition(
             vehicle_id, vin=vehicle.vin if vehicle is not None else None
         )
         condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)
+
+    def _record_mqtt_failure(self, vehicle_id: str, err: DeepalError) -> None:
+        """Keep the failed MQTT exchange for diagnostics and log the fallback."""
+        exchange = getattr(self.client, "last_mqtt_exchange", None)
+        if exchange is not None:
+            self._mqtt_attempts[vehicle_id] = {
+                "source": exchange.source,
+                "variants": exchange.variants,
+                "plan": (
+                    exchange.plan.as_dict() if exchange.plan else None
+                ),
+            }
+        _LOGGER.warning(
+            "Deepal MQTT telemetry unavailable for %s (%s); using the "
+            "REST condition endpoint",
+            vehicle_id,
+            err,
+        )
 
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
         """Refresh the session when the CA gateway rejects it.
@@ -630,7 +834,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         values as well; the SDK power-state gate guarantees those came from a
         report with the vehicle on. PHEV fuel and the AC charge limit also keep
         their last known values; an unconfirmed optimistic charge limit expires
-        instead of being retained.
+        instead of being retained. The odometer keeps the previous value on a
+        missing field, a stale lower report or a precision dip, so the
+        ``total_increasing`` sensor only moves forward or resets. A partial
+        payload that does not carry the door, window, lamp, tire or charger group
+        keeps the previous group, so the parser defaults are not published as
+        telemetry.
         """
         pending = self._optimistic_pending.get(vehicle_id)
 
@@ -651,6 +860,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     setattr(
                         condition.warnings, field, getattr(previous.warnings, field)
                     )
+            _retain_unreported_groups(previous, condition, pending)
+            _retain_odometer(previous, condition)
             _copy_missing_fields(condition.fuel, previous.fuel, _FUEL_FIELDS)
             if condition.battery.charge_limit_percent is None and keep(
                 "battery.charge_limit_percent"
@@ -709,12 +920,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if not self.client.is_mqtt_vehicle(vehicle):
             return False
         if not self.client.user_id:
-            _LOGGER.warning(
-                "Deepal vehicle %s is MQTT-backed but the entry has no user id; "
-                "using the REST condition endpoint (stale data). Re-authenticate "
-                "to enable MQTT telemetry.",
-                vehicle.car_id,
-            )
+            warned = getattr(self, "_mqtt_user_id_warned", None)
+            if warned is None:
+                warned = self._mqtt_user_id_warned = set()
+            if vehicle.car_id not in warned:
+                warned.add(vehicle.car_id)
+                _LOGGER.warning(
+                    "Deepal vehicle %s is MQTT-backed but the entry has no user "
+                    "id; using the REST condition endpoint (stale data). "
+                    "Re-authenticate to enable MQTT telemetry.",
+                    vehicle.car_id,
+                )
             return False
         return True
 
@@ -768,6 +984,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 CONF_REFRESH_TOKEN: token.refresh_token
                 or self.entry.data.get(CONF_REFRESH_TOKEN, ""),
                 CONF_CAC_TOKEN: token.cac_token or self.entry.data.get(CONF_CAC_TOKEN, ""),
+                CONF_USER_ID: token.user_id
+                or self.entry.data.get(CONF_USER_ID, ""),
             },
         )
         return True
@@ -786,6 +1004,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """
         try:
             return await action()
+        except (DeepalCommandAuthError, DeepalCommandNotReady):
+            # Command prerequisites (PIN, rcToken, signing material) are not
+            # an expired account session: never refresh the tokens or replay
+            # the command, which could consume a second control-PIN attempt.
+            raise
         except DeepalAuthError:
             if not await self._async_refresh_tokens(force=True):
                 raise
@@ -918,6 +1141,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self, vehicle_id: str, condition: VehicleCondition
     ) -> None:
         """Merge and publish one fresh vehicle condition."""
+        condition = self._merge_condition(vehicle_id, condition)
         vehicle = self._vehicle(vehicle_id)
         if vehicle is not None:
             condition = await self._overlay_app_comfort(vehicle, condition)
@@ -1059,6 +1283,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 return await self._async_wake_and_wait(
                     vehicle_id, wait_when_unconfirmed=True
                 )
+        if not isinstance(self.client, DeepalIntlClient):
+            return WakeResult.NOT_NEEDED
         await self.async_condition_inquiry(vehicle_id)
         return WakeResult.NOT_NEEDED
 
@@ -1126,8 +1352,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 data = await self._async_fetch()
             except DeepalRateLimitError as retry_err:
                 self._raise_rate_limited(retry_err)
-            except DeepalError as retry_err:
+            except DeepalAuthError as retry_err:
                 raise ConfigEntryAuthFailed("Authentication token expired") from retry_err
+            except DeepalError as retry_err:
+                _LOGGER.error(
+                    "Error communicating with Deepal API after token refresh: %s",
+                    retry_err,
+                )
+                raise UpdateFailed(
+                    f"Error fetching Deepal data: {retry_err}"
+                ) from retry_err
         except DeepalRateLimitError as err:
             self._raise_rate_limited(err)
         except DeepalError as err:

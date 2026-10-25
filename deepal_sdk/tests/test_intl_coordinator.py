@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("homeassistant")
 
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.deepal.charging import ChargingSessionManager
@@ -27,6 +27,8 @@ from custom_components.deepal.deepal import (
     CommandResultStatus,
     DeepalAPIError,
     DeepalAuthError,
+    DeepalCommandAuthError,
+    DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalIntlClient,
     DeepalRateLimitError,
@@ -793,6 +795,36 @@ async def test_session_recovery_without_refresh_token_raises():
     assert client.refresh_calls == 0
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        DeepalCommandAuthError("Control-code check did not return an rcToken."),
+        DeepalCommandNotReady("Login private key is required to sign commands."),
+    ],
+)
+@pytest.mark.asyncio
+async def test_command_auth_error_is_not_replayed_as_session_expiry(error):
+    client = _FakeIntlClient([_success_result()])
+    coordinator, _ = _coordinator(client, data={"car-1": _current_condition()})
+    attempts = {"count": 0}
+
+    async def send_command() -> str:
+        attempts["count"] += 1
+        raise error
+
+    with pytest.raises(type(error)):
+        await coordinator.async_execute_command(
+            "car-1",
+            send_command,
+            optimistic_update=_optimistic_power_on(),
+            timeout=1.0,
+            interval=0.01,
+        )
+
+    assert attempts["count"] == 1
+    assert client.refresh_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_stale_condition_does_not_overwrite_optimistic_state():
     client = _FakeIntlClient(
@@ -1483,6 +1515,113 @@ async def test_merge_retains_phev_fuel_and_charge_limit_when_the_app_fails():
     assert merged.battery.charge_limit_percent == 80
 
 
+def test_merge_retains_odometer_on_a_precision_dip():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+    fetched.total_odometer_km = 1500.0
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 1500.9
+
+
+def test_merge_retains_odometer_when_the_report_omits_it():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 1500.9
+
+
+def test_merge_ignores_a_lower_odometer_from_a_stale_report():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    fetched.total_odometer_km = 1200.0
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 1500.9
+
+
+def test_merge_accepts_a_real_odometer_reset():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+    fetched.total_odometer_km = 0.0
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 0.0
+
+
+def test_merge_accepts_a_higher_odometer():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+    fetched.total_odometer_km = 1501.0
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 1501.0
+
+
+def test_merge_accepts_a_higher_odometer_from_an_older_report():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2001
+    )
+    previous.total_odometer_km = 1500.9
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+
+    fetched = VehicleCondition(
+        car_id="car-1", vin="VIN", last_updated_timestamp=2000
+    )
+    fetched.total_odometer_km = 1600.0
+
+    merged = coordinator._merge_condition("car-1", fetched)
+
+    assert merged.total_odometer_km == 1600.0
+
+
 @pytest.mark.asyncio
 async def test_unconfirmed_optimistic_charge_limit_expires():
     client = _FakeIntlClient([])
@@ -2090,6 +2229,31 @@ async def test_refresh_rest_vehicle_uses_condition_inquiry():
 
 
 @pytest.mark.asyncio
+async def test_charging_read_uses_the_sda_condition_without_inquiry():
+    class _SdaClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def get_vehicle_condition(self, vehicle_id, vin=None):
+            self.calls.append(vehicle_id)
+            return VehicleCondition(
+                car_id=vehicle_id,
+                vin=vin or "",
+                last_updated_timestamp=1000,
+            )
+
+    client = _SdaClient()
+    coordinator, _ = _coordinator(_FakeIntlClient([]))
+    coordinator.client = client
+    coordinator.vehicles = []
+
+    await coordinator._async_read_charging_vehicle("car-1")
+
+    assert client.calls == ["car-1"]
+    assert coordinator.data["car-1"].car_id == "car-1"
+
+
+@pytest.mark.asyncio
 async def test_periodic_update_does_not_wake():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)
@@ -2117,6 +2281,77 @@ async def test_periodic_update_recovers_from_ca_token_rejection():
     assert client.refresh_calls == 1
     assert client.mqtt_condition_errors == []
     assert data["car-1"].car_id == "car-1"
+
+
+@pytest.mark.asyncio
+async def test_one_vehicle_failure_does_not_fail_the_others():
+    client = _FakeIntlClient([])
+    previous = _current_condition("car-2", 900)
+    coordinator, _ = _coordinator(client, data={"car-2": previous})
+    coordinator.vehicles = [
+        _mqtt_vehicle("car-1", protocol=None),
+        _mqtt_vehicle("car-2", protocol=None),
+    ]
+    coordinator._capabilities = {}
+    original = client.get_vehicle_condition
+
+    async def flaky(vehicle_id, vin=None):
+        if vehicle_id == "car-2":
+            raise DeepalConnectionError("offline")
+        return await original(vehicle_id, vin=vin)
+
+    client.get_vehicle_condition = flaky
+    client.condition_timestamps = [2000]
+
+    data = await coordinator._async_update_data()
+
+    assert data["car-1"].last_updated_timestamp == 2000
+    assert data["car-2"] is previous
+
+
+@pytest.mark.asyncio
+async def test_poll_fails_when_every_vehicle_fails_without_previous():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+
+    async def failing(vehicle_id, vin=None):
+        raise DeepalConnectionError("offline")
+
+    client.get_vehicle_condition = failing
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+@pytest.mark.asyncio
+async def test_mqtt_connection_error_falls_back_to_rest():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition_errors = [DeepalConnectionError("broker down")]
+
+    data = await coordinator._async_update_data()
+
+    assert data["car-1"].condition_source == "rest"
+    assert client.events[0] == "mqtt_condition"
+    assert "condition" in client.events
+
+
+@pytest.mark.asyncio
+async def test_mqtt_session_error_falls_back_to_rest():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition_errors = [DeepalAuthError("expired")]
+
+    data = await coordinator._async_update_data()
+
+    assert data["car-1"].condition_source == "rest"
+    assert client.refresh_calls == 0
 
 
 @pytest.mark.asyncio
@@ -2174,6 +2409,50 @@ async def test_transport_errors_keep_no_retry_after():
         await coordinator._async_update_data()
 
     assert err.value.retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_retry_after_auth_refresh_maps_a_transient_error_to_update_failed():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    calls = {"count": 0}
+
+    async def flaky_condition(vehicle_id, vin=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise DeepalAuthError("Authentication failed: APP_1_1_02_004")
+        raise DeepalAPIError("server error")
+
+    client.get_vehicle_condition = flaky_condition
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert client.refresh_calls == 1
+    assert calls["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_after_auth_refresh_keeps_auth_errors_as_reauth():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    calls = {"count": 0}
+
+    async def flaky_condition(vehicle_id, vin=None):
+        calls["count"] += 1
+        raise DeepalAuthError("Authentication failed: APP_1_1_02_004")
+
+    client.get_vehicle_condition = flaky_condition
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    assert client.refresh_calls == 1
+    assert calls["count"] == 2
 
 
 class _RecordingStore:
@@ -2885,7 +3164,12 @@ async def test_warning_lights_retain_the_last_known_values():
     current = VehicleCondition(
         car_id="car-1",
         vin="",
-        warnings={"power_limit": True, "abs": False},
+        warnings={
+            "power_limit": True,
+            "abs": False,
+            "airbag": True,
+            "coolant_temperature": False,
+        },
     )
     coordinator, _ = _coordinator(client, data={"car-1": current})
 
@@ -2894,6 +3178,8 @@ async def test_warning_lights_retain_the_last_known_values():
 
     assert merged.warnings.power_limit is True
     assert merged.warnings.abs is False
+    assert merged.warnings.airbag is True
+    assert merged.warnings.coolant_temperature is False
 
     reported = VehicleCondition(
         car_id="car-1",
@@ -2905,9 +3191,76 @@ async def test_warning_lights_retain_the_last_known_values():
 
     assert merged.warnings.power_limit is False
     assert merged.warnings.abs is False
+    assert merged.warnings.airbag is True
+    assert merged.warnings.coolant_temperature is False
 
     first_poll = _coordinator(_FakeIntlClient([]))
     merged = first_poll[0]._merge_condition(
         "car-1", VehicleCondition(car_id="car-1", vin="")
     )
     assert merged.warnings.power_limit is None
+
+
+@pytest.mark.asyncio
+async def test_unreported_telemetry_groups_retain_the_last_known_values():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        doors={"locked": False, "driver_door_open": True},
+        windows={"front_left_open": True},
+        lamps={"high_beam": True},
+        tires={"front_left": {"alarm": True}},
+        battery={"charger_connected": True},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    partial = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        mqtt_raw_data={"soc": 50},
+        last_updated_timestamp=2000,
+    )
+    merged = coordinator._merge_condition("car-1", partial)
+
+    assert merged.doors.locked is False
+    assert merged.doors.driver_door_open is True
+    assert merged.windows.front_left_open is True
+    assert merged.lamps.high_beam is True
+    assert merged.tires.front_left.alarm is True
+    assert merged.battery.charger_connected is True
+
+    reported = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        doors={"locked": True},
+        mqtt_raw_data={"driverDoorLock": 0},
+        last_updated_timestamp=3000,
+    )
+    merged = coordinator._merge_condition("car-1", reported)
+
+    assert merged.doors.locked is True
+    assert merged.doors.driver_door_open is False
+    assert merged.windows.front_left_open is True
+
+
+@pytest.mark.asyncio
+async def test_apply_condition_merges_unreported_telemetry_groups():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        doors={"locked": False},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    coordinator.vehicles = []
+    partial = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        mqtt_raw_data={"soc": 40},
+        last_updated_timestamp=2000,
+    )
+
+    await coordinator._async_apply_condition("car-1", partial)
+
+    assert coordinator.data["car-1"].doors.locked is False

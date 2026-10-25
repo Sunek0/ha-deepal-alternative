@@ -41,9 +41,10 @@ def charging_flag(condition: Any) -> Optional[bool]:
 
     The S05 reports ``ChrgSts`` as a charging-state enum whose connected-only
     values (1 and 2) used to read as "charging": for those snapshots only the
-    charging states 3 and 4 are on. Vehicles that do not report ``ChrgSts``
-    (the SDA broker, the REST condition) keep the previous any-non-zero
-    behaviour until their enum is confirmed.
+    charging states 3 and 4 are on. State 5 (charge stopped with the cable
+    connected) is also off. Vehicles that do not report ``ChrgSts`` (the SDA
+    broker, the REST condition) keep the previous any-non-zero behaviour until
+    their enum is confirmed.
     """
     status = condition.battery.charging_status
     if status is None:

@@ -18,8 +18,25 @@ for vehicle in vehicles:
 
 Every `Vehicle` carries the ids used by the rest of the API (`car_id`, `vin`), the model identity
 (`series_name`, `series_code`, `model_name`, `model_code`), the account nickname
-(`car_name`), the plate (`license_plate`), a thumbnail URL and `protocol_type`, which decides how
-telemetry is read (see [step 3](#3-choose-the-telemetry-path)).
+(`car_name`), the plate (`license_plate`), a thumbnail URL, the backend `car_platform` and
+`protocol_type`, which decides how telemetry is read (see [step 3](#3-choose-the-telemetry-path)).
+
+### Layered model assets
+
+The app downloads the official layered car images as a per-vehicle ZIP. The SDK exposes the
+descriptor and the raw archive; extraction and rendering are the application's choice:
+
+```python
+asset = await client.get_vehicle_model(vehicle.car_id, vehicle.car_platform)
+archive = await client.download_vehicle_model_archive(
+    vehicle.car_id, vehicle.car_platform
+)
+```
+
+The request body was confirmed against a live S05 BEV session on 2026-10-21 (`carPlatform` 2); the
+archive download accepts only HTTPS, does not follow redirects and verifies the advertised MD5.
+See [the API reference](../reference/intl-api.md#61-layered-model-assets) for the response shape
+and the app's on-device layout.
 
 ## 2. Read a condition over REST
 

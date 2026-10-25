@@ -33,8 +33,8 @@ DeepalPanel.prototype._renderStatus = function (vehicle) {
         <ha-icon icon="${PANEL_ICONS.car}"></ha-icon>
         <span class="section-title">${escapeHtml(t("vehicle"))}</span>
       </div>
-      ${vehicleStageHtml(hass, vehicle)}
-      <div class="chips">${vehicleChipsHtml(hass, vehicle, t, { lock: this._chipsShowLock })}</div>
+      ${vehicleStageHtml(hass, vehicle, { rotate: true })}
+      <div class="chips">${vehicleLockChipHtml(hass, vehicle, t)}</div>
       <div class="metrics">${metrics.join("")}</div>
     </div>`;
 

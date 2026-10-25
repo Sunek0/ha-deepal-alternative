@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from .deepal import VehicleCondition
 from .deepal.mqtt import unmapped_s05_keys
 from .deepal.redact import is_sensitive_key
+from .diagnostics_capture import async_capture_summary
 from .runtime_data import DeepalConfigEntry
 
 #: `$vdp/<did>/...` MQTT topic strings: the device segment is masked wherever a
@@ -59,6 +60,7 @@ def _vehicle_data(vehicle: Any) -> dict[str, Any]:
         "car_name": vehicle.car_name,
         "license_plate": vehicle.license_plate,
         "thumbnail_url": vehicle.thumbnail_url,
+        "car_platform": vehicle.car_platform,
         "protocol_type": vehicle.protocol_type,
     }
 
@@ -141,4 +143,5 @@ async def async_get_config_entry_diagnostics(
             if condition.mqtt_raw_data
         },
     }
+    report["diagnostics_capture"] = await async_capture_summary(hass, entry)
     return _redact(report)

@@ -112,6 +112,9 @@
       "warning_abs": {
         "default": "mdi:car-brake-abs"
       },
+      "warning_airbag": {
+        "default": "mdi:airbag"
+      },
       "warning_brake": {
         "default": "mdi:car-brake-alert"
       },
@@ -132,6 +135,9 @@
       },
       "warning_traction_battery_low": {
         "default": "mdi:battery-alert"
+      },
+      "warning_coolant_temperature": {
+        "default": "mdi:coolant-temperature"
       }
     },
     "button": {

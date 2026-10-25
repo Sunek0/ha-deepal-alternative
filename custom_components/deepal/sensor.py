@@ -39,6 +39,7 @@ from .deepal import DeepalIntlClient
 from .deepal.mqtt import (
     CHARGE_STATE_AC_CHARGING,
     CHARGE_STATE_AC_CONNECTED,
+    CHARGE_STATE_CHARGE_STOPPED,
     CHARGE_STATE_DC_CHARGING,
     CHARGE_STATE_DC_CONNECTED,
     CHARGE_STATE_NOT_CHARGING,
@@ -59,6 +60,7 @@ CHARGE_STATUS_OPTIONS = (
     "connected_dc",
     "charging_ac",
     "charging_dc",
+    "charge_stopped",
 )
 CHARGE_STATUS_OPTION_BY_STATE = {
     CHARGE_STATE_NOT_CHARGING: "not_charging",
@@ -66,6 +68,7 @@ CHARGE_STATUS_OPTION_BY_STATE = {
     CHARGE_STATE_DC_CONNECTED: "connected_dc",
     CHARGE_STATE_AC_CHARGING: "charging_ac",
     CHARGE_STATE_DC_CHARGING: "charging_dc",
+    CHARGE_STATE_CHARGE_STOPPED: "charge_stopped",
 }
 
 #: Power-state enum options: only the verified 0/2 mapping is translated.
@@ -74,9 +77,10 @@ POWER_STATUS_OPTION_BY_VALUE = {0: "off", 2: "on"}
 
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
-# payload has no speed, gear, outside temperature, PM2.5, air quality, charge
-# limit, parking brake or vehicle status fields, so the entities would stay
-# unknown forever.
+# payload has no speed, gear, PM2.5, air quality, charge limit, parking brake
+# or vehicle status fields, so the entities would stay unknown forever. Outside
+# temperature is not filtered: it is created and stays unknown until a report
+# carries it.
 S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
     {
         "air_quality_level",
@@ -84,7 +88,6 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
         "epb_status",
         "gear",
         "inside_pm25",
-        "outside_temperature",
         "speed",
         "vehicle_status",
     }
@@ -381,9 +384,10 @@ class DeepalChargeStatusSensor(DeepalBaseSensor):
     """S05 charging-state sensor with the app's translated states.
 
     The wire values are the ``ChrgSts`` enum: 0 not charging, 1 AC gun
-    connected, 2 DC gun connected, 3 AC charging and 4 DC charging. A value
-    outside the enum is unknown, logged once per distinct value and kept
-    visible through the raw attribute; it is never translated into a state.
+    connected, 2 DC gun connected, 3 AC charging, 4 DC charging and 5 charging
+    stopped/finished with the cable still connected. A value outside the enum
+    is unknown, logged once per distinct value and kept visible through the raw
+    attribute; it is never translated into a state.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -476,8 +480,9 @@ class DeepalPowerStatusSensor(DeepalBaseSensor):
 class DeepalChargeModeSensor(DeepalBaseSensor):
     """Charging type (AC/DC) derived from the S05 charging state.
 
-    Unknown while the car is not connected or charging: the entity reports the
-    type of the current session, not a guess.
+    States 1/3 report AC and 2/4 report DC. The not-charging states 0 and 5 do
+    not carry a gun type, so the gun flags the SDK resolved from the raw fields
+    are used as the fallback; the type stays unknown when no gun is connected.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -498,6 +503,11 @@ class DeepalChargeModeSensor(DeepalBaseSensor):
             return "ac"
         if state in (CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING):
             return "dc"
+        if state in (CHARGE_STATE_NOT_CHARGING, CHARGE_STATE_CHARGE_STOPPED):
+            if cond.battery.ac_gun_connected:
+                return "ac"
+            if cond.battery.dc_gun_connected:
+                return "dc"
         return None
 
 
@@ -656,7 +666,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         key="fuel_volume",
         name="Fuel Volume",
         value_fn=lambda cond, vehicle: cond.fuel.volume_l,
-        device_class=SensorDeviceClass.VOLUME,
+        device_class=SensorDeviceClass.VOLUME_STORAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfVolume.LITERS,
     ),
@@ -664,7 +674,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
         key="fuel_tank_capacity",
         name="Fuel Tank Capacity",
         value_fn=lambda cond, vehicle: cond.fuel.tank_capacity_l,
-        device_class=SensorDeviceClass.VOLUME,
+        device_class=SensorDeviceClass.VOLUME_STORAGE,
         state_class=None,
         native_unit_of_measurement=UnitOfVolume.LITERS,
         entity_category=EntityCategory.DIAGNOSTIC,

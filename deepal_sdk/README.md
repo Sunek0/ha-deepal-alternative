@@ -123,6 +123,23 @@ print(result.status)
 See [`docs/reference/intl-api.md`](docs/reference/intl-api.md#10-remote-commands) for the complete
 command list, the signature construction, the PIN/token rules and the command result codes.
 
+### Layered vehicle model assets
+
+The official app also downloads a per-vehicle ZIP of layered car images. The SDK exposes the
+descriptor and the raw archive; extracting and rendering the layers is left to the application:
+
+```python
+asset = await client.get_vehicle_model(vehicle.car_id, vehicle.car_platform)
+archive = await client.download_vehicle_model_archive(
+    vehicle.car_id, vehicle.car_platform
+)
+print(asset.model_url, asset.md5, len(archive))
+```
+
+The endpoint and its `{carId, carPlatform}` body were confirmed live on an S05 BEV
+(2026-10-21, `carPlatform` 2); see
+[`docs/reference/intl-api.md`](docs/reference/intl-api.md#61-layered-model-assets).
+
 ### MQTT telemetry (S05)
 
 Vehicles that report `protocol_type == "MQTT"` do not refresh their state over REST; the SDK
@@ -202,8 +219,10 @@ The full code-to-exception mapping is in
 
 `DeepalIntlClient(enable_api_logging=True)` logs every request and response at `WARNING` level with
 tokens, keys, VINs, emails, phones, PINs and serial numbers redacted, and truncates long strings.
-Payload parsing never fails on missing groups: absent telemetry is reported as `None`, `False` or
-`0` according to [`docs/reference/models.md`](docs/reference/models.md).
+For structured capture, pass `on_exchange=callback` to either client: the callback receives REST and
+MQTT events that your application can queue, redact and persist. Payload parsing never fails on
+missing groups: absent telemetry is reported as `None`, `False` or `0` according to
+[`docs/reference/models.md`](docs/reference/models.md).
 
 ## Documentation
 

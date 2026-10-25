@@ -38,14 +38,14 @@ Esta guía cubre las cuatro formas de ver y controlar tu coche Deepal en Home As
   el panel); el panel se abre desde la barra lateral.
 - Se adapta a tu instalación: descubre el coche y sus entidades desde los registros de Home
   Assistant, así que funciona con cualquier nombre, área o idioma, y con varios coches.
-- **Franja de datos fijos**: batería (con rayo mientras carga), autonomía, **cierre general** y
+- **Franja de datos fijos**: batería (con rayo mientras carga), autonomía, **cierre centralizado** y
   **frescura** (conexión con la nube y última actualización) siempre visibles, en cualquiera de las
   pestañas.
 - Pestañas:
-  - **Estado**: imagen del coche por capas (capó, puertas, ventanillas, maletero y luces en vivo),
-    chips de puertas, ventanillas, maletero, capó, luces y motor (el cierre va en la franja
-    superior); controles de cierre,
-    ventanillas, maletero, destello, claxon y destello+claxon; odómetro y estado de carga;
+  - **Estado**: imagen del coche por capas girada 90° a la izquierda y recortada a un marco 750:550
+    (capó, puertas, ventanillas, maletero y luces en vivo), con un único chip de **cierre
+    centralizado** debajo; controles de
+    cierre, ventanillas, maletero, destello, claxon y destello+claxon; odómetro y estado de carga;
     neumáticos con sus alarmas; **avisos** (batería de 12 V, ABS, frenos, dirección, potencia…), que
     aparecen solo mientras hay alguno activo; y el bloque **Energía** en los coches de combustible
     (PHEV).
@@ -121,8 +121,9 @@ Fichero (en el repositorio, carpeta `guides/dashboards/`):
   que indicar entidades.
 - Trae la franja de datos fijos (batería, autonomía y frescura) y las mismas tres pestañas que el
   panel: **Estado**, **Clima** y **Carga**, con el botón de actualizar en la cabecera. El **cierre
-  general** va en el chip del candado de los chips de estado (y el tile de cierre muestra también su
-  estado). Es la tarjeta recomendada para el detalle.
+  general** va en el único chip del candado bajo la imagen de Estado (y el tile de cierre muestra
+  también su estado); la imagen se gira 90° a la izquierda. Es la tarjeta recomendada para el
+  detalle.
 - Los controles de puertas, ventanillas y maletero solo aparecen si guardaste el PIN de control
   remoto; el resto funciona sin PIN. Los errores de comando se muestran en la propia tarjeta.
 
@@ -134,12 +135,14 @@ Fichero (en el repositorio, carpeta `guides/dashboards/`):
   type: custom:deepal-compact-card
   device_id: <id del dispositivo del coche>
   ```
-- Muestra: el nombre del coche, la franja de datos fijos (con el **cierre general**), la **imagen
-  del vehículo** (con la foto por capas como respaldo) y los chips de puertas, ventanillas,
-  maletero y capó; un **control de clima** (encender/apagar y temperatura objetivo); las acciones
-  rápidas (cierre y desbloqueo, **ventanillas**, destello y claxon) con el botón de actualizar en la
-  cabecera; y una **franja de carga** con el estado, la corriente y el tiempo restante mientras el
-  cable está conectado.
+- Muestra: el nombre del coche, la franja de datos fijos (con el **cierre centralizado**), la
+  **imagen del vehículo con el estado real**: en el S05 se usa el isométrico por capas (sustituye a
+  la foto de la API; incluye puertas, ventanillas, capó, portón y luces, con las puertas abiertas
+  marcadas con un contorno); en el resto de perfiles se usa la entidad
+  `image.*_vehicle_image`, el héroe o la vista de planta como respaldo. Añade un **control de
+  clima** (encender/apagar y temperatura objetivo); las acciones rápidas (cierre y desbloqueo,
+  **ventanillas**, destello y claxon) con el botón de actualizar en la cabecera; y una **franja de
+  carga** con el estado, la corriente y el tiempo restante mientras el cable está conectado.
 - No lleva pestañas: para el clima, la programación de carga o los neumáticos, usa la tarjeta
   completa o el panel.
 

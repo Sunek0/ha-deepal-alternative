@@ -183,7 +183,10 @@
     },
     "abort": {
       "already_configured": "Ce compte est déjà configuré.",
-      "reauth_successful": "Réauthentification réussie."
+      "cannot_connect": "Impossible de joindre l'API Changan Deepal ; le flux a été fermé. Relancez la réauthentification.",
+      "no_vehicles": "Le compte n'a aucun véhicule associé.",
+      "reauth_successful": "Réauthentification réussie.",
+      "wrong_account": "Le compte connecté ne correspond pas à cette entrée d'intégration."
     }
   },
   "options": {
@@ -199,7 +202,7 @@
           "environment": "Environnement régional",
           "show_panel": "Afficher le panneau latéral"
         },
-        "description": "Réglez l'interrogation et les diagnostics. Le code PIN de contrôle active les commandes à distance signées ; les options de diagnostic changent la façon dont l'API voit le client et ne doivent être modifiées qu'en cas de dépannage.",
+        "description": "Réglez l'interrogation et les diagnostics. Le code PIN de contrôle active les commandes à distance signées ; les options de diagnostic changent la façon dont l'API voit le client et ne doivent être modifiées qu'en cas de dépannage.\n\n{diagnostics_status}",
         "data_description": {
           "scan_interval": "Fréquence à laquelle Home Assistant interroge le véhicule lorsqu'aucune télémétrie MQTT n'est disponible, en secondes (30-3600).",
           "control_pin": "Code PIN de contrôle à distance de My Changan. Nécessaire pour verrouiller/déverrouiller, déplacer les vitres ou ouvrir le coffre ; il est échangé contre un jeton qui expire périodiquement et il est redemandé lorsque cela se produit.",
@@ -208,12 +211,31 @@
           "enable_location": "Demande et expose la position du véhicule. Les véhicules européens ne la signalent pas actuellement, le tracker peut donc rester inconnu ; l'option cible les serveurs qui la fournissent.",
           "environment": "Ensemble de passerelles régionales utilisé pour l'API internationale. Europe par défaut.",
           "show_panel": "Ajoute une page Deepal dans la barre latérale pour tous les utilisateurs de Home Assistant."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Capture de diagnostic complète",
+            "description": "Enregistre chaque requête REST et chaque échange MQTT de cette entrée dans un fichier local. Utilise l'action ci-dessous pour démarrer un nouveau segment, supprimer les fichiers ou actualiser le lien de téléchargement. Les fichiers sont expurgés et destinés uniquement au dépannage.",
+            "data": {
+              "enable_diagnostics_capture": "Enregistrer le diagnostic complet",
+              "diagnostics_action": "Action de diagnostic",
+              "diagnostics_confirm_delete": "Confirmer la suppression"
+            },
+            "data_description": {
+              "enable_diagnostics_capture": "Écrit chaque requête/réponse REST et chaque échange MQTT dans le dossier de diagnostic, avec les jetons, clés, VIN, e-mail, téléphone, PIN, identifiants et la localisation masqués. À activer uniquement pendant le dépannage.",
+              "diagnostics_action": "Sélectionne une action et appuie sur Enregistrer. Les options sont aussi enregistrées. Le lien de téléchargement reste disponible dans l'état ci-dessus.",
+              "diagnostics_confirm_delete": "Nécessaire pour supprimer tous les fichiers de diagnostic de cette entrée. Cette action est irréversible."
+            }
+          }
         }
       }
     },
     "error": {
       "invalid_pin": "Le code PIN de contrôle n'est pas valide pour ce compte.",
-      "pin_rate_limited": "Plus aucune tentative de code PIN ; attendez avant de réessayer."
+      "pin_rate_limited": "Plus aucune tentative de code PIN ; attendez avant de réessayer.",
+      "confirm_delete": "Coche « Confirmer la suppression » pour supprimer les fichiers de diagnostic.",
+      "no_diagnostics_file": "Il n'y a pas encore de fichier à télécharger.",
+      "diagnostics_action_failed": "L'action de diagnostic n'a pas pu être terminée. Consulte le journal de Home Assistant."
     }
   },
   "entity": {
@@ -299,7 +321,8 @@
           "connected_ac": "Câble CA branché",
           "connected_dc": "Câble CC branché",
           "charging_ac": "Charge en CA",
-          "charging_dc": "Charge en CC"
+          "charging_dc": "Charge en CC",
+          "charge_stopped": "Charge arrêtée"
         }
       },
       "charge_mode": {
@@ -513,6 +536,9 @@
       "warning_abs": {
         "name": "Voyant ABS"
       },
+      "warning_airbag": {
+        "name": "Voyant airbag"
+      },
       "warning_brake_fluid": {
         "name": "Voyant liquide de frein"
       },
@@ -530,6 +556,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Voyant batterie de traction faible"
+      },
+      "warning_coolant_temperature": {
+        "name": "Voyant température du liquide de refroidissement"
       }
     },
     "button": {
@@ -613,6 +642,28 @@
       "location": {
         "name": "Position"
       }
+    }
+  },
+  "selector": {
+    "diagnostics_action": {
+      "options": {
+        "none": "Ne rien faire",
+        "new": "Créer un nouveau fichier",
+        "delete": "Supprimer tous les fichiers",
+        "download": "Actualiser le lien de téléchargement"
+      }
+    }
+  },
+  "common": {
+    "diagnostics_status": {
+      "enabled": "**Diagnostic complet :** activé",
+      "disabled": "**Diagnostic complet :** désactivé",
+      "active_file": "**Fichier actif :** `{name}` ({size})",
+      "files": "**Fichiers :** {count} · {size}",
+      "no_file": "Aucun fichier de diagnostic pour le moment.",
+      "download": "Télécharger le fichier de diagnostic",
+      "dropped": "**Événements ignorés :** {count}",
+      "last_error": "**Dernière erreur de capture :** `{error}`"
     }
   }
 }

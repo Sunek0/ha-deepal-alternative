@@ -137,7 +137,7 @@ const PANEL_TEXTS = {
     "cable_idle": "Cable conectado, sin cargar",
     "card_description": "Estado, imagen y controles esenciales de un coche Deepal",
     "card_name": "Vehículo Deepal",
-    "central_lock": "Cierre general",
+    "central_lock": "Cierre centralizado",
     "charge_current": "Corriente",
     "charge_limit": "Límite de carga",
     "charge_mode": "Tipo de carga",

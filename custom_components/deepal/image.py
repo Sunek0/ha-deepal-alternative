@@ -8,7 +8,9 @@ be served before the proxy gives up.
 from __future__ import annotations
 
 import logging
+import socket
 from datetime import UTC, datetime
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -26,6 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity
 from .runtime_data import DeepalConfigEntry
+from .model_assets import VehicleModelAssetManager
 
 # Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
@@ -86,6 +89,52 @@ def vehicle_image_asset(
     return GENERIC_ASSET
 
 
+def _is_internal_address(value: str) -> bool:
+    """Return whether an IP literal is not globally routable."""
+    try:
+        return not ip_address(value).is_global
+    except ValueError:
+        return False
+
+
+def _is_local_hostname(host: str) -> bool:
+    """Return whether a hostname names the local machine or network."""
+    normalized = host.lower().rstrip(".")
+    return (
+        not normalized
+        or normalized == "localhost"
+        or normalized.endswith(".localhost")
+        or normalized.endswith(".local")
+    )
+
+
+async def _async_host_is_public(
+    hass: HomeAssistant,
+    host: str,
+    resolver: Any = None,
+) -> bool:
+    """Return whether a hostname is safe to fetch from this Home Assistant."""
+    if not host:
+        return False
+    if _is_internal_address(host):
+        return False
+    if _is_local_hostname(host):
+        return False
+    try:
+        if resolver is None:
+            infos = await hass.async_add_executor_job(
+                socket.getaddrinfo, host, 443, 0, socket.SOCK_STREAM
+            )
+        else:
+            infos = await resolver(host)
+    except OSError:
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(
+        not _is_internal_address(address) for address in addresses
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DeepalConfigEntry,
@@ -116,6 +165,7 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
 
     _attr_has_entity_name = True
     _attr_translation_key = "vehicle_image"
+    _unrecorded_attributes = frozenset({"model_assets_base"})
 
     def __init__(
         self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any
@@ -123,15 +173,45 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
         """Initialize the vehicle image entity."""
         super().__init__(coordinator, vehicle)
         self._attr_unique_id = f"deepal_{vehicle.car_id}_vehicle_image"
-        ImageEntity.__init__(self, coordinator.hass)
+        ImageEntity.__init__(self, coordinator.hass, verify_ssl=True)
         self._asset_cache: dict[Path, bytes] = {}
         self._api_image: bytes | None = None
+        self._model_assets: VehicleModelAssetManager | None = getattr(
+            coordinator, "model_assets", None
+        )
+        if self._model_assets is not None:
+            self._model_assets.add_listener(self._model_assets_updated)
         self._api_fetch_done = not bool(vehicle.thumbnail_url)
         # The state must never be None: the bundled asset (or a successful API
         # fetch) always has a known "last updated" time.
         self._attr_image_last_updated = datetime.now(UTC)
         if self._api_fetch_done:
             self._attr_content_type = SVG_CONTENT_TYPE
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose the official layered pack so the panel can discover it."""
+        manager = self._model_assets
+        status = manager.status(self._car_id) if manager is not None else None
+        if status is None:
+            return {}
+        return {
+            "model_assets_base": status.base_url,
+            "model_assets_categories": list(status.categories),
+            "model_assets_md5": status.md5,
+        }
+
+    def _model_assets_updated(self) -> None:
+        """Repaint the entity when the background pack download finishes."""
+        if getattr(self, "hass", None) is not None and getattr(self, "entity_id", None):
+            self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop listening to the model-asset manager."""
+        if self._model_assets is not None:
+            self._model_assets.remove_listener(self._model_assets_updated)
+            self._model_assets = None
+        await super().async_will_remove_from_hass()
 
     @property
     def image_url(self) -> str | None:
@@ -169,10 +249,18 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
         url = self.vehicle.thumbnail_url
         if not url:
             return
-        if urlsplit(url).scheme != "https":
+        parsed = urlsplit(url)
+        if parsed.scheme != "https":
             _LOGGER.debug(
                 "Deepal vehicle image URL for %s is not https; using the "
                 "bundled asset",
+                self._car_id,
+            )
+            return
+        if not await _async_host_is_public(self.hass, parsed.hostname or ""):
+            _LOGGER.debug(
+                "Deepal vehicle image URL for %s points to a local or internal "
+                "host; using the bundled asset",
                 self._car_id,
             )
             return

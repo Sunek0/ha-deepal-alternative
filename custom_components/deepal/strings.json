@@ -183,7 +183,10 @@
     },
     "abort": {
       "already_configured": "This account is already configured.",
-      "reauth_successful": "Reauthentication was successful."
+      "cannot_connect": "Could not reach the Changan Deepal API; the flow was closed. Start the reauthentication again.",
+      "no_vehicles": "The account has no vehicles linked.",
+      "reauth_successful": "Reauthentication was successful.",
+      "wrong_account": "The signed-in account does not match this integration entry."
     }
   },
   "options": {
@@ -199,7 +202,7 @@
           "environment": "Regional environment",
           "show_panel": "Show the sidebar panel"
         },
-        "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.",
+        "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.\n\n{diagnostics_status}",
         "data_description": {
           "scan_interval": "How often Home Assistant polls the vehicle when no MQTT telemetry is available, in seconds (30-3600).",
           "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
@@ -208,12 +211,41 @@
           "enable_location": "Request and expose the vehicle position. European vehicles currently report no location, so the tracker may stay unknown; the option targets servers that expose it.",
           "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
           "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Full diagnostics capture",
+            "description": "Record every REST and MQTT exchange for this entry in a local file. Use the action below to start a new segment, delete the files or refresh the download link. The files are redacted and only intended for troubleshooting.",
+            "data": {
+              "enable_diagnostics_capture": "Save full diagnostics",
+              "diagnostics_action": "Diagnostics action",
+              "diagnostics_confirm_delete": "Confirm deletion"
+            },
+            "data_description": {
+              "enable_diagnostics_capture": "Write every REST request/response and MQTT exchange to the capture directory, with tokens, keys, VIN, email, phone, PIN, identifiers and location hidden. Enable only while troubleshooting.",
+              "diagnostics_action": "Select an action and press Save. The options are saved too. The download link stays available in the status above.",
+              "diagnostics_confirm_delete": "Required to delete every capture file for this entry. This cannot be undone."
+            }
+          }
         }
       }
     },
     "error": {
       "invalid_pin": "The control PIN is not valid for this account.",
-      "pin_rate_limited": "No PIN attempts are left; wait before trying again."
+      "pin_rate_limited": "No PIN attempts are left; wait before trying again.",
+      "confirm_delete": "Check “Confirm deletion” to delete the capture files.",
+      "no_diagnostics_file": "There is no capture file to download yet.",
+      "diagnostics_action_failed": "The diagnostics action could not be completed. Check the Home Assistant log."
+    }
+  },
+  "selector": {
+    "diagnostics_action": {
+      "options": {
+        "none": "Do nothing",
+        "new": "Create a new file",
+        "delete": "Delete all files",
+        "download": "Refresh the download link"
+      }
     }
   },
   "entity": {
@@ -299,7 +331,8 @@
           "connected_ac": "AC cable connected",
           "connected_dc": "DC cable connected",
           "charging_ac": "Charging on AC",
-          "charging_dc": "Charging on DC"
+          "charging_dc": "Charging on DC",
+          "charge_stopped": "Charging stopped"
         }
       },
       "charge_mode": {
@@ -513,6 +546,9 @@
       "warning_abs": {
         "name": "ABS warning"
       },
+      "warning_airbag": {
+        "name": "Airbag warning"
+      },
       "warning_brake_fluid": {
         "name": "Brake fluid warning"
       },
@@ -530,6 +566,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Traction battery low warning"
+      },
+      "warning_coolant_temperature": {
+        "name": "Coolant temperature warning"
       }
     },
     "button": {
@@ -613,6 +652,18 @@
       "location": {
         "name": "Location"
       }
+    }
+  },
+  "common": {
+    "diagnostics_status": {
+      "enabled": "**Full diagnostics capture:** enabled",
+      "disabled": "**Full diagnostics capture:** disabled",
+      "active_file": "**Active file:** `{name}` ({size})",
+      "files": "**Files:** {count} · {size}",
+      "no_file": "No capture file yet.",
+      "download": "Download diagnostics file",
+      "dropped": "**Dropped events:** {count}",
+      "last_error": "**Last capture error:** `{error}`"
     }
   }
 }

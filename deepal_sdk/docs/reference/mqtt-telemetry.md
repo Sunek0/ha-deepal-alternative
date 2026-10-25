@@ -79,18 +79,26 @@ an empty properties block, like the app's Paho client.
 2. Connect over TLS to the broker (`ssl://host`, default port `8883`) with the resolved client id
    and username and the auth token as password. A non-zero CONNACK reason code raises
    `DeepalAPIError` with the MQTT 5.0 reason description.
-3. Subscribe to the configured topics; command topics (`/commands/`, `/set/`, `/client/action` and
-   the app `msgType` command values) are excluded. When the config omits the login or event
-   topics, they are derived from the app templates (`$vdp/<did>/client/loginout`,
-   `$vdp/<did>/server/loginout`, `$vdp/<did>/<did>/server/event`).
-4. Publish the `loginout` message with the `ReqPayLoad` envelope (`did`, `r`, `v`, `mt`, `e`, `z`,
+3. Subscribe to the configured **subscription** topics; command topics (`/commands/`, `/set/`,
+   `/client/action` and the app `msgType` command values) are excluded. Publish topics are never
+   subscribed, even when their message type is `event`: the S05 configuration lists
+   `events/down` as the client publish topic and `events/up` as the event subscription. When the
+   config omits the login or event topics, they are derived from the app templates
+   (`$vdp/<did>/client/loginout`, `$vdp/<did>/server/loginout`,
+   `$vdp/<did>/<did>/server/event`).
+4. Read the SUBACK and validate it before the login. The parser skips the MQTT 5 properties block
+   before reading the reason codes, so reason *n* belongs to the *n*-th sorted subscription. A
+   missing packet, a different packet id, an unreadable properties block or a failure reason
+   (`>= 0x80`, for example `0x87` not authorized) closes the session without publishing the login
+   or wake request.
+5. Publish the `loginout` message with the `ReqPayLoad` envelope (`did`, `r`, `v`, `mt`, `e`, `z`,
    `tf`, `dt`, `sers` and `b` with the known `vin`/`sc`/`mc`/`uid`/`cid`/`ruid` identifiers).
-5. The response carries a `secretKey`. Publish the `car_condition` properties request, with the
+6. The response carries a `secretKey`. Publish the `car_condition` properties request, with the
    payload AES-CBC encrypted (key = `secretKey`, IV = MD5 of the request id) over
    `base64 + gzip + JSON`.
-6. Decrypt the `rs`/`sers` fields of the responses and accumulate the parameters of the
+7. Decrypt the `rs`/`sers` fields of the responses and accumulate the parameters of the
    `car_condition`, `BDC_Service`, `BMS_Service`, `OBC_Service` and `THU_Service` services.
-7. Send `PINGREQ` when the keepalive expires while waiting, and `DISCONNECT` (reason code `0`)
+8. Send `PINGREQ` when the keepalive expires while waiting, and `DISCONNECT` (reason code `0`)
    before closing.
 
 The exchange returns as soon as a `/properties/get/res` message carries more than 10 parameters, or
@@ -114,15 +122,16 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `igniteCumulativeMileage` | `vehicleStatus.igniteCumulativeMileage` | `trip_mileage_km` |
 | `engineStatus` / `powerStatusFeedBack` / `electronichandbrakeStatus` | `vehicleStatus.engineSts` / `powerStatus` / `epbSts` | `engine_on` / `power_status` / `epb_status` |
 | `vehicleTemperature` | `hvac.insideTemp` (x10) | `climate.inside_temperature_c` |
+| `outsideTemperature`, `externalTemperature` | `hvac.outsideTemp` (x10; source unit assumed Celsius, pending live confirmation) | `climate.outside_temperature_c` |
 | `innerHumidity` | `hvac.insideHumidity` (raw tenths) | `climate.humidity` |
 | `airConditioningSetTemperature` | `hvac.remoteTemp` (x10) | `climate.target_temperature_c` |
 | `airStatus` | `hvac.acStatus` | `climate.power_on` |
 | `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
 | `airPurifierStatus` | `hvac.insideAirQualityLevel` | `climate.air_quality_level` |
 | `airConditioningHairRatings` | `hvac.fanLevel` | `climate.fan_level` |
-| `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging; anything else unknown) | `battery.charging_status` |
-| `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` | `battery.charger_connected` |
-| `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings outside `0-600 A` become unknown) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
+| `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` |
+| `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` (`0` not connected, any other reported value connected; states `0`/`5` use these raw fields) | `battery.charger_connected` |
+| `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds `600 A` become unknown; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
 | `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |
 | `remainingFuel` / `remainedOilMile` | `fuel.leftPercent` / `fuel.remainingRange` | `fuel.level_percent` / `fuel.remaining_range_km` |
 | `driverDoor`, `passengerDoor`, `leftRearDoor`, `rightRearDoor` | `door.doors[0..3]` | `doors.*_door_open` |

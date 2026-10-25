@@ -37,12 +37,13 @@ This guide covers the four ways to see and control your Deepal car in Home Assis
   there); the panel opens from the sidebar.
 - It adapts to your installation: it discovers the vehicle and its entities from the Home Assistant
   registries, so it works with any name, area or language, and with several cars.
-- **Persistent vitals**: battery (with a charging bolt), range, the **general closure** and
+- **Persistent vitals**: battery (with a charging bolt), range, the **central locking** and
   **freshness** (cloud connection and last update) stay visible on all tabs.
 - Tabs:
-  - **Status**: layered car picture (hood, doors, windows, trunk and lights live), chips for the
-    doors, windows, trunk, hood, lights and engine (the closure lives in the top strip); the lock, windows, trunk, flash, horn and
-    flash-and-horn controls; odometer and charge state; tire pressures with their alarms;
+  - **Status**: layered car picture rotated 90° counter-clockwise and cropped to a 750:550 frame
+    (hood, doors, windows, trunk and lights live), with a single **central-locking** chip below it;
+    the lock, windows, trunk, flash,
+    horn and flash-and-horn controls; odometer and charge state; tire pressures with their alarms;
     **warnings** (12 V battery, ABS, brakes, steering, power…), shown only while one is active;
     and the **Energy** block on fuel cars (PHEV).
   - **Driving** (on the models that report it, like the S07): speed, gear, parking brake, vehicle
@@ -115,8 +116,9 @@ File (in the repository, `guides/dashboards/` folder):
   entities are configured by hand.
 - It carries the vitals strip (battery, range and freshness) and the panel's three tabs —
   **Status**, **Climate** and **Charging** — with the refresh button in the header. The **general
-  closure** sits in the padlock chip of the state chips (the lock control reports its state too).
-  This is the recommended card for details.
+  closure** sits in the only padlock chip below the status picture (the lock control reports its
+  state too), and the picture is rotated 90° counter-clockwise. This is the recommended card for
+  details.
 - The lock, windows and trunk controls only appear when the remote control PIN is saved; the rest
   works without a PIN. Command errors are shown on the card itself.
 
@@ -128,11 +130,13 @@ File (in the repository, `guides/dashboards/` folder):
   type: custom:deepal-compact-card
   device_id: <your vehicle device id>
   ```
-- It shows the car name, the vitals strip (with the **general closure**), the **vehicle image**
-  (with the layered picture as fallback) and the chips for the doors, windows, trunk and hood; a
-  **climate control** (on/off and target temperature); quick actions (lock and unlock, **windows**,
-  flash and horn) with the refresh button in the header; and a **charging strip** with the state,
-  current and time left while the cable is connected.
+- It shows the car name, the vitals strip (with the **central locking**), the **state-aware vehicle
+  picture**: the S05 uses the isometric layered view instead of the API photo (doors, windows, hood,
+  trunk and lights, with open doors marked by an outline), while other profiles fall back to the
+  `image.*_vehicle_image` entity, the hero picture or the status view. It also offers a **climate
+  control** (on/off and target temperature); quick actions (lock and unlock, **windows**, flash and
+  horn) with the refresh button in the header; and a **charging strip** with the state, current and
+  time left while the cable is connected.
 - It has no tabs: for climate, the charge schedule or the tires, use the complete card or the
   panel.
 

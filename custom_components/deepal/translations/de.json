@@ -183,7 +183,10 @@
     },
     "abort": {
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
-      "reauth_successful": "Neuanmeldung war erfolgreich."
+      "cannot_connect": "Die Changan-Deepal-API war nicht erreichbar; der Ablauf wurde geschlossen. Starte die Reauthentifizierung erneut.",
+      "no_vehicles": "Das Konto hat keine verknüpften Fahrzeuge.",
+      "reauth_successful": "Neuanmeldung war erfolgreich.",
+      "wrong_account": "Das angemeldete Konto passt nicht zu diesem Integrationseintrag."
     }
   },
   "options": {
@@ -199,7 +202,7 @@
           "environment": "Regionale Umgebung",
           "show_panel": "Seitenleisten-Panel anzeigen"
         },
-        "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.",
+        "description": "Passe Abfrage und Diagnose an. Die Steuer-PIN aktiviert signierte Fernbefehle; die Diagnoseoptionen ändern, wie die API den Client sieht, und sollten nur bei der Fehlersuche angepasst werden.\n\n{diagnostics_status}",
         "data_description": {
           "scan_interval": "Wie oft Home Assistant das Fahrzeug abfragt, wenn keine MQTT-Telemetrie verfügbar ist, in Sekunden (30-3600).",
           "control_pin": "Fernsteuerungs-PIN aus My Changan. Erforderlich zum Ver- und Entriegeln, Bewegen der Fenster oder Öffnen des Kofferraums.",
@@ -208,12 +211,31 @@
           "enable_location": "Fordert und zeigt die Position des Fahrzeugs an. Europäische Fahrzeuge melden derzeit keinen Standort, daher kann der Tracker unbekannt bleiben; die Option ist für Server gedacht, die ihn bereitstellen.",
           "environment": "Regionales Gateway-Set für die internationale API. Standardmäßig Europa.",
           "show_panel": "Fügt allen Home-Assistant-Benutzern eine Deepal-Seite in der Seitenleiste hinzu."
+        },
+        "sections": {
+          "diagnostics": {
+            "name": "Vollständige Diagnoseaufzeichnung",
+            "description": "Zeichnet jede REST-Anfrage und jeden MQTT-Austausch dieser Instanz in einer lokalen Datei auf. Mit der Aktion unten startest du ein neues Segment, löschst die Dateien oder erneuerst den Download-Link. Die Dateien sind redigiert und nur zur Fehlersuche gedacht.",
+            "data": {
+              "enable_diagnostics_capture": "Vollständige Diagnose speichern",
+              "diagnostics_action": "Diagnoseaktion",
+              "diagnostics_confirm_delete": "Löschen bestätigen"
+            },
+            "data_description": {
+              "enable_diagnostics_capture": "Schreibt jede REST-Anfrage/-Antwort und jeden MQTT-Austausch in das Diagnoseverzeichnis, mit ausgeblendeten Token, Schlüsseln, VIN, E-Mail, Telefon, PIN, Identifikatoren und Standort. Nur bei der Fehlersuche aktivieren.",
+              "diagnostics_action": "Wähle eine Aktion und drücke Speichern. Die Optionen werden ebenfalls gespeichert. Der Download-Link bleibt oben im Status verfügbar.",
+              "diagnostics_confirm_delete": "Erforderlich, um alle Diagnosedateien dieser Instanz zu löschen. Das kann nicht rückgängig gemacht werden."
+            }
+          }
         }
       }
     },
     "error": {
       "invalid_pin": "Die Steuerungs-PIN ist für dieses Konto ungültig.",
-      "pin_rate_limited": "Keine PIN-Versuche mehr übrig; warte, bevor du es erneut versuchst."
+      "pin_rate_limited": "Keine PIN-Versuche mehr übrig; warte, bevor du es erneut versuchst.",
+      "confirm_delete": "Aktiviere „Löschen bestätigen“, um die Diagnosedateien zu löschen.",
+      "no_diagnostics_file": "Es gibt noch keine Datei zum Herunterladen.",
+      "diagnostics_action_failed": "Die Diagnoseaktion konnte nicht abgeschlossen werden. Prüfe das Home-Assistant-Protokoll."
     }
   },
   "entity": {
@@ -299,7 +321,8 @@
           "connected_ac": "AC-Kabel angeschlossen",
           "connected_dc": "DC-Kabel angeschlossen",
           "charging_ac": "Lädt mit AC",
-          "charging_dc": "Lädt mit DC"
+          "charging_dc": "Lädt mit DC",
+          "charge_stopped": "Ladevorgang beendet"
         }
       },
       "charge_mode": {
@@ -513,6 +536,9 @@
       "warning_abs": {
         "name": "Warnleuchte ABS"
       },
+      "warning_airbag": {
+        "name": "Warnleuchte Airbag"
+      },
       "warning_brake_fluid": {
         "name": "Warnleuchte Bremsflüssigkeit"
       },
@@ -530,6 +556,9 @@
       },
       "warning_traction_battery_low": {
         "name": "Warnleuchte Antriebsbatterie schwach"
+      },
+      "warning_coolant_temperature": {
+        "name": "Warnleuchte Kühlmitteltemperatur"
       }
     },
     "button": {
@@ -613,6 +642,28 @@
       "location": {
         "name": "Standort"
       }
+    }
+  },
+  "selector": {
+    "diagnostics_action": {
+      "options": {
+        "none": "Nichts tun",
+        "new": "Neue Datei erstellen",
+        "delete": "Alle Dateien löschen",
+        "download": "Download-Link erneuern"
+      }
+    }
+  },
+  "common": {
+    "diagnostics_status": {
+      "enabled": "**Vollständige Diagnose:** aktiviert",
+      "disabled": "**Vollständige Diagnose:** deaktiviert",
+      "active_file": "**Aktive Datei:** `{name}` ({size})",
+      "files": "**Dateien:** {count} · {size}",
+      "no_file": "Noch keine Diagnosedatei vorhanden.",
+      "download": "Diagnosedatei herunterladen",
+      "dropped": "**Verworfene Ereignisse:** {count}",
+      "last_error": "**Letzter Aufzeichnungsfehler:** `{error}`"
     }
   }
 }

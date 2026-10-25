@@ -8,8 +8,10 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
+from homeassistant.helpers.translation import async_get_translations
 
 from .deepal import (
     AuthToken,
@@ -42,6 +44,9 @@ from .const import (
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
     CONF_ENABLE_API_LOGGING,
+    CONF_ENABLE_DIAGNOSTICS_CAPTURE,
+    CONF_DIAGNOSTICS_ACTION,
+    CONF_DIAGNOSTICS_CONFIRM_DELETE,
     CONF_ENABLE_LOCATION,
     CONF_WAKE,
     CONF_SHOW_PANEL,
@@ -51,12 +56,30 @@ from .const import (
     DEFAULT_WAKE,
     DEFAULT_SHOW_PANEL,
     DEFAULT_ENABLE_LOCATION,
+    DIAGNOSTICS_ACTION_DELETE,
+    DIAGNOSTICS_ACTION_DOWNLOAD,
+    DIAGNOSTICS_ACTION_NEW,
+    DIAGNOSTICS_ACTION_NONE,
+    DIAGNOSTICS_ACTIONS,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
+from .diagnostics_capture import async_download_url, async_get_capture_manager
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PLATFORM = PLATFORM_INTL
+DIAGNOSTICS_SECTION = "diagnostics"
+DIAGNOSTICS_ACTION_TRANSLATION_KEY = "diagnostics_action"
+
+
+def _format_size(value: int | float) -> str:
+    """Render a byte count for the options form."""
+    size = float(value or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{int(size)} B"
 
 PLATFORM_OPTIONS = {
     PLATFORM_INTL: "International (Europe)",
@@ -298,6 +321,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_ACCESS_TOKEN: token,
                     CONF_COUNTRY: user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
                     CONF_PHONE: user_input.get(CONF_PHONE) or "",
+                    CONF_VEHICLE_ID: vehicles[0].car_id if vehicles else "",
                 }
                 return await self.async_step_panel()
             except DeepalAuthError:
@@ -339,7 +363,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, country: str, environment: str | None = None
     ) -> DeepalIntlClient:
         """Build a client reusing the reauth entry identity, when present."""
-        return DeepalIntlClient(
+        client = DeepalIntlClient(
             country=country,
             environment=(
                 environment
@@ -350,6 +374,22 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             private_key_pem=self._reauth_identity.get(CONF_PRIVATE_KEY),
             public_key=self._reauth_identity.get(CONF_PUBLIC_KEY),
         )
+        stored_private_key = self._reauth_identity.get(CONF_PRIVATE_KEY)
+        if stored_private_key:
+            try:
+                client.set_login_keypair(
+                    stored_private_key,
+                    self._reauth_identity.get(CONF_PUBLIC_KEY),
+                )
+            except (ValueError, TypeError) as err:
+                _LOGGER.warning(
+                    "Deepal reauthentication found an unusable stored login "
+                    "private key (%s); a new keypair will be registered on login",
+                    err,
+                )
+                client.private_key_pem = None
+                client.public_key = None
+        return client
 
     async def async_step_intl_email(
         self, user_input: dict[str, Any] | None = None
@@ -434,7 +474,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
                 else:
                     return await self._async_finish_intl_login(
-                        client, token, info, step_id="intl_email_code", errors=errors
+                        client, token, info
                     )
 
         schema = vol.Schema({vol.Required("auth_code"): str})
@@ -595,7 +635,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
                 else:
                     return await self._async_finish_intl_login(
-                        client, token, info, step_id="intl_sms_code", errors=errors
+                        client, token, info
                     )
 
         schema = vol.Schema({vol.Required("auth_code"): str})
@@ -608,29 +648,17 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         client: DeepalIntlClient,
         token: AuthToken,
         info: dict[str, Any],
-        *,
-        step_id: str,
-        errors: dict[str, str],
     ) -> ConfigFlowResult:
         """Validate the account and create or reauthenticate the entry."""
         try:
             vehicles = await client.get_vehicles()
         except DeepalError as err:
-            errors["base"] = _login_error(err)
+            _LOGGER.warning("Deepal vehicle list after login failed: %s", err)
             await client.close()
-            return self.async_show_form(
-                step_id=step_id,
-                data_schema=vol.Schema({vol.Required("auth_code"): str}),
-                errors=errors,
-            )
+            return self.async_abort(reason="cannot_connect")
         if not vehicles:
             await client.close()
-            errors["base"] = "no_vehicles"
-            return self.async_show_form(
-                step_id=step_id,
-                data_schema=vol.Schema({vol.Required("auth_code"): str}),
-                errors=errors,
-            )
+            return self.async_abort(reason="no_vehicles")
 
         if self.source != config_entries.SOURCE_REAUTH:
             for candidate in vehicles:
@@ -638,12 +666,26 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     await client.close()
                     return self.async_abort(reason="already_configured")
 
-        vehicle: Vehicle = vehicles[0]
+        entry = (
+            self._get_reauth_entry()
+            if self.source == config_entries.SOURCE_REAUTH
+            else None
+        )
         configured_vehicle_id: str | None = None
-        if self.source == config_entries.SOURCE_REAUTH:
-            configured_vehicle_id = self._get_reauth_entry().data.get(
-                CONF_VEHICLE_ID
-            )
+        if entry is not None:
+            configured_user_id = entry.data.get(CONF_USER_ID)
+            login_user_id = token.user_id or client.user_id
+            if (
+                configured_user_id
+                and login_user_id
+                and configured_user_id != login_user_id
+            ):
+                await client.close()
+                return self.async_abort(reason="wrong_account")
+            configured_vehicle_id = entry.data.get(CONF_VEHICLE_ID)
+
+        vehicle: Vehicle = vehicles[0]
+        if entry is not None and configured_vehicle_id:
             matched = next(
                 (
                     candidate
@@ -670,14 +712,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
         await client.close()
 
-        if self.source == config_entries.SOURCE_REAUTH:
-            entry = self._get_reauth_entry()
-            if configured_vehicle_id and vehicle.car_id != configured_vehicle_id:
-                return self.async_show_form(
-                    step_id=step_id,
-                    data_schema=vol.Schema({vol.Required("auth_code"): str}),
-                    errors={"base": "wrong_account"},
-                )
+        if entry is not None:
             return self.async_update_reload_and_abort(
                 entry, data_updates=data_updates, reason="reauth_successful"
             )
@@ -728,15 +763,26 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             token = user_input.get(CONF_ACCESS_TOKEN, "").strip()
             client = DeepalClient(access_token=token)
             try:
-                await client.get_vehicles()
+                vehicles = await client.get_vehicles()
             except DeepalAuthError:
                 errors["base"] = "invalid_auth"
             except DeepalError:
                 errors["base"] = "cannot_connect"
             else:
+                entry = self._get_reauth_entry()
+                if not vehicles:
+                    return self.async_abort(reason="no_vehicles")
+                configured_vehicle_id = entry.data.get(CONF_VEHICLE_ID)
+                if configured_vehicle_id and not any(
+                    vehicle.car_id == configured_vehicle_id for vehicle in vehicles
+                ):
+                    return self.async_abort(reason="wrong_account")
+                data_updates: dict[str, Any] = {CONF_ACCESS_TOKEN: token}
+                if not configured_vehicle_id:
+                    data_updates[CONF_VEHICLE_ID] = vehicles[0].car_id
                 return self.async_update_reload_and_abort(
-                    self._get_reauth_entry(),
-                    data_updates={CONF_ACCESS_TOKEN: token},
+                    entry,
+                    data_updates=data_updates,
                     reason="reauth_successful",
                 )
             finally:
@@ -766,16 +812,192 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         """Manage integration options."""
         errors: dict[str, str] = {}
+        options = dict(self.config_entry.options)
         if user_input is not None:
-            errors = await self._async_validate_control_pin(user_input)
+            options, action, confirm_delete = self._split_diagnostics(user_input)
+            options.setdefault(
+                CONF_ENABLE_DIAGNOSTICS_CAPTURE,
+                self.config_entry.options.get(
+                    CONF_ENABLE_DIAGNOSTICS_CAPTURE, False
+                ),
+            )
+            errors = await self._async_validate_control_pin(options)
             if not errors:
-                return self.async_create_entry(title="", data=user_input)
+                if action == DIAGNOSTICS_ACTION_NONE:
+                    return self.async_create_entry(title="", data=options)
+                errors = await self._async_apply_diagnostics_action(
+                    action, confirm_delete, options
+                )
+                if not errors:
+                    return self.async_show_form(
+                        step_id="init",
+                        data_schema=self._options_schema(options),
+                        errors={},
+                        description_placeholders={
+                            "diagnostics_status": await self._diagnostics_status(
+                                options
+                            )
+                        },
+                    )
 
         return self.async_show_form(
             step_id="init",
-            data_schema=self._options_schema(self.config_entry.options),
+            data_schema=self._options_schema(options),
             errors=errors,
+            description_placeholders={
+                "diagnostics_status": await self._diagnostics_status(options)
+            },
         )
+
+    @staticmethod
+    def _split_diagnostics(
+        user_input: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, bool]:
+        """Flatten the diagnostics section and extract its action."""
+        data = dict(user_input)
+        diagnostics = dict(data.pop(DIAGNOSTICS_SECTION, {}) or {})
+        action = str(
+            diagnostics.pop(
+                CONF_DIAGNOSTICS_ACTION,
+                data.pop(CONF_DIAGNOSTICS_ACTION, DIAGNOSTICS_ACTION_NONE),
+            )
+        )
+        confirm_delete = bool(
+            diagnostics.pop(
+                CONF_DIAGNOSTICS_CONFIRM_DELETE,
+                data.pop(CONF_DIAGNOSTICS_CONFIRM_DELETE, False),
+            )
+        )
+        data.update(diagnostics)
+        if action not in DIAGNOSTICS_ACTIONS:
+            action = DIAGNOSTICS_ACTION_NONE
+        return data, action, confirm_delete
+
+    async def _async_apply_diagnostics_action(
+        self, action: str, confirm_delete: bool, options: dict[str, Any]
+    ) -> dict[str, str]:
+        """Apply one diagnostics action, save the options and reload the entry."""
+        capture = async_get_capture_manager(self.hass, self.config_entry, create=True)
+        capture.enabled = bool(
+            options.get(CONF_ENABLE_DIAGNOSTICS_CAPTURE, False)
+        )
+        if action == DIAGNOSTICS_ACTION_DELETE and not confirm_delete:
+            return {"base": "confirm_delete"}
+        if action == DIAGNOSTICS_ACTION_DOWNLOAD:
+            status = await capture.async_status()
+            if not status.get("files"):
+                return {"base": "no_diagnostics_file"}
+        try:
+            if action == DIAGNOSTICS_ACTION_NEW:
+                await capture.async_new_segment()
+            elif action == DIAGNOSTICS_ACTION_DELETE:
+                await capture.async_delete_all()
+            elif action == DIAGNOSTICS_ACTION_DOWNLOAD:
+                await capture.async_flush()
+        except Exception as err:  # noqa: BLE001 - surface it in the form
+            _LOGGER.warning("Deepal diagnostics action %s failed: %s", action, err)
+            return {"base": "diagnostics_action_failed"}
+
+        previous = dict(self.config_entry.options)
+        changed = dict(options) != previous
+        self.hass.config_entries.async_update_entry(self.config_entry, options=options)
+        if changed:
+            try:
+                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+            except Exception as err:  # noqa: BLE001 - the options are already saved
+                _LOGGER.warning(
+                    "Deepal options reload after diagnostics failed: %s", err
+                )
+                return {"base": "diagnostics_action_failed"}
+        return {}
+
+    async def _diagnostics_status(self, options: dict[str, Any]) -> str:
+        """Build the Markdown status shown in the options form."""
+        capture = async_get_capture_manager(self.hass, self.config_entry, create=True)
+        status = await capture.async_status()
+        translations = await self._async_status_translations()
+        enabled = bool(options.get(CONF_ENABLE_DIAGNOSTICS_CAPTURE, False))
+        lines = [
+            self._status_text(
+                translations, "enabled" if enabled else "disabled"
+            ),
+        ]
+        files = status.get("files") or []
+        if files:
+            active = status.get("active_file")
+            active_size = next(
+                (
+                    item.get("size", 0)
+                    for item in files
+                    if item.get("name") == active
+                ),
+                0,
+            )
+            if active:
+                lines.append(
+                    self._status_text(
+                        translations,
+                        "active_file",
+                        name=active,
+                        size=_format_size(active_size),
+                    )
+                )
+            lines.append(
+                self._status_text(
+                    translations,
+                    "files",
+                    count=len(files),
+                    size=_format_size(status.get("total_bytes", 0)),
+                )
+            )
+            lines.append(
+                f"[{self._status_text(translations, 'download')}]"
+                f"({async_download_url(self.hass, self.config_entry.entry_id)})"
+            )
+        else:
+            lines.append(self._status_text(translations, "no_file"))
+        if status.get("dropped_events"):
+            lines.append(
+                self._status_text(
+                    translations,
+                    "dropped",
+                    count=status["dropped_events"],
+                )
+            )
+        if status.get("last_error"):
+            lines.append(
+                self._status_text(
+                    translations,
+                    "last_error",
+                    error=status["last_error"],
+                )
+            )
+        return "\n\n".join(lines)
+
+    async def _async_status_translations(self) -> dict[str, str]:
+        """Return the selector translations used by the status lines."""
+        try:
+            return await async_get_translations(
+                self.hass,
+                getattr(getattr(self.hass, "config", None), "language", "en")
+                or "en",
+                "common",
+                [DOMAIN],
+            )
+        except Exception:  # noqa: BLE001 - the status still works with keys
+            return {}
+
+    @staticmethod
+    def _status_text(
+        translations: dict[str, str], key: str, **values: Any
+    ) -> str:
+        """Return one translated status line with its placeholders filled."""
+        prefix = f"component.{DOMAIN}.common.diagnostics_status."
+        text = translations.get(prefix + key) or key
+        try:
+            return text.format(**values)
+        except (KeyError, IndexError):
+            return text
 
     async def _async_validate_control_pin(
         self, user_input: dict[str, Any]
@@ -788,10 +1010,11 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
         PIN with its own translated error.
         """
         runtime_data = getattr(self.config_entry, "runtime_data", None)
+        coordinator = getattr(runtime_data, "coordinator", None)
         return await _control_pin_validation_error(
             self.config_entry.options.get(CONF_CONTROL_PIN, ""),
             user_input,
-            runtime_data.coordinator.client if runtime_data else None,
+            getattr(coordinator, "client", None),
         )
 
     def _options_schema(self, options: Any) -> vol.Schema:
@@ -821,6 +1044,32 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     CONF_ENABLE_API_LOGGING,
                     default=options.get(CONF_ENABLE_API_LOGGING, False),
                 ): bool,
+                vol.Optional(DIAGNOSTICS_SECTION): section(
+                    vol.Schema(
+                        {
+                            vol.Optional(
+                                CONF_ENABLE_DIAGNOSTICS_CAPTURE,
+                                default=options.get(
+                                    CONF_ENABLE_DIAGNOSTICS_CAPTURE, False
+                                ),
+                            ): bool,
+                            vol.Optional(
+                                CONF_DIAGNOSTICS_ACTION,
+                                default=DIAGNOSTICS_ACTION_NONE,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=list(DIAGNOSTICS_ACTIONS),
+                                    translation_key=DIAGNOSTICS_ACTION_TRANSLATION_KEY,
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                            vol.Optional(
+                                CONF_DIAGNOSTICS_CONFIRM_DELETE, default=False
+                            ): bool,
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
                 vol.Optional(
                     CONF_WAKE,
                     default=options.get(CONF_WAKE, DEFAULT_WAKE),

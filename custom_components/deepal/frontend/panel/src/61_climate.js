@@ -23,8 +23,8 @@ DeepalPanel.prototype._renderClimate = function (vehicle) {
     const layout = layoutFor(vehicle)?.climate;
     const stageHtml = layout
       ? `<div class="stage stage-climate">
-          <img src="${assetUrl(layout.base)}" alt="">
-          ${climateOn ? `<img src="${assetUrl(layout.layers.climate_on)}" alt="">` : ""}
+          <img src="${assetUrl(layout.base, vehicle)}" alt="">
+          ${climateOn ? `<img src="${assetUrl(layout.layers.climate_on, vehicle)}" alt="">` : ""}
           <span class="anim-slot" data-anim="climate_on"></span>
         </div>`
       : "";
@@ -143,7 +143,7 @@ DeepalPanel.prototype._renderClimate = function (vehicle) {
   const seatsLayout = layoutFor(vehicle)?.seats;
   const seatsStage = seatsLayout
     ? `<div class="stage stage-seats">
-        <img src="${assetUrl(seatsLayout.base)}" alt="">
+        <img src="${assetUrl(seatsLayout.base, vehicle)}" alt="">
         <span class="anim-slot" data-anim="seat_vent"></span>
       </div>`
     : "";
