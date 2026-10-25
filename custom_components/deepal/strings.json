@@ -655,15 +655,13 @@
     }
   },
   "common": {
-    "diagnostics_status": {
-      "enabled": "**Full diagnostics capture:** enabled",
-      "disabled": "**Full diagnostics capture:** disabled",
-      "active_file": "**Active file:** `{name}` ({size})",
-      "files": "**Files:** {count} · {size}",
-      "no_file": "No capture file yet.",
-      "download": "Download diagnostics file",
-      "dropped": "**Dropped events:** {count}",
-      "last_error": "**Last capture error:** `{error}`"
-    }
+    "diagnostics_status.enabled": "**Full diagnostics capture:** enabled",
+    "diagnostics_status.disabled": "**Full diagnostics capture:** disabled",
+    "diagnostics_status.active_file": "**Active file:** `{name}` ({size})",
+    "diagnostics_status.files": "**Files:** {count} · {size}",
+    "diagnostics_status.no_file": "No capture file yet.",
+    "diagnostics_status.download": "Download diagnostics file",
+    "diagnostics_status.dropped": "**Dropped events:** {count}",
+    "diagnostics_status.last_error": "**Last capture error:** `{error}`"
   }
 }

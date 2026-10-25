@@ -655,15 +655,13 @@
     }
   },
   "common": {
-    "diagnostics_status": {
-      "enabled": "**Diagnóstico completo:** activado",
-      "disabled": "**Diagnóstico completo:** desactivado",
-      "active_file": "**Archivo activo:** `{name}` ({size})",
-      "files": "**Archivos:** {count} · {size}",
-      "no_file": "Todavía no hay archivo de diagnóstico.",
-      "download": "Descargar archivo de diagnóstico",
-      "dropped": "**Eventos descartados:** {count}",
-      "last_error": "**Último error de captura:** `{error}`"
-    }
+    "diagnostics_status.enabled": "**Diagnóstico completo:** activado",
+    "diagnostics_status.disabled": "**Diagnóstico completo:** desactivado",
+    "diagnostics_status.active_file": "**Archivo activo:** `{name}` ({size})",
+    "diagnostics_status.files": "**Archivos:** {count} · {size}",
+    "diagnostics_status.no_file": "Todavía no hay archivo de diagnóstico.",
+    "diagnostics_status.download": "Descargar archivo de diagnóstico",
+    "diagnostics_status.dropped": "**Eventos descartados:** {count}",
+    "diagnostics_status.last_error": "**Último error de captura:** `{error}`"
   }
 }
