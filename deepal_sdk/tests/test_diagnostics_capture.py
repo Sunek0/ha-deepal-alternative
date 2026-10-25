@@ -32,6 +32,7 @@ class _FakeHass:
         )
         self.data: dict = {}
         self.tasks: list[asyncio.Task] = []
+        self.background_tasks: list[asyncio.Task] = []
         self.reloaded: list[str] = []
         self.entry = _FakeEntry()
         self.config_entries = SimpleNamespace(
@@ -62,6 +63,11 @@ class _FakeHass:
         self.tasks.append(task)
         return task
 
+    def async_create_background_task(self, coro, name, eager_start=True):
+        task = asyncio.create_task(coro, name=name)
+        self.background_tasks.append(task)
+        return task
+
 
 class _FakeEntry:
     def __init__(self) -> None:
@@ -79,6 +85,9 @@ class _FakeEntry:
             )
         )
 
+    def async_create_background_task(self, hass, coro, name, eager_start=True):
+        return hass.async_create_background_task(coro, name, eager_start)
+
 
 def _event(**extra):
     return {
@@ -89,6 +98,22 @@ def _event(**extra):
         "response": {"soc": 71, "vehicleId": "car-1"},
         **extra,
     }
+
+
+@pytest.mark.asyncio
+async def test_capture_writer_is_a_background_task(tmp_path):
+    """The writer must not block Home Assistant startup or async_block_till_done."""
+    hass = _FakeHass(tmp_path)
+    entry = _FakeEntry()
+    entry.options["enable_diagnostics_capture"] = True
+    capture = DiagnosticsCapture(hass, entry, enabled=True)
+
+    await capture.async_start()
+    try:
+        assert hass.background_tasks
+        assert not hass.tasks
+    finally:
+        await capture.async_stop()
 
 
 @pytest.mark.asyncio

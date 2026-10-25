@@ -400,8 +400,10 @@ class DiagnosticsCapture:
         self._last_error = None
         self._logged_error = False
         self._started = True
-        self._writer_task = self.hass.async_create_task(
-            self._writer_loop(), f"{DOMAIN}_diagnostics_{self.entry_id}"
+        self._writer_task = self.entry.async_create_background_task(
+            self.hass,
+            self._writer_loop(),
+            f"{DOMAIN}_diagnostics_{self.entry_id}",
         )
 
     async def async_stop(self) -> None:
