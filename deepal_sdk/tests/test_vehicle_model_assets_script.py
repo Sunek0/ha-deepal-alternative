@@ -7,10 +7,16 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "verify_vehicle_model_assets.py"
+
+pytestmark = pytest.mark.skipif(
+    not SCRIPT.exists(),
+    reason="the asset verifier script is only present in the monorepo",
+)
 
 
 def _load_script():
