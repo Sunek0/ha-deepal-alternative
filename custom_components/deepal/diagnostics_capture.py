@@ -54,6 +54,11 @@ DATA_CAPTURES = "diagnostics_captures"
 DATA_VIEW_REGISTERED = "diagnostics_view_registered"
 
 REDACTED = "[redacted]"
+# MQTT ``sers``/``rs`` are the encrypted request/response service blobs. They
+# are opaque without the redacted secret key and request id, so the capture
+# masks them; the decoded ``services``/``params``/``decoded`` fields remain
+# available for diagnostics.
+_DIAGNOSTICS_REDACTED_KEYS = frozenset({"sers", "rs"})
 _REQUEST_ID_KEYS = frozenset(
     {"r", "request_id", "requestid", "reqid", "service_req_id"}
 )
@@ -88,14 +93,19 @@ def _redact_url(value: str) -> str:
 def redact_event(value: Any, key: str | None = None) -> Any:
     """Return a capture-safe copy of one exchange event.
 
-    Sensitive keys are masked at any depth. MQTT ``$vdp/<did>/...`` topics,
-    request-id device prefixes and JWT-like values are masked even when their
-    key looks innocent.
+    Sensitive keys are masked at any depth. The encrypted MQTT ``sers`` and
+    ``rs`` service blobs are masked too; their decoded ``services``,
+    ``params`` and ``decoded`` counterparts stay available for diagnostics.
+    MQTT ``$vdp/<did>/...`` topics, request-id device prefixes and JWT-like
+    values are masked even when their key looks innocent.
     """
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
         for item_key, item in value.items():
-            if is_sensitive_key(item_key):
+            if (
+                is_sensitive_key(item_key)
+                or str(item_key).lower() in _DIAGNOSTICS_REDACTED_KEYS
+            ):
                 result[str(item_key)] = REDACTED
             else:
                 result[str(item_key)] = redact_event(item, str(item_key))

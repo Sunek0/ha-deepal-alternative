@@ -261,6 +261,30 @@ def test_redact_event_masks_nested_values_and_urls():
     assert result["nested"] == {"lat": "[redacted]", "soc": 71}
 
 
+def test_redact_event_masks_encrypted_mqtt_service_blobs():
+    event = {
+        "kind": "mqtt",
+        "event": "receive",
+        "payload": {
+            "mt": "properties",
+            "sers": "ciphertext-request",
+            "rs": "ciphertext-response",
+        },
+        "services": [
+            {"service_code": "car_condition", "params": {"fetchPropertyType": 0}}
+        ],
+        "params": {"soc": 71},
+    }
+
+    result = redact_event(event)
+
+    assert result["payload"]["sers"] == "[redacted]"
+    assert result["payload"]["rs"] == "[redacted]"
+    assert result["payload"]["mt"] == "properties"
+    assert result["params"] == {"soc": 71}
+    assert result["services"][0]["params"]["fetchPropertyType"] == 0
+
+
 @pytest.mark.asyncio
 async def test_capture_summary_reads_the_registered_manager(tmp_path):
     hass = _FakeHass(tmp_path)
