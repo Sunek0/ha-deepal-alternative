@@ -992,7 +992,7 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
         translations: dict[str, str], key: str, **values: Any
     ) -> str:
         """Return one translated status line with its placeholders filled."""
-        prefix = f"component.{DOMAIN}.common.diagnostics_status."
+        prefix = f"component.{DOMAIN}.common.diagnostics_status_"
         text = translations.get(prefix + key) or key
         try:
             return text.format(**values)

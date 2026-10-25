@@ -1989,11 +1989,14 @@ def test_translation_files_share_the_same_key_tree() -> None:
 
 
 def test_common_translations_are_flat_strings() -> None:
-    """Hassfest rejects nested objects under the `common` translation section."""
+    """Hassfest rejects nested objects and dotted slugs under `common`."""
     for path in TRANSLATION_FILES:
         data = json.loads(path.read_text(encoding="utf-8"))
         values = data.get("common", {})
         assert all(isinstance(value, str) for value in values.values()), path.name
+        assert all(
+            re.fullmatch(r"[a-z0-9_]+", key) for key in values
+        ), path.name
 
 
 def test_exception_translations_are_complete() -> None:

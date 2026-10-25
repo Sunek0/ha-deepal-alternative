@@ -655,13 +655,13 @@
     }
   },
   "common": {
-    "diagnostics_status.enabled": "**Vollständige Diagnose:** aktiviert",
-    "diagnostics_status.disabled": "**Vollständige Diagnose:** deaktiviert",
-    "diagnostics_status.active_file": "**Aktive Datei:** `{name}` ({size})",
-    "diagnostics_status.files": "**Dateien:** {count} · {size}",
-    "diagnostics_status.no_file": "Noch keine Diagnosedatei vorhanden.",
-    "diagnostics_status.download": "Diagnosedatei herunterladen",
-    "diagnostics_status.dropped": "**Verworfene Ereignisse:** {count}",
-    "diagnostics_status.last_error": "**Letzter Aufzeichnungsfehler:** `{error}`"
+    "diagnostics_status_enabled": "**Vollständige Diagnose:** aktiviert",
+    "diagnostics_status_disabled": "**Vollständige Diagnose:** deaktiviert",
+    "diagnostics_status_active_file": "**Aktive Datei:** `{name}` ({size})",
+    "diagnostics_status_files": "**Dateien:** {count} · {size}",
+    "diagnostics_status_no_file": "Noch keine Diagnosedatei vorhanden.",
+    "diagnostics_status_download": "Diagnosedatei herunterladen",
+    "diagnostics_status_dropped": "**Verworfene Ereignisse:** {count}",
+    "diagnostics_status_last_error": "**Letzter Aufzeichnungsfehler:** `{error}`"
   }
 }
