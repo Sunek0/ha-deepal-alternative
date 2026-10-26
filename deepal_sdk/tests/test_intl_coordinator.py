@@ -56,6 +56,7 @@ class _FakeIntlClient(DeepalIntlClient):
         self.http_condition: VehicleCondition | None = None
         self.capabilities_calls = 0
         self.capabilities: VehicleCapabilities | None = None
+        self.condition_model_codes: list[str | None] = []
         self.capabilities_error: Exception | None = None
         self.refresh_calls = 0
         self.wake_calls = 0
@@ -147,9 +148,14 @@ class _FakeIntlClient(DeepalIntlClient):
         return self.capabilities
 
     async def get_vehicle_condition(
-        self, vehicle_id: str, vin: str | None = None
+        self,
+        vehicle_id: str,
+        vin: str | None = None,
+        *,
+        model_code: str | None = None,
     ) -> VehicleCondition:
         self.events.append("condition")
+        self.condition_model_codes.append(model_code)
         if self.condition_error is not None:
             raise self.condition_error
         if self.http_condition is not None:
@@ -2234,7 +2240,9 @@ async def test_charging_read_uses_the_sda_condition_without_inquiry():
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        async def get_vehicle_condition(self, vehicle_id, vin=None):
+        async def get_vehicle_condition(
+            self, vehicle_id, vin=None, *, model_code=None
+        ):
             self.calls.append(vehicle_id)
             return VehicleCondition(
                 car_id=vehicle_id,
@@ -2295,10 +2303,10 @@ async def test_one_vehicle_failure_does_not_fail_the_others():
     coordinator._capabilities = {}
     original = client.get_vehicle_condition
 
-    async def flaky(vehicle_id, vin=None):
+    async def flaky(vehicle_id, vin=None, *, model_code=None):
         if vehicle_id == "car-2":
             raise DeepalConnectionError("offline")
-        return await original(vehicle_id, vin=vin)
+        return await original(vehicle_id, vin=vin, model_code=model_code)
 
     client.get_vehicle_condition = flaky
     client.condition_timestamps = [2000]
@@ -2316,7 +2324,7 @@ async def test_poll_fails_when_every_vehicle_fails_without_previous():
     coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
     coordinator._capabilities = {}
 
-    async def failing(vehicle_id, vin=None):
+    async def failing(vehicle_id, vin=None, *, model_code=None):
         raise DeepalConnectionError("offline")
 
     client.get_vehicle_condition = failing
@@ -2419,7 +2427,7 @@ async def test_retry_after_auth_refresh_maps_a_transient_error_to_update_failed(
     coordinator._capabilities = {}
     calls = {"count": 0}
 
-    async def flaky_condition(vehicle_id, vin=None):
+    async def flaky_condition(vehicle_id, vin=None, *, model_code=None):
         calls["count"] += 1
         if calls["count"] == 1:
             raise DeepalAuthError("Authentication failed: APP_1_1_02_004")
@@ -2442,7 +2450,7 @@ async def test_retry_after_auth_refresh_keeps_auth_errors_as_reauth():
     coordinator._capabilities = {}
     calls = {"count": 0}
 
-    async def flaky_condition(vehicle_id, vin=None):
+    async def flaky_condition(vehicle_id, vin=None, *, model_code=None):
         calls["count"] += 1
         raise DeepalAuthError("Authentication failed: APP_1_1_02_004")
 
@@ -3264,3 +3272,22 @@ async def test_apply_condition_merges_unreported_telemetry_groups():
     await coordinator._async_apply_condition("car-1", partial)
 
     assert coordinator.data["car-1"].doors.locked is False
+
+
+@pytest.mark.asyncio
+async def test_rest_condition_fetch_passes_the_vehicle_model_code():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [
+        Vehicle(
+            car_id="car-1",
+            vin="VIN-PLACEHOLDER-1",
+            protocol_type=None,
+            model_code="SC6460AAAA7HEV",
+        )
+    ]
+    coordinator._capabilities = {}
+
+    await coordinator._async_fetch_condition("car-1")
+
+    assert client.condition_model_codes == ["SC6460AAAA7HEV"]

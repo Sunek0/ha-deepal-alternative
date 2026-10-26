@@ -338,11 +338,11 @@ Mapping:
 | `vehicleStatus.steeringWheelHeater` | Steering wheel heater (`!= 0`) | `climate.steering_wheel_heater_on` |
 | `vehicleStatus.steeringWheelHeaterLevel` | Heater level | `climate.steering_wheel_heater_level` |
 | `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` (raw string) |
-| `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state) | `battery.charger_connected` fallback |
+| `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state). The S05 PHEV ignores it for the cable state because it reports `3` while unplugged too; the MQTT `ChrgSts` path is authoritative | `battery.charger_connected` fallback (`false` for the PHEV without a reliable status) |
 | `charge.dcChargeGunConnectStatus` | DC gun (`0` not connected, any nonzero value connected) | `battery.dc_gun_connected` |
 | `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
-| `charge.maxSocPercent` | Charge limit (%) | `battery.charge_limit_percent` |
+| `charge.maxSocPercent` | Charge limit (%). The S05 PHEV condition does not return it; its charge-limit entities are not created until a readable source is verified | `battery.charge_limit_percent` |
 | `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
 | `fuel.leftPercent` | Fuel level (%) | `fuel.level_percent` |
 | `fuel.leftVolume` / `tankVolume` | Fuel volume / tank capacity (L) | `fuel.volume_l` / `fuel.tank_capacity_l` |
@@ -373,6 +373,10 @@ Notes:
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.
 - The original payload is kept in `VehicleCondition.raw_data`.
+- **S05 PHEV:** `chargeConStatus=3` was reported in every REST condition of the 2026-10-26
+  diagnostic, including while unplugged. The parser accepts a `model_code` argument; when it
+  identifies a PHEV and the condition has no reliable `chargeStatus`, the cable flag is `false` and
+  the AC gun stays unknown. The raw value remains in `raw_data` for diagnostics.
 
 ## 8. Vehicle capabilities
 

@@ -30,9 +30,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | E07 | Only tested on SDA API. Telemetry through the REST API. |
 
 Charge limit: the S05 EV does not support setting it — the signed `charge_max` command is accepted
-without changing the limit — so the integration does not create the charge-limit control for it; the
-S05 PHEV reports the charge-limit function code, so it does offer the control. The charge schedule
-remains available on both.
+without changing the limit — so the integration does not create the charge-limit control for it. The
+S05 PHEV reports the charge-limit function code, but its condition does not return the current
+`maxSocPercent`, so its charge-limit sensor and number are not created until a readable source is
+verified (2026-10-26). The charge schedule remains available on both.
 
 ## Supported features
 
@@ -315,6 +316,12 @@ automation:
   the last known snapshot until the car reports again.
 - **Fuel entities are missing on a PHEV**: the integration creates them only when the vehicle's
   function configuration reports `#oilMileage` and the model is not a BEV.
+- **The charge-limit control is missing on an S05 PHEV**: the car advertises the capability, but the
+  condition never returns the current limit, so the sensor and number are not created until a
+  readable source is verified.
+- **The coolant warning is missing on an S05 PHEV**: `coolanTemperatureLightStatus` is `1` in every
+  report even on a healthy, unplugged car, so the diagnostic entity is not created for that model;
+  the raw bit remains in the diagnostics.
 - **A telemetry field is missing**: download the diagnostics from the device page and check
   `unmapped_mqtt_keys`; enable debug logging for `deepal_sdk` to see the candidate values in the
   Home Assistant log. Credentials, VIN and location-like values are redacted in the report.

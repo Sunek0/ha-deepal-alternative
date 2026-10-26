@@ -46,7 +46,7 @@ from .deepal.mqtt import (
     charge_state,
 )
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05, supports_charge_limit, supports_fuel
+from .vehicle_model import is_s05, is_s05_phev, supports_charge_limit, supports_fuel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,12 +110,17 @@ FUEL_SENSOR_KEYS = frozenset(
 REMOVED_SENSOR_KEYS = frozenset({"steering_wheel_heater_level"})
 
 
-def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
-    """Remove entity-registry entries for keys retired from this platform."""
-    for key in REMOVED_SENSOR_KEYS:
+def _remove_sensor_entities(registry: Any, vehicle: Any, keys: Any) -> None:
+    """Remove the entity-registry entries of the given sensor keys."""
+    for key in keys:
         unique_id = f"deepal_{vehicle.car_id}_{key}"
         if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
             registry.async_remove(entity_id)
+
+
+def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
+    """Remove entity-registry entries for keys retired from this platform."""
+    _remove_sensor_entities(registry, vehicle, REMOVED_SENSOR_KEYS)
 
 
 def format_hours_minutes(minutes: int | None) -> str | None:
@@ -182,8 +187,10 @@ def build_sensors(
                 return False
             if description.key not in S05_UNSUPPORTED_SENSOR_KEYS:
                 return True
-            # The S05 normally has no charge-limit telemetry, but the PHEV
-            # reports it in the app condition and its capability enables it.
+            # The S05 EV has no charge-limit telemetry. The PHEV advertises the
+            # capability but the condition never returns maxSocPercent, so its
+            # charge-limit entities stay disabled until a readable source is
+            # verified (see supports_charge_limit).
             return description.key == "charge_limit" and charge_limit
 
         entities.extend(
@@ -208,6 +215,8 @@ async def async_setup_entry(
 
     for vehicle in coordinator.vehicles:
         _remove_retired_entities(registry, vehicle)
+        if is_s05_phev(vehicle):
+            _remove_sensor_entities(registry, vehicle, {"charge_limit"})
         entities.extend(build_sensors(coordinator, vehicle))
 
     async_add_entities(entities)

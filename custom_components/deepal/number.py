@@ -4,13 +4,14 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import PERCENTAGE_UNIT
+from .const import DOMAIN, PERCENTAGE_UNIT
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import supports_charge_limit
+from .vehicle_model import is_s05_phev, supports_charge_limit
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
@@ -47,12 +48,25 @@ def _set_seat_level(condition: Any, seat: str, field: str, level: int) -> Any:
     return condition
 
 
+def _remove_phev_charge_limit_entity(registry: Any, vehicle: Any) -> None:
+    """Remove the charge-limit number entry for an S05 PHEV."""
+    if not is_s05_phev(vehicle):
+        return
+    unique_id = f"deepal_{vehicle.car_id}_charge_limit"
+    if entity_id := registry.async_get_entity_id("number", DOMAIN, unique_id):
+        registry.async_remove(entity_id)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge limit and seat level numbers."""
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
+    for vehicle in coordinator.vehicles:
+        _remove_phev_charge_limit_entity(registry, vehicle)
     async_setup_control_entities(hass, entry, async_add_entities, build_control_numbers)
 
 

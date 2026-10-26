@@ -592,7 +592,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return condition
         try:
             app_condition = await self.client.get_vehicle_condition(
-                vehicle.car_id, vin=vehicle.vin
+                vehicle.car_id,
+                vin=vehicle.vin,
+                model_code=vehicle.model_code,
             )
         except DeepalError as err:
             _LOGGER.debug(
@@ -777,7 +779,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # fail the poll while the REST condition endpoint is available.
                 self._record_mqtt_failure(vehicle_id, err)
         condition = await self.client.get_vehicle_condition(
-            vehicle_id, vin=vehicle.vin if vehicle is not None else None
+            vehicle_id,
+            vin=vehicle.vin if vehicle is not None else None,
+            model_code=vehicle.model_code if vehicle is not None else None,
         )
         condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)

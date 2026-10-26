@@ -6392,3 +6392,90 @@ async def test_intl_exchange_callback_reports_mqtt_exchange(monkeypatch):
     )
     assert receive["params"]["soc"] == 71
     assert receive["decoded"] is True
+
+
+def test_model_code_from_payload_reads_the_mqtt_envelope():
+    assert (
+        DeepalIntlClient._model_code_from_payload({"b": {"mc": "SC6460AAAA7HEV"}})
+        == "SC6460AAAA7HEV"
+    )
+    assert (
+        DeepalIntlClient._model_code_from_payload(
+            {"b": {"modelCode": "SC6464AAKBEV"}}
+        )
+        == "SC6464AAKBEV"
+    )
+    assert DeepalIntlClient._model_code_from_payload({"b": {}}) is None
+    assert DeepalIntlClient._model_code_from_payload({"b": None}) is None
+    assert DeepalIntlClient._model_code_from_payload({}) is None
+
+
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_applies_the_phev_gun_rule():
+    raw_params = {
+        "soc": 71,
+        "ChrgSts": 0,
+        "acChargeGunConnectionState": 1,
+        "dcChargeGunConnectionState": 0,
+    }
+
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
+        return MqttExchangeResult(
+            params=dict(raw_params),
+            source="legacy-mqtt",
+            variants={"legacy-mqtt": dict(raw_params)},
+            model_code="SC6460AAAA7HEV",
+        )
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._read_s05_params = fake_params
+    condition = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charger_connected is False
+    assert condition.battery.ac_gun_connected is False
+    assert condition.battery.dc_gun_connected is False
+
+
+def test_parse_condition_ignores_the_phev_rest_charge_connection():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    raw = {
+        "vehicleStatus": {"soc": 25},
+        "charge": {"chargeConStatus": 3},
+    }
+
+    phev = client.parse_condition(raw, "car-1", model_code="SC6460AAAA7HEV")
+    assert phev.battery.charger_connected is False
+    assert phev.battery.ac_gun_connected is None
+    assert phev.battery.dc_gun_connected is False
+    assert phev.raw_data["charge"]["chargeConStatus"] == 3
+
+    bev = client.parse_condition(raw, "car-1", model_code="SC6464AAKBEV")
+    assert bev.battery.charger_connected is True
+
+    generic = client.parse_condition(raw, "car-1")
+    assert generic.battery.charger_connected is True
+
+    unknown_unplugged = client.parse_condition(
+        {"charge": {"chargeStatus": 9, "chargeConStatus": False}},
+        "car-1",
+        model_code="SC6460AAAA7HEV",
+    )
+    assert unknown_unplugged.battery.charger_connected is False
+
+    unknown_dc = client.parse_condition(
+        {"charge": {"chargeStatus": 9, "chargeConStatus": True}},
+        "car-1",
+        model_code="SC6460AAAA7HEV",
+    )
+    assert unknown_dc.battery.charger_connected is True

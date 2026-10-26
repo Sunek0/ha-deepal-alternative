@@ -630,13 +630,16 @@ class MqttExchangeResult:
     ``source`` names the condition service that produced the parameters
     (``sda-mqtt``, ``sda-mqtt-signal-list``, ``legacy-mqtt`` or ``None``), and
     ``variants`` keeps the raw parameters of every request variant that was
-    attempted, empty entries included, for diagnostics.
+    attempted, empty entries included, for diagnostics. ``model_code`` is the
+    vehicle model code advertised by the response envelope (``b.mc``) when the
+    vehicle reported one.
     """
 
     params: dict[str, Any]
     source: Optional[str] = None
     variants: dict[str, dict[str, Any]] = field(default_factory=dict)
     plan: Optional[SdaConditionPlan] = None
+    model_code: Optional[str] = None
 
 
 def _config_topic_entries(config: Any) -> list[tuple[str, Optional[str], Optional[str]]]:
@@ -1599,6 +1602,21 @@ def charge_currents(
     return ac, dc, active
 
 
+def is_phev_model(model_code: Any) -> bool:
+    """Return whether a wire model code identifies a plug-in hybrid.
+
+    The S05 family carries ``BEV`` in the battery-electric model code
+    (``SC6464AAKBEV``) and ``HEV`` in the plug-in hybrid code
+    (``SC6460AAAA7HEV``). The check uses the normalized alphanumerics and
+    rejects a code that also carries the ``BEV`` token, so a BEV is never
+    treated as a PHEV.
+    """
+    text = "".join(
+        character for character in str(model_code or "").upper() if character.isalnum()
+    )
+    return "HEV" in text and "BEV" not in text
+
+
 def _gun_code_connected(value: Any) -> Optional[bool]:
     """Return whether a raw gun connection code means connected (None = absent).
 
@@ -1620,6 +1638,7 @@ def charge_gun_flags(
     *,
     ac_gun_value: Any = None,
     dc_gun_value: Any = None,
+    phev: bool = False,
 ) -> tuple[Optional[bool], Optional[bool], Optional[bool]]:
     """Return the (charger plugged, AC gun, DC gun) flags of one report.
 
@@ -1630,13 +1649,32 @@ def charge_gun_flags(
     states. Unrecognized states also fall back to the raw fields. In that
     fallback ``0`` means not connected and any other reported value means
     connected.
+
+    The S05 PHEV can keep ``acChargeGunConnectionState=1`` stale for many
+    state-``0`` reports while unplugged; a plug/unplug cycle is needed to
+    refresh it (2026-10-26 diagnostic). For ``phev=True`` state ``0`` is
+    therefore authoritative and resolves every gun flag to false. State ``5``
+    still means a cable stayed connected: the raw DC field selects DC and the
+    AC gun is assumed otherwise. An absent or unrecognized PHEV state keeps the
+    AC gun unknown and reads only the DC field.
     """
     state = charge_state(state_value)
     if state in AC_GUN_STATES | DC_GUN_STATES:
         return True, state in AC_GUN_STATES, state in DC_GUN_STATES
 
-    ac_gun = _gun_code_connected(ac_gun_value)
     dc_gun = _gun_code_connected(dc_gun_value)
+    if phev:
+        if state == CHARGE_STATE_NOT_CHARGING:
+            return False, False, False
+        if state == CHARGE_STATE_CHARGE_STOPPED:
+            if dc_gun:
+                return True, False, True
+            return True, True, False
+        if dc_gun:
+            return True, False, True
+        return False, None, dc_gun
+
+    ac_gun = _gun_code_connected(ac_gun_value)
     if ac_gun or dc_gun:
         plugged: Optional[bool] = True
     elif ac_gun is False or dc_gun is False:
@@ -1660,11 +1698,15 @@ def _to_millis(value: Any) -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
 
-def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
+def normalize_s05_params(
+    params: dict[str, Any], *, model_code: Optional[str] = None
+) -> dict[str, Any]:
     """Map S05 MQTT parameter names into the shared international condition shape.
 
     Values keep the REST units (tenths for temperatures and humidity) so
-    ``parse_condition`` converts them exactly once.
+    ``parse_condition`` converts them exactly once. ``model_code`` is the wire
+    model code from the MQTT envelope (``b.mc``) when available; it selects the
+    PHEV gun rule. Without it the generic S05 rule applies.
     """
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     charge_status = _as_int(params.get("ChrgSts"))
@@ -1677,6 +1719,7 @@ def normalize_s05_params(params: dict[str, Any]) -> dict[str, Any]:
         charge_status,
         ac_gun_value=params.get("acChargeGunConnectionState"),
         dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
+        phev=is_phev_model(model_code),
     )
     power_status = _as_int(params.get("powerStatusFeedBack"))
     outside_temp = _as_float(

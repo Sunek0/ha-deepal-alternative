@@ -21,7 +21,7 @@ from .charging import charging_flag
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05
+from .vehicle_model import is_s05, is_s05_phev
 
 # Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
@@ -34,12 +34,22 @@ S05_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
     }
 )
 
+# The S05 PHEV reports coolanTemperatureLightStatus=1 in every payload, even
+# when the car is healthy and unplugged, so the coolant warning is a permanent
+# false positive on that model. The raw bit stays in the diagnostics.
+PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
+    {
+        "warning_coolant_temperature",
+    }
+)
+
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities: the reference S05 does not
 # support the front defrost signal, and the per-door unlocked entities are
 # retired in favour of the central locking state. The airbag and coolant
 # warning lights were restored on 2026-10-22 under the power-state gate and the
-# last-known retention, so they are not part of this set.
+# last-known retention, so they are not part of this set; the coolant entity is
+# skipped per vehicle for the S05 PHEV through PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS.
 REMOVED_BINARY_SENSOR_KEYS = frozenset(
     {
         "defrost",
@@ -59,6 +69,7 @@ def build_binary_sensors(
     ]
 
     s05 = is_s05(vehicle)
+    phev = is_s05_phev(vehicle)
 
     if isinstance(coordinator.client, DeepalIntlClient):
         for key in ("front_left", "front_right", "rear_left", "rear_right"):
@@ -78,19 +89,25 @@ def build_binary_sensors(
             DeepalBinarySensor(coordinator, vehicle, description)
             for description in BINARY_SENSORS
             if not (s05 and description.key in S05_UNSUPPORTED_BINARY_SENSOR_KEYS)
+            and not (phev and description.key in PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS)
         )
 
     return entities
 
 
-def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
-    """Remove entity-registry entries for keys retired from this platform."""
-    for key in REMOVED_BINARY_SENSOR_KEYS:
+def _remove_binary_entities(registry: Any, vehicle: Any, keys: Any) -> None:
+    """Remove the entity-registry entries of the given binary-sensor keys."""
+    for key in keys:
         unique_id = f"deepal_{vehicle.car_id}_{key}"
         if entity_id := registry.async_get_entity_id(
             "binary_sensor", DOMAIN, unique_id
         ):
             registry.async_remove(entity_id)
+
+
+def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
+    """Remove entity-registry entries for keys retired from this platform."""
+    _remove_binary_entities(registry, vehicle, REMOVED_BINARY_SENSOR_KEYS)
 
 
 async def async_setup_entry(
@@ -106,6 +123,10 @@ async def async_setup_entry(
 
     for vehicle in coordinator.vehicles:
         _remove_retired_entities(registry, vehicle)
+        if is_s05_phev(vehicle):
+            _remove_binary_entities(
+                registry, vehicle, PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS
+            )
         entities.extend(build_binary_sensors(coordinator, vehicle))
 
     async_add_entities(entities)

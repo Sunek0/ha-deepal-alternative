@@ -61,7 +61,9 @@ from custom_components.deepal.deepal import (
 )
 from custom_components.deepal.vehicle_model import (
     is_bev,
+    is_phev,
     is_s05,
+    is_s05_phev,
     supports_charge_limit,
     supports_fuel,
 )
@@ -1357,13 +1359,13 @@ def test_charge_limit_is_not_offered_on_the_s05_without_the_capability() -> None
     assert supports_charge_limit(s05_by_code, no_code) is False
 
 
-def test_charge_limit_is_offered_on_the_s05_phev_by_capabilities() -> None:
+def test_charge_limit_is_disabled_on_the_s05_phev_by_capabilities() -> None:
     phev = _model_vehicle("car-1", series_name="Deepal S05 PHEV", series_code="C857-EU")
     phev_by_code = _model_vehicle("car-2", series_code="c857-phev")
     capabilities = VehicleCapabilities.from_codes(["#oilMileage", "#chargeSet"])
 
-    assert supports_charge_limit(phev, capabilities) is True
-    assert supports_charge_limit(phev_by_code, capabilities) is True
+    assert supports_charge_limit(phev, capabilities) is False
+    assert supports_charge_limit(phev_by_code, capabilities) is False
 
 
 def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
@@ -1400,7 +1402,7 @@ def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
     assert len(s07_ids) == 5
 
 
-def test_build_control_numbers_include_the_charge_limit_on_the_s05_phev() -> None:
+def test_build_control_numbers_skip_the_charge_limit_on_the_s05_phev() -> None:
     coordinator = FakeCoordinator()
     coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(
         ["#oilMileage", "#chargeSet"]
@@ -1412,8 +1414,8 @@ def test_build_control_numbers_include_the_charge_limit_on_the_s05_phev() -> Non
         for entity in number.build_control_numbers(coordinator, phev)
     ]
 
-    assert "deepal_car-1_charge_limit" in phev_ids
-    assert len(phev_ids) == 5
+    assert "deepal_car-1_charge_limit" not in phev_ids
+    assert len(phev_ids) == 4
 
 
 def test_is_s05_matches_name_and_code() -> None:
@@ -1528,7 +1530,7 @@ def test_build_sensors_adds_fuel_only_for_fuel_vehicles() -> None:
     assert sensor.FUEL_SENSOR_KEYS <= phev_keys
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(bev_keys)
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(electric_keys)
-    assert "charge_limit" in phev_keys
+    assert "charge_limit" not in phev_keys
     assert "charge_limit" not in bev_keys
     assert "charge_limit" not in s05_keys
 
@@ -3096,3 +3098,98 @@ def test_options_flow_rejects_an_unknown_diagnostics_action() -> None:
     assert action == "none"
     assert confirm is False
     assert data == {}
+
+
+def test_is_phev_matches_the_hev_model_without_bev() -> None:
+    assert is_phev(_model_vehicle("car-1", model_code="SC6460AAAA7HEV")) is True
+    assert is_phev(_model_vehicle("car-2", series_name="Deepal S05 PHEV")) is True
+    assert is_phev(_model_vehicle("car-3", model_code="SC6464AAKBEV")) is False
+    assert (
+        is_phev(_model_vehicle("car-4", series_name="S05", series_code="C857-EU"))
+        is False
+    )
+    assert is_phev(_model_vehicle("car-5")) is False
+
+
+def test_is_s05_phev_requires_the_s05_series() -> None:
+    model = {
+        "series_name": "S05",
+        "series_code": "C857P1",
+        "model_code": "SC6460AAAA7HEV",
+    }
+    assert is_s05_phev(_model_vehicle("car-1", **model)) is True
+    assert is_s05_phev(_model_vehicle("car-2", series_name="S07", model_code="SC6480HEV")) is False
+    assert is_s05_phev(_model_vehicle("car-3", **{**model, "model_code": "SC6464AAKBEV"})) is False
+
+
+def test_build_binary_sensors_skips_the_phev_coolant_entity() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    phev = _model_vehicle(
+        "car-1", series_name="S05", series_code="C857P1", model_code="SC6460AAAA7HEV"
+    )
+    bev = _model_vehicle(
+        "car-2", series_name="S05", series_code="C857P1", model_code="SC6464AAKBEV"
+    )
+
+    phev_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, phev)
+    }
+    bev_keys = {
+        entity.translation_key
+        for entity in binary_sensor.build_binary_sensors(coordinator, bev)
+    }
+
+    assert "warning_coolant_temperature" not in phev_keys
+    assert "warning_coolant_temperature" in bev_keys
+    assert "warning_airbag" in phev_keys
+    assert "warning_airbag" in bev_keys
+
+
+def test_phev_coolant_entity_is_removed_from_the_registry() -> None:
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            assert (platform, domain) == ("binary_sensor", "deepal")
+            return f"binary_sensor.{unique_id}"
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    phev = _model_vehicle(
+        "car-1", series_name="S05", series_code="C857P1", model_code="SC6460AAAA7HEV"
+    )
+    binary_sensor._remove_binary_entities(
+        _Registry(), phev, binary_sensor.PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS
+    )
+
+    assert removed == ["binary_sensor.deepal_car-1_warning_coolant_temperature"]
+
+
+def test_phev_charge_limit_registry_entries_are_removed() -> None:
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            return f"{platform}.{unique_id}"
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    phev = _model_vehicle(
+        "car-1", series_name="S05", series_code="C857P1", model_code="SC6460AAAA7HEV"
+    )
+    bev = _model_vehicle(
+        "car-2", series_name="S05", series_code="C857P1", model_code="SC6464AAKBEV"
+    )
+
+    number._remove_phev_charge_limit_entity(_Registry(), phev)
+    number._remove_phev_charge_limit_entity(_Registry(), bev)
+    sensor._remove_sensor_entities(_Registry(), phev, {"charge_limit"})
+
+    assert sorted(removed) == [
+        "number.deepal_car-1_charge_limit",
+        "sensor.deepal_car-1_charge_limit",
+    ]

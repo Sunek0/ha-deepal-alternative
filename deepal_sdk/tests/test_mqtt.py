@@ -25,6 +25,7 @@ from deepal.mqtt import (
     clean_charge_current_magnitude,
     condition_request_payload,
     device_id_candidates,
+    is_phev_model,
     login_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
@@ -1568,3 +1569,98 @@ async def test_sda_broker_session_skips_malformed_publishes(monkeypatch):
     assert result.connected is True
     assert len(result.messages) == 1
     assert result.messages[0]["payload"]["d"]["p"]["DrvrDoorLockLogicSts"] == 2
+
+
+def test_is_phev_model_recognizes_the_s05_model_codes():
+    assert is_phev_model("SC6460AAAA7HEV") is True
+    assert is_phev_model("SC6464AAKPHEV") is True
+    assert is_phev_model("SC6464AAKBEV") is False
+    assert is_phev_model(None) is False
+    assert is_phev_model("C857P1") is False
+
+
+def test_normalize_s05_params_uses_the_phev_gun_rule():
+    payload = {
+        "ChrgSts": 0,
+        "acChargeGunConnectionState": 1,
+        "dcChargeGunConnectionState": 0,
+    }
+
+    phev = normalize_s05_params(payload, model_code="SC6460AAAA7HEV")
+    assert phev["charge"]["chargeConStatus"] is False
+    assert phev["charge"]["acChargeGunConnectStatus"] is False
+    assert phev["charge"]["dcChargeGunConnectStatus"] is False
+
+    bev = normalize_s05_params(payload, model_code="SC6464AAKBEV")
+    assert bev["charge"]["chargeConStatus"] is True
+    assert bev["charge"]["acChargeGunConnectStatus"] is True
+    assert bev["charge"]["dcChargeGunConnectStatus"] is False
+
+    generic = normalize_s05_params(payload)
+    assert generic["charge"]["chargeConStatus"] is True
+    assert generic["charge"]["acChargeGunConnectStatus"] is True
+
+
+def test_normalize_s05_params_maps_the_phev_charge_states():
+    connected = normalize_s05_params(
+        {
+            "ChrgSts": 1,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+    assert connected["charge"]["chargeConStatus"] is True
+    assert connected["charge"]["acChargeGunConnectStatus"] is True
+    assert connected["charge"]["dcChargeGunConnectStatus"] is False
+
+    charging = normalize_s05_params(
+        {
+            "ChrgSts": 3,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+            "BattACChrgInCurr": 45.1,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+    assert charging["charge"]["chargeConStatus"] is True
+    assert charging["charge"]["acChargeGunConnectStatus"] is True
+    assert charging["charge"]["chargeCurrent"] == 45.1
+
+    stopped = normalize_s05_params(
+        {
+            "ChrgSts": 5,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+    assert stopped["charge"]["chargeConStatus"] is True
+    assert stopped["charge"]["acChargeGunConnectStatus"] is True
+    assert stopped["charge"]["dcChargeGunConnectStatus"] is False
+
+    stopped_dc = normalize_s05_params(
+        {
+            "ChrgSts": 5,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 1,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+    assert stopped_dc["charge"]["chargeConStatus"] is True
+    assert stopped_dc["charge"]["acChargeGunConnectStatus"] is False
+    assert stopped_dc["charge"]["dcChargeGunConnectStatus"] is True
+
+
+def test_normalize_s05_params_keeps_the_phev_ac_gun_unknown_when_the_state_is_absent():
+    condition = normalize_s05_params(
+        {
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["chargeConStatus"] is False
+    assert condition["charge"]["acChargeGunConnectStatus"] is None
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False

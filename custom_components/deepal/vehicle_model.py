@@ -41,6 +41,27 @@ def is_bev(vehicle: Any) -> bool:
     return "BEV" in model
 
 
+def is_phev(vehicle: Any) -> bool:
+    """Return whether the vehicle is a plug-in hybrid (HEV token, not BEV).
+
+    The S05 family carries ``BEV`` in the battery-electric model code and
+    ``HEV`` in the plug-in hybrid code. The check is model-based because the
+    PHEV needs different entity gates than the electric S05.
+    """
+    model = normalize_model(
+        vehicle.series_name,
+        vehicle.series_code,
+        vehicle.model_name,
+        vehicle.model_code,
+    )
+    return "HEV" in model and "BEV" not in model
+
+
+def is_s05_phev(vehicle: Any) -> bool:
+    """Return whether the vehicle is an S05 plug-in hybrid."""
+    return is_s05(vehicle) and is_phev(vehicle)
+
+
 def supports_fuel(vehicle: Any, capabilities: Any) -> bool:
     """Return whether the vehicle has a fuel tank the fuel entities should expose.
 
@@ -56,16 +77,22 @@ def supports_fuel(vehicle: Any, capabilities: Any) -> bool:
 
 
 def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:
-    """Return whether the vehicle supports setting the AC charge limit.
+    """Return whether the vehicle supports the charge-limit sensor and control.
 
     Capability-first: a vehicle whose function configuration reports a
     charge-limit code gets the control even when its model is otherwise
-    excluded (the S05 PHEV). The S05 keeps losing it when the capabilities are
-    unavailable or report no charge-limit code, because the signed charge_max
-    command is accepted without changing the limit on that model (verified on
-    the S05 EV). Every other model keeps the control, so a missing capability
-    list never removes it.
+    excluded. The S05 PHEV is the exception: its function configuration
+    advertises the code but the condition never returns `maxSocPercent`, so the
+    entities would always be unknown and the optimistic value would expire.
+    They stay disabled until a readable PHEV source is verified. The S05 keeps
+    losing the control when the capabilities are unavailable or report no
+    charge-limit code, because the signed charge_max command is accepted
+    without changing the limit on that model (verified on the S05 EV). Every
+    other model keeps the control, so a missing capability list never removes
+    it.
     """
+    if is_s05_phev(vehicle):
+        return False
     if capabilities is not None and getattr(capabilities, "has_charge_limit", False):
         return True
     return not is_s05(vehicle)

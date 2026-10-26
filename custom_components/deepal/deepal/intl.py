@@ -135,6 +135,7 @@ from .mqtt import (
     condition_request_services,
     config_mqtt_identity,
     device_id_candidates,
+    is_phev_model,
     login_request_payload,
     new_request_id,
     normalize_s05_params,
@@ -1644,9 +1645,18 @@ class DeepalIntlClient:
         return empty_result
 
     async def get_vehicle_condition(
-        self, vehicle_id: str, vin: Optional[str] = None
+        self,
+        vehicle_id: str,
+        vin: Optional[str] = None,
+        *,
+        model_code: Optional[str] = None,
     ) -> VehicleCondition:
-        """Fetch the telemetry condition of an international vehicle."""
+        """Fetch the telemetry condition of an international vehicle.
+
+        ``model_code`` is the vehicle model code when the caller knows it; the
+        parser uses it to select the PHEV REST charge rule. It is optional so
+        existing callers keep the generic behavior.
+        """
         criteria = {
             "seat": "1",
             "door": "1",
@@ -1671,12 +1681,20 @@ class DeepalIntlClient:
         if not isinstance(raw, dict):
             raw = {}
 
-        return self.parse_condition(raw, vehicle_id, vin=vin)
+        return self.parse_condition(
+            raw, vehicle_id, vin=vin, model_code=model_code
+        )
 
     def parse_condition(
-        self, raw: dict[str, Any], vehicle_id: str, vin: Optional[str] = None
+        self,
+        raw: dict[str, Any],
+        vehicle_id: str,
+        vin: Optional[str] = None,
+        *,
+        model_code: Optional[str] = None,
     ) -> VehicleCondition:
         """Map a raw condition payload into the shared vehicle model."""
+        phev = is_phev_model(model_code)
         status = raw.get("vehicleStatus") or {}
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
@@ -1707,10 +1725,23 @@ class DeepalIntlClient:
             return level
 
         charge_status = charge.get("chargeStatus")
-        if charge_status not in (None, 0):
+        parsed_status = _as_int(charge_status)
+        con_status = charge.get("chargeConStatus")
+        if phev:
+            # The S05 PHEV reported charge.chargeConStatus=3 in every REST
+            # condition of the 2026-10-26 capture, including while unplugged;
+            # it cannot decide the cable state. The normalized MQTT booleans
+            # are the only PHEV source for an absent or unrecognized state.
+            if parsed_status in (1, 2, 3, 4, 5):
+                charger_connected = True
+            elif isinstance(con_status, bool):
+                charger_connected = con_status
+            else:
+                charger_connected = False
+        elif parsed_status not in (None, 0):
             charger_connected = True
         else:
-            charger_connected = _gun_connected(charge.get("chargeConStatus"))
+            charger_connected = _gun_connected(con_status)
 
         doors = door.get("doors") or []
 
@@ -2278,7 +2309,10 @@ class DeepalIntlClient:
         if not result.params:
             raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
         condition = self.parse_condition(
-            normalize_s05_params(result.params), vehicle_id, vin=vin
+            normalize_s05_params(result.params, model_code=result.model_code),
+            vehicle_id,
+            vin=vin,
+            model_code=result.model_code,
         )
         location = find_location(result.params)
         if location is not None:
@@ -2745,6 +2779,7 @@ class DeepalIntlClient:
             partial: dict[str, Any] = {}
             variants: dict[str, dict[str, Any]] = {}
             source: Optional[str] = None
+            model_code: Optional[str] = None
             probe_labels: dict[str, str] = {}
             if sda:
                 probes: tuple[tuple[str, Optional[tuple[str, ...]]], ...] = (
@@ -2903,6 +2938,7 @@ class DeepalIntlClient:
                     await writer.drain()
 
                 params = self._s05_params_from_payload(payload, secret_key)
+                model_code = self._model_code_from_payload(payload) or model_code
                 label = probe_labels.get(str(payload.get("r")), None)
                 self._emit_mqtt(
                     "receive",
@@ -2927,6 +2963,7 @@ class DeepalIntlClient:
                         source=source,
                         variants=attempted_variants(),
                         plan=plan,
+                        model_code=model_code,
                     )
                 partial.update(params)
                 if probe_index >= 0 and len(partial) > 30:
@@ -2936,6 +2973,7 @@ class DeepalIntlClient:
                         source=source,
                         variants=attempted_variants(),
                         plan=plan,
+                        model_code=model_code,
                     )
 
             self._log_s05_discovery(partial)
@@ -2952,6 +2990,7 @@ class DeepalIntlClient:
                 source=source,
                 variants=attempted_variants(),
                 plan=plan,
+                model_code=model_code,
             )
         finally:
             await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
@@ -3115,6 +3154,7 @@ class DeepalIntlClient:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait
         partial: dict[str, Any] = {}
+        model_code: Optional[str] = None
         while loop.time() < deadline:
             try:
                 first, body = await read_packet_with_keepalive(
@@ -3155,6 +3195,7 @@ class DeepalIntlClient:
             # valid sources as long as they decrypt and carry a newer report;
             # the caller applies the timestamp check.
             params = self._s05_params_from_payload(payload, secret_key)
+            model_code = self._model_code_from_payload(payload) or model_code
             self._emit_mqtt(
                 "receive",
                 vehicle_id=vehicle_id,
@@ -3193,7 +3234,10 @@ class DeepalIntlClient:
             )
             return None
         condition = self.parse_condition(
-            normalize_s05_params(partial), vehicle_id, vin=vin
+            normalize_s05_params(partial, model_code=model_code),
+            vehicle_id,
+            vin=vin,
+            model_code=model_code,
         )
         location = find_location(partial)
         if location is not None:
@@ -3420,6 +3464,21 @@ class DeepalIntlClient:
                 if isinstance(item, dict) and item.get("code"):
                     return str(item["code"]), bool(item.get("success"))
         return None
+
+    @staticmethod
+    def _model_code_from_payload(payload: Mapping[str, Any]) -> Optional[str]:
+        """Return the vehicle model code advertised by one MQTT envelope.
+
+        The condition responses carry the basic identifiers in ``b``; the app
+        uses ``mc`` (with ``modelCode`` as a defensive alias). A response
+        without the field returns ``None`` so the generic normalizer rule
+        applies.
+        """
+        basic = payload.get("b")
+        if not isinstance(basic, Mapping):
+            return None
+        code = basic.get("mc") or basic.get("modelCode")
+        return str(code) if code else None
 
     @staticmethod
     def _s05_params_from_payload(
