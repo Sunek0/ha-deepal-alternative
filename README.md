@@ -1,4 +1,4 @@
-# ha-deepal-alternative
+# Changan Deepal vehicles integration for Home Assistant
 
 Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, E07) over the official international and chinese API.
 
