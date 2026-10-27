@@ -29,12 +29,6 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
 | E07 | Only tested on SDA API. Telemetry through the REST API. |
 
-Charge limit: the S05 EV does not support setting it — the signed `charge_max` command is accepted
-without changing the limit — so the integration does not create the charge-limit control for it. The
-S05 PHEV reports the charge-limit function code, but its condition does not return the current
-`maxSocPercent`, so its charge-limit sensor and number are not created until a readable source is
-verified (2026-10-26). The charge schedule remains available on both.
-
 ## Supported features
 
 ### Authentication and session
@@ -47,14 +41,9 @@ verified (2026-10-26). The charge schedule remains available on both.
 
 ### Telemetry
 
-- REST telemetry: battery and range, charging state and currents, remaining charge time (numeric
-  minutes and a `H:MM` sensor for dashboards), charge limit, charge schedule and plan, doors,
-  windows, climate, seats, tires and lamps. The charging sensor also exposes the tracked
-  `current_charge` and `last_charge` sessions (start and end time, battery level and range).
-- Charging entities follow the car instead of a non-zero flag: the charging state is a translated
-  enum (`not_charging`, `connected_ac`, `connected_dc`, `charging_ac`, `charging_dc`), the
-  "Charging" sensor is on only for the charging states, the charge current is taken from the
-  active charger and validated (`0-600 A`), and the power state is a translated off/on sensor.
+- REST telemetry: battery and range, charging state and currents, remaining charge time, charge
+  limit (only in some vehicles), charge schedule and plan, doors, windows, climate, seats, tires and
+  lamps.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
   fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
   brakes, power steering, power limit, power system, traction battery low and coolant
@@ -66,9 +55,8 @@ verified (2026-10-26). The charge schedule remains available on both.
   because the scale is not confirmed).
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - **Opt-in vehicle location**: enable *Fetch the vehicle location* in the options to request and
-  expose the car position as a device tracker. European vehicles currently report no location, so
-  the tracker may stay unknown; the option targets servers that expose it (and SDA accounts, where
-  the payload carries `Lat`/`Lng`). The last known position is kept while the car sleeps.
+  expose the car position as a device tracker. **European vehicles currently report no location**, so
+  the tracker may stay unknown.
 - One Home Assistant device per vehicle, with translated entity names.
 
 ### Vehicle wake
@@ -78,9 +66,7 @@ verified (2026-10-26). The charge schedule remains available on both.
   are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
   never wakes the car.
 - While a charging session is open, the integration reads only the charging vehicles every 10
-  minutes and stops as soon as the session closes. It uses the same wake option, per-vehicle
-  cooldown and condition paths as the refresh button, and it does not change the configured scan
-  interval.
+  minutes and stops as soon as the session closes.
 - Waking the vehicle can take up to 20 seconds before it reports again.
 - REST-backed and `SDA-MQTT` vehicles keep using the signed condition request; the MQTT wake is only
   available for CA/MQTT vehicles.
@@ -90,8 +76,6 @@ verified (2026-10-26). The charge schedule remains available on both.
 - Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights,
   horn and lights-and-horn together.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
-- Every command-capable international vehicle, MQTT-backed S05 included, sends these commands
-  through the same signed flow.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
   integration options. The PIN is verified against the account when it is saved, so an invalid one,
@@ -99,9 +83,7 @@ verified (2026-10-26). The charge schedule remains available on both.
 - When the car is asleep, the PIN commands wake it first: the first attempt can take up to 20
   seconds while the vehicle wakes up and reports before the command is sent.
 - Flashing the lights, sounding the horn and the combined lights-and-horn button make the car run a
-  physical cycle (about 30 s, 6 s and 30 s respectively); repeating them sooner shows how many
-  seconds to wait instead of sending the command and being rejected by the vehicle. Climate, seat
-  and steering wheel changes have no such wait.
+  physical cycle (about 30 s, 6 s and 30 s respectively).
 
 ### Vehicle image
 
@@ -136,8 +118,7 @@ HACS cards, no helpers and no Lovelace resources to configure.
    panel discovers the vehicles and their entities from the Home Assistant registries, so any
    name, area or language works.
 3. The vitals strip (battery, range, central locking and freshness) stays on top and the tabs are
-   **Status** (layered picture of the car's model rotated 90° counter-clockwise and cropped to a
-   750:550 frame, the central-locking chip, the controls, tire pressures, health warnings while one
+   **Status** (layered picture of the car's with the controls, tire pressures, health warnings while one
    is active and the energy block on fuel cars), **Driving** on the models that report it,
    **Climate** and **Charging**.
    Controls that need the remote control PIN (lock, windows, trunk) simply do not appear without
