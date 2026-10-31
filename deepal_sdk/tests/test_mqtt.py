@@ -26,6 +26,7 @@ from deepal.mqtt import (
     condition_request_payload,
     device_id_candidates,
     is_phev_model,
+    is_s05_model,
     login_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
@@ -913,8 +914,8 @@ def test_normalize_s05_params_maps_the_ac_gun_from_the_state():
     assert condition["charge"]["dcChargeGunConnectStatus"] is False
 
 
-def test_normalize_s05_params_uses_the_gun_fields_when_not_charging():
-    connected = normalize_s05_params(
+def test_normalize_s05_params_ignores_the_gun_fields_when_not_charging():
+    stale = normalize_s05_params(
         {
             "ChrgSts": 0,
             "acChargeGunConnectionState": 1,
@@ -922,9 +923,9 @@ def test_normalize_s05_params_uses_the_gun_fields_when_not_charging():
         }
     )
 
-    assert connected["charge"]["chargeConStatus"] is True
-    assert connected["charge"]["acChargeGunConnectStatus"] is True
-    assert connected["charge"]["dcChargeGunConnectStatus"] is False
+    assert stale["charge"]["chargeConStatus"] is False
+    assert stale["charge"]["acChargeGunConnectStatus"] is False
+    assert stale["charge"]["dcChargeGunConnectStatus"] is False
 
     unplugged = normalize_s05_params(
         {
@@ -937,6 +938,48 @@ def test_normalize_s05_params_uses_the_gun_fields_when_not_charging():
     assert unplugged["charge"]["chargeConStatus"] is False
     assert unplugged["charge"]["acChargeGunConnectStatus"] is False
     assert unplugged["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_ignores_a_stale_ac_field_while_driving():
+    # 2026-10-30 S05 BEV: the odometer rose from 14362.6 to 14371.3 km with
+    # ChrgSts=0 and acChargeGunConnectionState=1, so the cable could not be
+    # connected. The raw field only cleared after the real unplug at 21:01.
+    for odometer in (14362.6, 14366.5, 14371.3):
+        stale = normalize_s05_params(
+            {
+                "ChrgSts": 0,
+                "acChargeGunConnectionState": 1,
+                "dcChargeGunConnectionState": 0,
+                "BattACChrgInCurr": 0,
+                "chargDeltMins": 8191,
+                "totalOdometer": odometer,
+            },
+            model_code="SC6464AAKBEV",
+        )
+        assert stale["charge"]["chargeConStatus"] is False
+        assert stale["charge"]["acChargeGunConnectStatus"] is False
+        assert stale["charge"]["dcChargeGunConnectStatus"] is False
+
+    connected = normalize_s05_params(
+        {"ChrgSts": 1, "acChargeGunConnectionState": 1},
+        model_code="SC6464AAKBEV",
+    )
+    assert connected["charge"]["chargeConStatus"] is True
+    assert connected["charge"]["acChargeGunConnectStatus"] is True
+
+    charging = normalize_s05_params(
+        {"ChrgSts": 3, "acChargeGunConnectionState": 1, "BattACChrgInCurr": 13.6},
+        model_code="SC6464AAKBEV",
+    )
+    assert charging["charge"]["chargeConStatus"] is True
+    assert charging["charge"]["acChargeGunConnectStatus"] is True
+    assert charging["charge"]["chargeCurrent"] == 13.6
+
+    unplugged = normalize_s05_params(
+        {"ChrgSts": 0, "acChargeGunConnectionState": 0},
+        model_code="SC6464AAKBEV",
+    )
+    assert unplugged["charge"]["chargeConStatus"] is False
 
 
 def test_normalize_s05_params_maps_the_charging_stopped_state():
@@ -1579,7 +1622,16 @@ def test_is_phev_model_recognizes_the_s05_model_codes():
     assert is_phev_model("C857P1") is False
 
 
-def test_normalize_s05_params_uses_the_phev_gun_rule():
+def test_is_s05_model_recognizes_the_s05_model_and_series_codes():
+    assert is_s05_model("SC6464AAKBEV") is True
+    assert is_s05_model("SC6460AAAA7HEV") is True
+    assert is_s05_model("C857-EU") is True
+    assert is_s05_model("S05") is True
+    assert is_s05_model("SC6501ABABEV") is False
+    assert is_s05_model(None) is False
+
+
+def test_normalize_s05_params_ignores_the_stale_ac_field_for_every_model():
     payload = {
         "ChrgSts": 0,
         "acChargeGunConnectionState": 1,
@@ -1592,13 +1644,13 @@ def test_normalize_s05_params_uses_the_phev_gun_rule():
     assert phev["charge"]["dcChargeGunConnectStatus"] is False
 
     bev = normalize_s05_params(payload, model_code="SC6464AAKBEV")
-    assert bev["charge"]["chargeConStatus"] is True
-    assert bev["charge"]["acChargeGunConnectStatus"] is True
+    assert bev["charge"]["chargeConStatus"] is False
+    assert bev["charge"]["acChargeGunConnectStatus"] is False
     assert bev["charge"]["dcChargeGunConnectStatus"] is False
 
     generic = normalize_s05_params(payload)
-    assert generic["charge"]["chargeConStatus"] is True
-    assert generic["charge"]["acChargeGunConnectStatus"] is True
+    assert generic["charge"]["chargeConStatus"] is False
+    assert generic["charge"]["acChargeGunConnectStatus"] is False
 
 
 def test_normalize_s05_params_maps_the_phev_charge_states():

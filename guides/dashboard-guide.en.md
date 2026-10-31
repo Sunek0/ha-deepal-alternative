@@ -1,166 +1,125 @@
-# Panel, example dashboard and cards guide
+# Deepal dashboard card guide
 
-This guide covers the four ways to see and control your Deepal car in Home Assistant:
+The integration ships **one configurable card**: `custom:deepal-card`. It replaces the former
+sidebar panel, the generated dashboard strategy and the complete and compact cards. The card
+discovers the vehicle and its entities from the Home Assistant registries, so it works with any
+entity-id prefix, area or language, and it only shows the artwork and sections the selected vehicle
+supports.
 
-1. **Generated dashboard**: one view per car, created by the integration from the new-dashboard
-   dialog, with no YAML.
-2. **Built-in panel**: a page of its own in the sidebar that appears by itself, with no YAML and no
-   extra cards.
-3. **Example dashboard**: the reference view for those who prefer their own dashboard.
-4. **`deepal-card` and `deepal-compact-card`**: the complete card and a compact one to place on any
-   dashboard.
+## 1. Add the card
 
-## 1. Generated dashboard
+1. Open the dashboard where you want the car and choose **Edit dashboard → Add card**.
+2. Pick **Deepal vehicle** and select the car in the visual editor.
+3. By hand, the minimum configuration is:
+   ```yaml
+   type: custom:deepal-card
+   device_id: <your vehicle device id>
+   ```
+   The card form fills in the device id when it is added from the picker.
 
-- In **Settings → Dashboards → Add dashboard** pick **Community dashboards → Deepal**: the
-  integration generates a dashboard with **one view per car**, no YAML and nothing to configure.
-- Each view brings the **complete card** of the car plus its model's sections: quick controls,
-  battery and range graphs (and fuel graphs on the PHEV), tire pressures, and — on the models that
-  report them — a **Driving** section (speed, gear, mileage) and an **Ambience** one (outside
-  temperature, PM2.5, air quality), plus a templated alerts card.
-- The dialog entry needs Home Assistant 2026.5 or later; on older versions the same dashboard can be
-  created from a YAML-mode dashboard with:
-  ```yaml
-  strategy:
-    type: custom:deepal
-  ```
-- It **regenerates itself** when you add or remove a car or its entities change (the strategy
-  declares the device and entity registries as dependencies).
-- The generated dashboard depends on the integration: if you remove it, its views stop resolving.
+The card is loaded by the integration itself, so there is no Lovelace resource to configure.
 
-## 2. Built-in panel
+## 2. Hero and vehicle image
 
-- It is **optional**: the setup asks whether to add it (disabled by default) and the integration
-  options can change it later (Configure → "Show the sidebar panel").
-- With the panel enabled, **Deepal** appears in the sidebar for **every Home Assistant user**. The
-  integration's **Configure** button opens the integration options (enable or disable the panel
-  there); the panel opens from the sidebar.
-- It adapts to your installation: it discovers the vehicle and its entities from the Home Assistant
-  registries, so it works with any name, area or language, and with several cars.
-- **Persistent vitals**: battery (with a charging bolt), range, the **central locking** and
-  **freshness** (cloud connection and last update) stay visible on all tabs.
-- Tabs:
-  - **Status**: layered car picture rotated 90° counter-clockwise and cropped to a 750:550 frame
-    (hood, doors, windows, trunk and lights live), with a single **central-locking** chip below it;
-    the lock, windows, trunk, flash,
-    horn and flash-and-horn controls; odometer and charge state; tire pressures with their alarms;
-    **warnings** (12 V battery, ABS, brakes, steering, power…), shown only while one is active;
-    and the **Energy** block on fuel cars (PHEV).
-  - **Driving** (on the models that report it, like the S07): speed, gear, parking brake, vehicle
-    status, yesterday/trip mileage, and the ambience readings (outside temperature, PM2.5, air
-    quality).
-  - **Climate**: cabin climate (on/off and target temperature), front seats
-    (heating/ventilation) and **rear seats** on cars that have them, steering wheel heating, and
-    the inside temperature with the **humidity** next to it.
-  - **Charging**: cable, current (AC/DC when the car reports them separately), time left in H:MM,
-    the **charge schedule** (switch and times), the **charge limit** on cars that support it, and
-    the tracked sessions — the completed one above the schedule and the one in progress at the
-    end — with both the level **and the range** at start and end.
-- It needs no Lovelace resources and no third-party cards: the integration serves everything.
+Open the card's **Settings** button (or the visual editor) and use the **Vehicle** tab:
 
-## 3. Example dashboard
+- **Show on the hero**: name, model, plate, remaining range, closure, cloud connection and
+  freshness. Any combination is valid.
+- **Vehicle image**:
+  - **Plant**: the layered top view rotated 90° to the left, with live doors, windows, trunk, hood
+  and lights.
+  - **Isometric**: the live 3/4 Car View with the same state layers.
+  - **Photos**: the bundled photos or the vehicle image entity, depending on the model.
+  - **Vehicle image**: the `image.*_vehicle_image` entity (API picture or per-model fallback).
+  - **Automatic**: isometric on the S05, the profile photo on the S07 and the image entity on other
+    models.
+- **Zoom** and **aspect ratio** adjust the picture; **card margins** control whether the hero is
+  edge to edge.
+- On the S05, while the charger is connected the isometric view switches to the charging view with
+  its cable and charging line.
 
-File (in the repository, `guides/dashboards/` folder):
+The card prefers the official per-vehicle image pack when the integration has downloaded and
+validated it, and falls back to the bundled profile art without showing another model's car.
 
-| File | What it is |
-| --- | --- |
-| `deepal-dashboard.example.yaml` | The complete view: the car card plus Controls, Battery and range, Tires and Alerts |
+## 3. Sections below the image
 
-**Requirements**
+The **Sections** tab controls the content and its order. The available sections are:
 
-- The **Deepal Alternative** integration and nothing else: the example uses the card that ships
-  with the integration and standard Home Assistant cards. No HACS cards, no helpers, no extra
-  resources.
+- **Actions**: the control buttons.
+- **Status**: odometer, charge state, battery and range.
+- **Climate**: cabin climate, front and rear seats when the vehicle exposes them, steering wheel,
+  inside temperature and humidity. The **Climate** action opens the same controls in a dialog, so
+  this section is hidden by default to keep the card short.
+- **Charging**: cable, AC/DC current, remaining time, charge schedule, charge limit and sessions.
+  It is shown only while the charger is connected and no longer repeats the car picture.
+- **Driving** and **Ambience**: only on models that report them, such as the S07.
+- **Energy**: the PHEV fuel and electric readings.
+- **Information**: built-in tiles (odometer, temperatures, humidity, fuel, charge state, speed,
+  gear, mileage) and your own entity tiles.
+- **Diagnostics**: active warnings, or all warnings when you choose that mode.
+- **Tyres**: the four pressures with their alarms. The **Tyres** action opens them in a dialog, so
+  this section is hidden by default.
 
-**How to install it**
+Use the arrows to reorder a section and the switch to hide it. A section whose entities are missing
+hides itself; it never leaves an empty shell. The default card shows actions, the charging section
+while connected, and information (with the vehicle icon). Status is hidden by default because it
+duplicates information; enable it from **Sections** if you want it. The same tab enables Climate,
+Tyres, Driving or Energy inline instead of in the dialogs. Diagnostics appears only while a warning
+is active. Range and odometer are shown as whole numbers (no decimals).
 
-1. Open the dashboard you want and switch to the **raw configuration editor** (⋮ menu → Edit → ⋮ →
-   Edit in YAML).
-2. Paste the contents of `deepal-dashboard.example.yaml` (the root key is `views:`).
-3. Replace the placeholders:
-   - `<device_id>`: the car the card shows. Add `custom:deepal-card` once from the card picker;
-     the form lists the integration's vehicles and the id shown there is the one to paste.
-   - `garaje_deepal_s05_...`: the entity ids depend on the name, area and language your entities
-     were created with (check **Developer tools → States**).
-4. Save.
+## 4. Actions
 
-**What the view brings**
+The **Actions** tab controls:
 
-- The **complete card** full width with the panel's three tabs.
-- **Controls**: lock (with lock and unlock buttons on the tile itself), windows, trunk, flash,
-  horn, flash-and-horn and refresh.
-- **Battery and range**: two 24 h graphs, one metric per graph.
-- **Tires**: the four pressures; tap for the details.
-- **Alerts**: one line with everything worth acting on (doors, windows, trunk, hood, lock, tire
-  alarms, cable connected without charging, low battery and no cloud connection) or "all clear".
+- which buttons appear and in what order: lock, windows, trunk, climate, tyres, lights, horn and
+  lights-and-horn. Refresh is no longer part of the card; use the integration's refresh button
+  entity if you need to wake the car.
+- the layout (`grid`, `scroll`, `split` or `fit`), the number of primary buttons, the size and the
+  labels (title, status or both);
+- which actions ask for confirmation before sending the command: unlock, lock, trunk, windows,
+  climate, lights, horn and find.
 
-**If you used the previous example**
+The **Climate** and **Tyres** buttons open modal dialogs. The climate dialog shows the climate
+controls on one side and the seat/steering controls on the other; the tyres dialog shows the four
+pressures and their alarms. The lock, windows and trunk controls only appear when the remote control
+PIN is configured in the integration options; the rest works without a PIN. Every command shows its
+result or a translated error on the card.
 
-- The old example needed the **mushroom** cards (HACS), two navigation `input_select` helpers and
-  the helpers file. None of that is needed now: you can delete those `input_select`s and the
-  template `select`s if you only used them for that dashboard.
-- The **home charger (V2C)** stays out as before: the card's charging tab only uses integration
-  entities. If you want your charger shortcuts, add them back as your own cards.
+## 5. Information, diagnostics and appearance
 
-## 4. Deepal cards
+- **Sensors**: choose the built-in information tiles and the diagnostics mode (active warnings only,
+  or all warnings). Custom entities can be added to `info_custom` and `diag_custom` in YAML.
+- **Appearance**: language (automatic, or English, Spanish, German, French, Italian or Portuguese),
+  on-screen messages and their position, and whether the **Settings** button is visible on the card.
+- **Card margins** keep the card aligned with the rest of your dashboard.
 
-### Complete (`custom:deepal-card`)
+## 6. Settings persistence
 
-- On any dashboard: **Edit dashboard → Add card** and look for **Deepal vehicle** in the picker.
-  It can also be written by hand:
-  ```yaml
-  type: custom:deepal-card
-  device_id: <your vehicle device id>
-  ```
-- It is configured with the **vehicle** (a device selector filtered by the integration); no
-  entities are configured by hand.
-- It carries the vitals strip (battery, range and freshness) and the panel's three tabs —
-  **Status**, **Climate** and **Charging** — with the refresh button in the header. The **general
-  closure** sits in the only padlock chip below the status picture (the lock control reports its
-  state too), and the picture is rotated 90° counter-clockwise. This is the recommended card for
-  details.
-- The lock, windows and trunk controls only appear when the remote control PIN is saved; the rest
-  works without a PIN. Command errors are shown on the card itself.
+Settings changed from the card's **Settings** button are written to the card YAML when the dashboard
+is UI-managed and the user is an administrator. They are shared by every user and device. When the
+dashboard cannot be written (not an administrator or YAML mode), the card stores the settings in
+the Home Assistant user data for that card and shows a non-blocking notice. If more than one card
+uses the same vehicle, the card does not guess: it keeps the change in your account instead of
+overwriting another card.
 
-### Compact (`custom:deepal-compact-card`)
+## 7. Example dashboard
 
-- Meant for a quick glance: **Edit dashboard → Add card** and look for **Deepal vehicle
-  (compact)**. By hand:
-  ```yaml
-  type: custom:deepal-compact-card
-  device_id: <your vehicle device id>
-  ```
-- It shows the car name, the vitals strip (with the **central locking**), the **state-aware vehicle
-  picture**: the S05 uses the isometric layered view instead of the API photo (doors, windows, hood,
-  trunk and lights, with open doors marked by an outline), while other profiles fall back to the
-  `image.*_vehicle_image` entity, the hero picture or the status view. It also offers a **climate
-  control** (on/off and target temperature); quick actions (lock and unlock, **windows**, flash and
-  horn) with the refresh button in the header; and a **charging strip** with the state, current and
-  time left while the cable is connected.
-- It has no tabs: for climate, the charge schedule or the tires, use the complete card or the
-  panel.
+`guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready sections view built only on the
+bundled card and core Home Assistant cards. Paste it in the raw editor and replace the `<device_id>`
+placeholder and the `garaje_deepal_s05_...` entity ids with yours. It needs no HACS cards, helpers or
+navigation helpers.
 
-**About both cards**
+## 8. Troubleshooting
 
-- Both are loaded by the integration itself: the module is registered as a Lovelace resource
-  automatically (you do not have to add anything). If a card does not paint right after a restart
-  (rare), reload the page once.
-
-## Troubleshooting
-
-- **I do not see the panel in the sidebar**: enable it in the integration options (**Configure** →
-  "Show the sidebar panel") and wait for the automatic reload.
-- **I do not see the generated dashboard in the dialog**: the entry needs Home Assistant 2026.5 or
-  later; on older versions create it from a YAML-mode dashboard with
-  `strategy: {type: custom:deepal}`. Check **Settings → System → Logs** for `Deepal` if it never
-  appears.
-- **The example shows no images**: check that the integration is installed and that
-  `/deepal/frontend/assets/s05/estado_planta/Ocar1.png` responds in your Home Assistant.
-- **The card says no vehicle is configured**: check the `device_id` (the card form fills it in when
-  the card is added from the picker).
-- **The card does not appear in the picker**: reload the browser (Ctrl+Shift+R); if it persists,
-  check **Settings → System → Logs** for `Deepal`.
-- **The door button does not appear on the card**: the remote control PIN is missing in the
-  integration options, so the lock entity does not exist.
-- **The compact card has no climate controls**: that is on purpose; the complete card and the panel
-  have them.
+- **The card is missing from the picker**: reload the browser (Ctrl+Shift+R); if it persists, check
+  **Settings → System → Logs** for `Deepal`.
+- **The card says no vehicle is configured**: check the `device_id` in the card configuration.
+- **The image is the generic fallback**: the API image or the official pack is not available yet;
+  the bundled profile art is shown instead and the card keeps working.
+- **The lock, windows or trunk buttons are missing**: the remote control PIN is not configured in
+  the integration options, so those entities do not exist.
+- **The settings are not written to the dashboard**: the dashboard is not UI-managed or the user is
+  not an administrator; the card keeps the settings in the user data and tells you so.
+- **I used the old panel, the generated dashboard or the compact card**: those surfaces were
+  removed. Add `custom:deepal-card` and configure the hero and sections in its settings. The
+  integration's entities, services and device ids are unchanged.

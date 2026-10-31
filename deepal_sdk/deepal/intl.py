@@ -135,7 +135,7 @@ from deepal.mqtt import (
     condition_request_services,
     config_mqtt_identity,
     device_id_candidates,
-    is_phev_model,
+    is_s05_model,
     login_request_payload,
     new_request_id,
     normalize_s05_params,
@@ -1654,7 +1654,7 @@ class DeepalIntlClient:
         """Fetch the telemetry condition of an international vehicle.
 
         ``model_code`` is the vehicle model code when the caller knows it; the
-        parser uses it to select the PHEV REST charge rule. It is optional so
+        parser uses it to select the S05 REST charge rule. It is optional so
         existing callers keep the generic behavior.
         """
         criteria = {
@@ -1694,7 +1694,7 @@ class DeepalIntlClient:
         model_code: Optional[str] = None,
     ) -> VehicleCondition:
         """Map a raw condition payload into the shared vehicle model."""
-        phev = is_phev_model(model_code)
+        s05 = is_s05_model(model_code)
         status = raw.get("vehicleStatus") or {}
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
@@ -1727,13 +1727,17 @@ class DeepalIntlClient:
         charge_status = charge.get("chargeStatus")
         parsed_status = _as_int(charge_status)
         con_status = charge.get("chargeConStatus")
-        if phev:
-            # The S05 PHEV reported charge.chargeConStatus=3 in every REST
-            # condition of the 2026-10-26 capture, including while unplugged;
-            # it cannot decide the cable state. The normalized MQTT booleans
-            # are the only PHEV source for an absent or unrecognized state.
+        if s05:
+            # The S05 BEV and PHEV can report a stale charge.chargeConStatus
+            # while unplugged: 3 during the 2026-10-30 BEV drive and 1 for at
+            # least 17 minutes after the unplug, and 3 in every REST condition
+            # of the 2026-10-26 PHEV capture. Without a reliable chargeStatus
+            # the normalized MQTT booleans are the only cable source; the raw
+            # value stays in raw_data for diagnostics.
             if parsed_status in (1, 2, 3, 4, 5):
                 charger_connected = True
+            elif parsed_status == 0:
+                charger_connected = False
             elif isinstance(con_status, bool):
                 charger_connected = con_status
             else:

@@ -1,6 +1,7 @@
 """Config flow for the Deepal Alternative integration."""
 
 import hashlib
+import html
 import logging
 from typing import Any
 
@@ -49,12 +50,10 @@ from .const import (
     CONF_DIAGNOSTICS_CONFIRM_DELETE,
     CONF_ENABLE_LOCATION,
     CONF_WAKE,
-    CONF_SHOW_PANEL,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
-    DEFAULT_SHOW_PANEL,
     DEFAULT_ENABLE_LOCATION,
     DIAGNOSTICS_ACTION_DELETE,
     DIAGNOSTICS_ACTION_DOWNLOAD,
@@ -239,15 +238,6 @@ def _sda_unique_id(phone: str, vehicles: list[Vehicle], token: str) -> str:
     return f"sda_token_{digest[:16]}"
 
 
-def _panel_schema() -> vol.Schema:
-    """Schema of the sidebar panel question (disabled by default)."""
-    return vol.Schema(
-        {
-            vol.Optional(CONF_SHOW_PANEL, default=DEFAULT_SHOW_PANEL): bool,
-        }
-    )
-
-
 class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Deepal Alternative."""
 
@@ -279,23 +269,6 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(step_id="user", data_schema=schema)
 
-    # ------------------------------------------------------------------ panel
-    async def async_step_panel(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Ask whether to add the vehicle panel to the sidebar."""
-        if user_input is not None:
-            return self.async_create_entry(
-                title=self._pending_title,
-                data=self._pending_data,
-                options={
-                    CONF_SHOW_PANEL: bool(
-                        user_input.get(CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL)
-                    )
-                },
-            )
-        return self.async_show_form(step_id="panel", data_schema=_panel_schema())
-
     # ------------------------------------------------------------------- SDA
     async def async_step_sda(
         self, user_input: dict[str, Any] | None = None
@@ -323,7 +296,10 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_PHONE: user_input.get(CONF_PHONE) or "",
                     CONF_VEHICLE_ID: vehicles[0].car_id if vehicles else "",
                 }
-                return await self.async_step_panel()
+                return self.async_create_entry(
+                    title=self._pending_title,
+                    data=self._pending_data,
+                )
             except DeepalAuthError:
                 errors["base"] = "invalid_auth"
             except DeepalError:
@@ -738,7 +714,10 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_PHONE: data_updates[CONF_PHONE],
             CONF_CONTROL_PIN: "",
         }
-        return await self.async_step_panel()
+        return self.async_create_entry(
+            title=self._pending_title,
+            data=self._pending_data,
+        )
 
     # ------------------------------------------------------------- reauth
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
@@ -950,9 +929,11 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     size=_format_size(status.get("total_bytes", 0)),
                 )
             )
+            download_url = async_download_url(self.hass, self.config_entry.entry_id)
+            download_label = self._status_text(translations, "download")
             lines.append(
-                f"[{self._status_text(translations, 'download')}]"
-                f"({async_download_url(self.hass, self.config_entry.entry_id)})"
+                f'<a href="{html.escape(download_url, quote=True)}"'
+                f' target="_blank">{html.escape(download_label)}</a>'
             )
         else:
             lines.append(self._status_text(translations, "no_file"))
@@ -1079,10 +1060,6 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     default=options.get(
                         CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
                     ),
-                ): bool,
-                vol.Optional(
-                    CONF_SHOW_PANEL,
-                    default=options.get(CONF_SHOW_PANEL, True),
                 ): bool,
                 vol.Optional(
                     CONF_ENVIRONMENT,

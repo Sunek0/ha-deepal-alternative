@@ -1617,15 +1617,30 @@ def is_phev_model(model_code: Any) -> bool:
     return "HEV" in text and "BEV" not in text
 
 
+def is_s05_model(model_code: Any) -> bool:
+    """Return whether a wire model or series code identifies an S05.
+
+    The S05 family uses the ``SC6460`` (PHEV) and ``SC6464`` (BEV) model codes
+    and the ``C857`` series code. The check normalizes the alphanumerics so a
+    series name (``S05``), a series code (``C857-EU``) or a model code with
+    punctuation still matches. Other models (for example the S07 ``SC6501``)
+    return false.
+    """
+    text = "".join(
+        character for character in str(model_code or "").upper() if character.isalnum()
+    )
+    return "S05" in text or text.startswith("SC646") or "C857" in text
+
+
 def _gun_code_connected(value: Any) -> Optional[bool]:
     """Return whether a raw gun connection code means connected (None = absent).
 
     The live S05 reports ``0`` when no gun is connected and ``1`` while the AC
     gun is connected (verified while AC charging at 25 A, 2026-10-25); higher
     codes also mean connected. An absent value stays unknown, so callers can
-    tell it apart from a reported "not connected". The previous ``0``/``1``
-    not-connected rule made a connected gun look unplugged whenever the
-    charging state did not carry the gun type (states ``0`` and ``5``).
+    tell it apart from a reported "not connected". State ``0`` never uses this
+    fallback for an S05: the raw AC field can stay at ``1`` after the cable is
+    removed.
     """
     code = _as_int(value)
     if code is None:
@@ -1643,33 +1658,33 @@ def charge_gun_flags(
     """Return the (charger plugged, AC gun, DC gun) flags of one report.
 
     States ``1``-``4`` identify the gun (`2`/`4` DC, `1`/`3` AC) and are
-    authoritative. States ``0`` (not charging) and ``5`` (charge stopped) do
-    not identify a gun, so the raw gun fields decide the plug state; the live
-    car kept `acChargeGunConnectionState=1` with the cable connected in both
-    states. Unrecognized states also fall back to the raw fields. In that
-    fallback ``0`` means not connected and any other reported value means
-    connected.
+    authoritative. State ``0`` (not charging) means no gun is connected for
+    every S05 model: the raw AC field can stay at ``1`` while unplugged (the
+    PHEV for hours on 2026-10-26, the BEV for at least 25 minutes while driving
+    on 2026-10-30), so it MUST be ignored. State ``5`` (charge stopped) means a
+    cable stayed connected: the raw DC field selects DC and the AC gun is
+    assumed otherwise.
 
-    The S05 PHEV can keep ``acChargeGunConnectionState=1`` stale for many
-    state-``0`` reports while unplugged; a plug/unplug cycle is needed to
-    refresh it (2026-10-26 diagnostic). For ``phev=True`` state ``0`` is
-    therefore authoritative and resolves every gun flag to false. State ``5``
-    still means a cable stayed connected: the raw DC field selects DC and the
-    AC gun is assumed otherwise. An absent or unrecognized PHEV state keeps the
-    AC gun unknown and reads only the DC field.
+    An absent or unrecognized state falls back to the raw fields; in that
+    fallback ``0`` means not connected and any other reported value means
+    connected. For a PHEV (``phev=True``) an absent or unrecognized state keeps
+    the AC gun unknown and reads only the DC field, because its AC field can be
+    stale even when the state is not available.
     """
     state = charge_state(state_value)
     if state in AC_GUN_STATES | DC_GUN_STATES:
         return True, state in AC_GUN_STATES, state in DC_GUN_STATES
 
+    if state == CHARGE_STATE_CHARGE_STOPPED:
+        if _gun_code_connected(dc_gun_value):
+            return True, False, True
+        return True, True, False
+
+    if state == CHARGE_STATE_NOT_CHARGING:
+        return False, False, False
+
     dc_gun = _gun_code_connected(dc_gun_value)
     if phev:
-        if state == CHARGE_STATE_NOT_CHARGING:
-            return False, False, False
-        if state == CHARGE_STATE_CHARGE_STOPPED:
-            if dc_gun:
-                return True, False, True
-            return True, True, False
         if dc_gun:
             return True, False, True
         return False, None, dc_gun
@@ -1706,7 +1721,9 @@ def normalize_s05_params(
     Values keep the REST units (tenths for temperatures and humidity) so
     ``parse_condition`` converts them exactly once. ``model_code`` is the wire
     model code from the MQTT envelope (``b.mc``) when available; it selects the
-    PHEV gun rule. Without it the generic S05 rule applies.
+    PHEV fallback for an absent or unrecognized charging state. State ``0`` and
+    state ``5`` apply to every S05 model, so the stale AC gun field cannot turn
+    the cable on while unplugged.
     """
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     charge_status = _as_int(params.get("ChrgSts"))

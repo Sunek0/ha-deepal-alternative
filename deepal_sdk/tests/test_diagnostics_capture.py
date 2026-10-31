@@ -390,6 +390,43 @@ async def test_options_flow_new_file_action_saves_and_returns_the_form(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_options_flow_status_renders_a_browser_download_anchor(
+    tmp_path, monkeypatch
+):
+    hass = _FakeHass(tmp_path)
+    hass.entry.options["enable_diagnostics_capture"] = True
+    capture = DiagnosticsCapture(
+        hass, hass.entry, enabled=True, base_dir=tmp_path
+    )
+    hass.entry.runtime_data = SimpleNamespace(
+        capture=capture,
+        coordinator=SimpleNamespace(vehicles=[]),
+    )
+    monkeypatch.setattr(
+        config_flow,
+        "async_download_url",
+        lambda hass, entry_id: f"/api/deepal/diagnostics/{entry_id}?authSig=test",
+    )
+    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow.handler = hass.entry.entry_id
+    flow.hass = hass
+
+    await capture.async_start()
+    try:
+        capture.record(_event(note="download"))
+        await capture.async_flush()
+        status = await flow._diagnostics_status(dict(hass.entry.options))
+    finally:
+        await capture.async_stop()
+
+    assert (
+        '<a href="/api/deepal/diagnostics/entry-1?authSig=test"'
+        ' target="_blank">download</a>'
+    ) in status
+    assert "](/api/deepal/diagnostics/" not in status
+
+
+@pytest.mark.asyncio
 async def test_options_flow_delete_requires_confirmation(tmp_path):
     hass = _FakeHass(tmp_path)
     capture = DiagnosticsCapture(

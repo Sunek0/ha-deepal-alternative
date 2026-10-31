@@ -31,7 +31,7 @@ from .deepal import (
     VehicleCapabilities,
     VehicleCondition,
 )
-from .deepal.mqtt import S05_CHARGE_GUN_KEYS, S05_DC_GUN_KEYS
+from .deepal.mqtt import S05_CHARGE_GUN_KEYS, S05_DC_GUN_KEYS, is_s05_model
 from .const import (
     DOMAIN,
     DEFAULT_SCAN_INTERVAL,
@@ -582,11 +582,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         The seat block and the charge connection flags keep the freshness rule
         (the server condition applies only when its report is not older), so a
         genuinely newer MQTT snapshot wins; the server condition is also the
-        fallback for the gun fields a car omits over MQTT. PHEV fuel and the AC
-        charge limit are merged per field: dynamic fuel values keep the
-        freshness rule, while volume, tank capacity, fuel temperature and the
-        charge limit are slow or static and fill a missing field even when the
-        server report is older.
+        fallback for the gun fields a car omits over MQTT. For an S05 the cable
+        flag is never copied: its REST `chargeConStatus` can stay stale while
+        unplugged, and the MQTT `ChrgSts` state already decides it. The DC gun
+        still fills from the app condition when the snapshot omits it. PHEV
+        fuel and the AC charge limit are merged per field: dynamic fuel values
+        keep the freshness rule, while volume, tank capacity, fuel temperature
+        and the charge limit are slow or static and fill a missing field even
+        when the server report is older.
         """
         if not self._uses_mqtt(vehicle):
             return condition
@@ -640,8 +643,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _overlay_seat_levels(app_condition.seats, condition.seats)
         app_charge = raw.get("charge") or {}
         mqtt_raw = condition.mqtt_raw_data or {}
+        s05 = is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)
         if (
-            not any(key in mqtt_raw for key in S05_CHARGE_GUN_KEYS)
+            not s05
+            and not any(key in mqtt_raw for key in S05_CHARGE_GUN_KEYS)
             and condition.battery.charging_status in (None, "0")
             and app_charge.get("chargeConStatus") is not None
         ):

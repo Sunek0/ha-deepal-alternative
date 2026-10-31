@@ -1,26 +1,19 @@
-// Constants shared by the panel modules. The build script prepends the
+// Constants shared by the card modules. The build script prepends the
 // PANEL_VERSION constant before this file.
-const PANEL_TAG = "deepal-panel";
 const CARD_TAG = "deepal-card";
-const CARD_COMPACT_TAG = "deepal-compact-card";
-// Dashboard strategy types and the tags Home Assistant resolves for them.
-const STRATEGY_DASHBOARD_TYPE = "deepal";
-const STRATEGY_VIEW_TYPE = "deepal-vehicle";
-const STRATEGY_DASHBOARD_TAG = "ll-strategy-dashboard-deepal";
-const STRATEGY_VIEW_TAG = "ll-strategy-view-deepal-vehicle";
 const PANEL_BASE_LANGUAGE = "en";
 // Languages that borrow another language's texts verbatim.
 const PANEL_BORROWED_LANGUAGES = { ca: "es", gl: "es", eu: "es" };
+// Native names of the shipped card languages, shown in the settings selector.
+const PANEL_LANGUAGE_NAMES = {
+  en: "English",
+  es: "Español",
+  de: "Deutsch",
+  fr: "Français",
+  it: "Italiano",
+  pt: "Português",
+};
 const PANEL_ASSETS_URL = "/deepal/frontend/assets";
-
-// Tabs, in order: [key, icon]. The key is also the text key "tab_<key>".
-// Models with their own layout can add a model-conditional tab (the S07
-// Driving tab); the profile list lives in PANEL_MODEL_LAYOUTS.
-const PANEL_TABS = [
-  ["status", "mdi:car"],
-  ["climate", "mdi:air-conditioner"],
-  ["charging", "mdi:battery-charging"],
-];
 
 // Model profiles detected from the registry model plus the entities: the S05
 // family splits into EV and PHEV, the S07 has its own artwork, and anything
@@ -37,17 +30,15 @@ const PANEL_FUEL_ENTITY_KEYS = ["fuel_level", "fuel_range"];
 
 // Per-model artwork, keyed by model family. Every file in `status`, `compact`,
 // `climate`, `charging` and `seats` shares the canvas size of its base image,
-// so the panel only stacks them in order. `tabs` is the model-conditional tab
-// list; `compact` is the state-aware 3/4 artwork the compact card prefers;
-// `hero` is its static fallback when the vehicle image is unavailable;
+// so the card only stacks them in order. `compact` is the state-aware 3/4
+// artwork; `hero` is the static fallback when the vehicle image is missing;
 // `animations` maps a transition key to the clip played when that transition
 // happens, always over the matching static layer.
 const PANEL_MODEL_LAYOUTS = {
   s05: {
-    tabs: PANEL_TABS,
     status: {
       // The base is the bare body: hood, trunk and doors are separate pieces
-      // that must always be drawn, closed or open, like the hand-made panel.
+      // that must always be drawn, closed or open, like the original panel.
       base: "s05/estado_planta/Ocar1.png",
       layers: {
         hood_closed: "s05/estado_planta/Ohood0.png",
@@ -125,12 +116,6 @@ const PANEL_MODEL_LAYOUTS = {
     animations: {},
   },
   s07: {
-    tabs: [
-      ["status", "mdi:car"],
-      ["driving", "mdi:steering"],
-      ["climate", "mdi:air-conditioner"],
-      ["charging", "mdi:battery-charging"],
-    ],
     status: {
       base: "s07/overlook/Ocar1.png",
       layers: {
@@ -178,7 +163,7 @@ const PANEL_MODEL_LAYOUTS = {
   },
 };
 
-// Entity keys (translation_key) the panel looks up, grouped by platform.
+// Entity keys (translation_key) the card looks up, grouped by platform.
 // Optional keys are skipped when the vehicle does not expose them.
 const PANEL_KEYS = {
   sensor: {
@@ -202,12 +187,16 @@ const PANEL_KEYS = {
     inside_temperature: "inside_temperature",
     outside_temperature: "outside_temperature",
     cabin_humidity: "cabin_humidity",
+    license_plate: "license_plate",
     inside_pm25: "inside_pm25",
     air_quality_level: "air_quality_level",
     updated: "last_updated",
     fuel_level: "fuel_level",
     fuel_range: "fuel_range",
+    fuel_volume: "fuel_volume",
     fuel_tank_capacity: "fuel_tank_capacity",
+    climate_target_temperature: "climate_target_temperature",
+    fan_level: "fan_level",
     tire_front_left: "tire_pressure_front_left",
     tire_front_right: "tire_pressure_front_right",
     tire_rear_left: "tire_pressure_rear_left",
@@ -239,6 +228,8 @@ const PANEL_KEYS = {
     tire_alarm_rear_right: "tire_alarm_rear_right",
     warning_12v_battery: "warning_12v_battery",
     warning_tpms: "warning_tpms",
+    warning_airbag: "warning_airbag",
+    warning_coolant_temperature: "warning_coolant_temperature",
     warning_abs: "warning_abs",
     warning_brake_fluid: "warning_brake_fluid",
     warning_brake: "warning_brake",
@@ -279,11 +270,13 @@ const PANEL_KEYS = {
   image: { vehicle_image: "vehicle_image" },
 };
 
-// Health warnings, in the order the panel lists them, with their icons. The
+// Health warnings, in the order the card lists them, with their icons. The
 // warnings section only renders while at least one of them is active.
 const PANEL_WARNINGS = [
   ["warning_12v_battery", "mdi:car-battery"],
   ["warning_tpms", "mdi:car-tire-alert"],
+  ["warning_airbag", "mdi:airbag"],
+  ["warning_coolant_temperature", "mdi:coolant-temperature"],
   ["warning_abs", "mdi:car-brake-abs"],
   ["warning_brake_fluid", "mdi:car-brake-fluid-level"],
   ["warning_brake", "mdi:car-brake-alert"],

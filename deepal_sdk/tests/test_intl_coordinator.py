@@ -1348,6 +1348,33 @@ async def test_app_condition_overlay_fills_unreported_charge_connection():
 
 
 @pytest.mark.asyncio
+async def test_app_condition_overlay_skips_the_s05_cable_fallback():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+
+    for model_code, series_code in (
+        ("SC6464AAKBEV", None),
+        ("SC6460AAAA7HEV", None),
+        (None, "C857-EU"),
+    ):
+        vehicle = Vehicle(
+            car_id="car-1",
+            vin="VIN",
+            protocol_type="MQTT",
+            model_code=model_code,
+            series_code=series_code,
+        )
+        coordinator.vehicles = [vehicle]
+        app_condition, mqtt_condition = _charge_overlay_pair()
+        client.http_condition = app_condition
+
+        merged = await coordinator._overlay_app_comfort(vehicle, mqtt_condition)
+
+        assert merged.battery.charger_connected is False
+        assert merged.battery.dc_gun_connected is True
+
+
+@pytest.mark.asyncio
 async def test_app_condition_overlay_keeps_reported_charge_connection():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)

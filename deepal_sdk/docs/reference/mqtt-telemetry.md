@@ -130,7 +130,7 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `airPurifierStatus` | `hvac.insideAirQualityLevel` | `climate.air_quality_level` |
 | `airConditioningHairRatings` | `hvac.fanLevel` | `climate.fan_level` |
 | `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` |
-| `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` (`0` not connected, any other reported value connected; states `0`/`5` use these raw fields, except the PHEV rule below) | `battery.charger_connected` |
+| `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` (`0` not connected, any other reported value connected). State `0` ignores these raw fields for every S05; state `5` uses the DC field to choose the gun (see below) | `battery.charger_connected` |
 | `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds `600 A` become unknown; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
 | `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |
 | `remainingFuel` / `remainedOilMile` | `fuel.leftPercent` / `fuel.remainingRange` | `fuel.level_percent` / `fuel.remaining_range_km` |
@@ -152,12 +152,13 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 payload; `parse_condition()` converts it to percent exactly once.
 
 The normalizer reads the vehicle model code from the MQTT envelope (`b.mc`, with `b.modelCode` as a
-fallback) and uses it to select the PHEV gun rule. On an S05 PHEV (`HEV` token without `BEV`),
-`ChrgSts=0` resolves every gun flag to false even when `acChargeGunConnectionState` is stale at `1`
-(observed for hours while driving; a plug/unplug cycle refreshes it). States `1`-`4` stay
+fallback) and uses it to select the PHEV handling for an absent or unrecognized state. On every
+S05, `ChrgSts=0` resolves every gun flag to false even when `acChargeGunConnectionState` is stale
+at `1`: the BEV did so for at least 25 minutes while being driven on 2026-10-30 and the PHEV for
+hours on 2026-10-26, and only a plug/unplug cycle refreshes the field. States `1`-`4` stay
 authoritative and state `5` keeps the cable connected, with the raw DC field selecting the DC gun
-and the AC gun assumed otherwise. A BEV or a response without `b.mc` keeps the generic raw-field
-rule, including the state-`0` cable-connected case.
+and the AC gun assumed otherwise. A response without `b.mc` uses the same state-`0` rule; a PHEV
+keeps the AC gun unknown only when the state is absent or unrecognized.
 
 The S05 PHEV advertises `BatteryMaxSoc`/`#chargeSet` in its function configuration, but neither the
 MQTT payload nor the REST condition carries `maxSocPercent` (2026-10-26 diagnostic). The Home

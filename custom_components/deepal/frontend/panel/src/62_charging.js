@@ -1,31 +1,33 @@
 // Charging view, built from the shared design system: battery and session
-// state, the charging picture, the charge status (enum when the vehicle
-// reports it), current and remaining time, the charge schedule, the charge
-// limit when exposed, and the session summaries the charging sensor exposes
-// as attributes.
+// state, the charge status (enum when the vehicle reports it), current and
+// remaining time, the charge schedule, the charge limit when exposed, and the
+// session summaries the charging sensor exposes as attributes.
 
-DeepalPanel.prototype._renderCharging = function (vehicle) {
+DeepalCardBase.prototype._renderCharging = function (vehicle) {
   const hass = this._hass;
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const t = (key) => this._t(key);
 
   // --- Charging state ------------------------------------------------------
 
-  const charging = isOn(hass, entity("binary_sensor", "charging"));
   const plugged = isOn(hass, entity("binary_sensor", "charger_plugged"));
-  const layout = layoutFor(vehicle)?.charging;
-  const stageHtml = layout
-    ? `<div class="stage stage-charging">
-        <img src="${assetUrl(layout.base, vehicle)}" alt="">
-        ${
-          plugged
-            ? `<img src="${assetUrl(charging ? layout.layers.charging : layout.layers.plugged, vehicle)}" alt="">`
-            : ""
-        }
-        <span class="anim-slot" data-anim="charging_on"></span>
-      </div>`
-    : "";
-
+  const hasChargingData =
+    entity("sensor", "battery") ||
+    entity("sensor", "charge_status") ||
+    entity("binary_sensor", "charging") ||
+    entity("binary_sensor", "charger_plugged") ||
+    entity("sensor", "ac_charge_current") ||
+    entity("sensor", "dc_charge_current") ||
+    entity("sensor", "charge_current") ||
+    entity("sensor", "remaining_time_formatted") ||
+    entity("sensor", "remaining_time") ||
+    entity("sensor", "charge_mode") ||
+    entity("switch", "charge_schedule") ||
+    entity("time", "schedule_start") ||
+    entity("time", "schedule_end") ||
+    entity("number", "charge_limit") ||
+    entity("sensor", "charge_limit_sensor");
+  if (!hasChargingData) return "";
   const metric = (label, value) => `
     <div class="metric">
       <span class="label">${escapeHtml(label)}</span>
@@ -62,9 +64,8 @@ DeepalPanel.prototype._renderCharging = function (vehicle) {
     <div class="section">
       <div class="section-head">
         <ha-icon icon="${PANEL_ICONS.charging}"></ha-icon>
-        <span class="section-title">${escapeHtml(t("tab_charging"))}</span>
+        <span class="section-title">${escapeHtml(t("charging"))}</span>
       </div>
-      ${stageHtml}
       <div class="metrics">${metrics}</div>
     </div>`;
 

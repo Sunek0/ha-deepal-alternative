@@ -11,6 +11,20 @@ Home Assistant custom integration for **My Changan / Deepal** connected vehicles
   in to the app again can invalidate the Home Assistant session. Use a **secondary account** shared
   from your main account to avoid this (see below).
 
+## What's new in 1.7.0
+
+- **One card for everything.** `custom:deepal-card` replaces the sidebar panel, the generated
+  dashboard strategy and the compact card. It has a configurable hero (plant, isometric, photos or
+  the vehicle image entity), configurable sections and actions, climate and tyre dialogs, and an
+  in-card settings panel. Existing dashboards must switch to `custom:deepal-card`; entities,
+  services, unique ids and `device_id` values are unchanged.
+- **Six card languages.** English, Spanish, German, French, Italian and Portuguese, following the
+  Home Assistant language or selectable per card.
+- **Diagnostics download fixed.** The capture link now downloads the bundle instead of closing the
+  options flow and falling back to the default dashboard.
+- **One-click HACS install.** The badge below opens this repository in HACS and offers to add it as
+  a custom repository.
+
 ## Requirements
 
 - Home Assistant 2026.8.0.
@@ -90,60 +104,57 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 - One image entity per vehicle: the API picture when it loads, and a bundled per-model render
   (S05, S07, E07 or a generic Deepal placeholder) served instantly otherwise, so the device
   page always shows a picture even when the API image is slow or missing.
-- The panel and dashboard cards prefer the official per-vehicle layered pack when the integration
-  can download and validate it, with the bundled art as a per-category fallback; animations stay
-  on the bundled WebM files.
+- The dashboard card prefers the official per-vehicle layered pack when the integration can
+  download and validate it, with the bundled art as a per-category fallback; animations stay on the
+  bundled WebM files.
 
-### Using the dashboard, the panel and the cards
+### Using the dashboard card
 
-Three ways to see and control your car; everything is served by the integration itself, with no
-HACS cards, no helpers and no Lovelace resources to configure.
+The integration ships **one configurable card** and nothing else: no sidebar panel, no generated
+dashboard strategy and no second compact card. Everything is served by the integration itself, with
+no HACS cards, no helpers and no Lovelace resources to configure.
 
-**Generated dashboard** — one view per car, nothing to configure:
-
-1. Open **Settings → Dashboards → Add dashboard** and pick **Deepal** under *Community dashboards*
-   (Home Assistant 2026.5+).
-2. Each view shows the complete card plus the sections of that car's model: quick controls, energy
-   graphs (fuel readings on the PHEV), tire pressures, driving and ambience on the models that
-   report them, and a templated alerts card. It rebuilds itself when a car or its entities change.
-   On older Home Assistant versions, create a dashboard in YAML mode with
-   `strategy: {type: custom:deepal}`.
-
-**Sidebar panel** (optional) — no dashboard needed:
-
-1. The setup asks whether to add it (disabled by default); change it later in **Configure → Show
-   the sidebar panel**. Once enabled it is visible to every Home Assistant user, and the
-   integration's **Configure** button keeps opening the options, not the panel.
-2. Open **Deepal** in the sidebar; with several cars, switch them with the header selector. The
-   panel discovers the vehicles and their entities from the Home Assistant registries, so any
-   name, area or language works.
-3. The vitals strip (battery, range, central locking and freshness) stays on top and the tabs are
-   **Status** (layered picture of the car's with the controls, tire pressures, health warnings while one
-   is active and the energy block on fuel cars), **Driving** on the models that report it,
-   **Climate** and **Charging**.
-   Controls that need the remote control PIN (lock, windows, trunk) simply do not appear without
-   it, and missing optional entities hide their own controls.
-
-**Cards** — for your own dashboards:
-
-1. **Edit dashboard → Add card** and pick **Deepal vehicle** (complete, with the panel's views and
-   controls) or **Deepal vehicle (compact)** (vitals with the closure, the state-aware vehicle
-   picture, a climate control, quick actions and a charging strip), then select the car in the form.
-2. By hand:
+1. **Edit dashboard → Add card** and pick **Deepal vehicle**, then select the car in the visual
+   editor. By hand:
    ```yaml
-   type: custom:deepal-card        # or custom:deepal-compact-card
+   type: custom:deepal-card
    device_id: <your vehicle device id>
    ```
-   Both are loaded by the integration itself, so they need no Lovelace resource; the lock control
-   needs the control PIN like the panel.
+2. Open the card's **Settings** button (or the visual editor) to choose the vehicle image style
+   (plant, isometric, photos or the image entity), the sections and their order, the action buttons,
+   the information tiles, the language (automatic, or English, Spanish, German, French, Italian or
+   Portuguese) and the card margins. Climate and tyres open dialogs with the controls and the four
+   tyre pressures; the charging section appears only while the charger is connected.
+3. Settings changed from the card are written to the card YAML when the dashboard is editable and
+   the user is an administrator; otherwise they are stored in the Home Assistant user data for that
+   card. The lock, windows and trunk controls require the remote control PIN.
+
+The card discovers the vehicle and its entities from the Home Assistant registries, so any name,
+area or language works, and the model profiles (S05 EV, S05 PHEV, S07 and generic) only show the
+artwork and sections their vehicle exposes. It uses the official per-vehicle image pack when the
+integration can download it, with the bundled art as fallback.
+
+**Upgrading from 1.6.x:** the sidebar panel, the `custom:deepal` dashboard strategy and the
+`custom:deepal-compact-card` card were removed. Replace them with `custom:deepal-card`; its settings
+reproduce the compact composition and the old hero/sections. Entities, services and `device_id`
+values are unchanged.
 
 **Example dashboard**: `guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready sections
 view built only on the bundled card and core Home Assistant cards; paste it in the raw editor and
 replace the device and entity ids with yours.
 
 Full walkthrough and troubleshooting:
-[generated dashboard, panel, example and cards guide (English)](guides/dashboard-guide.en.md) ·
-[guía del dashboard generado, el panel, el ejemplo y las tarjetas (español)](guides/dashboard-guide.es.md).
+[dashboard card guide (English)](guides/dashboard-guide.en.md) ·
+[guía de la tarjeta del dashboard (español)](guides/dashboard-guide.es.md).
+
+### Community cards
+
+The bundled card is the supported card and the only one the integration serves. If you prefer a
+layout designed specifically for the S05, [Deepal S05 Card](https://github.com/rmxs/deepal-s05-card)
+is an independent community card that reads the same `deepal` entities: state-aware hero, live Car
+View, range and battery rings, climate and tyre popups, diagnostics and its own settings. It is
+installed separately with HACS, is MIT-licensed and is not maintained by this integration; report
+its issues in its own repository.
 
 ### Diagnostics
 
@@ -189,8 +200,11 @@ troubleshooting) is available in every language the integration supports:
 
 ### HACS
 
-1. In HACS, add this repository as a custom repository of type **Integration**:
-   `https://github.com/Sunek0/ha-deepal-alternative`.
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+1. Click the badge (or add this repository as a custom repository of type **Integration**:
+   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
+   offers to add the repository as a custom repository.
 2. Install **Deepal Alternative** and restart Home Assistant.
 3. Add the integration from **Settings > Devices & services**, choose the international platform and
    log in with an email or SMS code (use the secondary account from above).
@@ -273,9 +287,8 @@ automation:
   and keep your backups encrypted.
 - **Vehicle image.** The image entity only downloads `https` URLs from the account payload and does
   not follow redirects; when the image cannot be fetched, the bundled asset is shown.
-- **Panel visibility.** The optional vehicle panel is visible to every Home Assistant user, like
-  the entities themselves. The controls that act on the car require the remote control PIN when
-  one is configured.
+- **Card actions.** The card only reads the integration's entities and calls its services. The
+  controls that act on the car require the remote control PIN when one is configured.
 - **Secondary account.** Running the integration with a secondary My Changan account limits what
   the stored session can do; see the recommended setup section above.
 

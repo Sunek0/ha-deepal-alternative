@@ -190,7 +190,7 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose the official layered pack so the panel can discover it."""
+        """Expose the official layered pack so the card can discover it."""
         manager = self._model_assets
         status = manager.status(self._car_id) if manager is not None else None
         if status is None:

@@ -33,7 +33,7 @@ DATA_MODEL_MANAGERS = "vehicle_model_managers"
 DATA_MODEL_ENTRIES = "vehicle_model_entries"
 DATA_VIEW_REGISTERED = "vehicle_model_view_registered"
 
-#: The panel expects the complete set before a category can be used. A partial
+#: The card expects the complete set before a category can be used. A partial
 #: pack falls back to the bundled art instead of rendering missing layers.
 REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     "status": (
@@ -408,7 +408,7 @@ class VehicleModelAssetManager:
                 if all((tmp_dir / name).is_file() for name in names)
             )
             if not categories:
-                raise ValueError("archive has no complete panel category")
+                raise ValueError("archive has no complete card category")
             meta = {
                 "md5": md5,
                 "categories": list(categories),
@@ -515,7 +515,7 @@ def async_register_vehicle_model_view(hass: HomeAssistant) -> bool:
         return True
     try:
         hass.http.register_view(VehicleModelAssetView(hass))
-    except Exception as err:  # noqa: BLE001 - the panel must never break setup
+    except Exception as err:  # noqa: BLE001 - the card must never break setup
         _LOGGER.warning("Deepal model-asset view registration failed: %s", err)
         return False
     domain_data[DATA_VIEW_REGISTERED] = True

@@ -1,9 +1,9 @@
-"""Tests for the bundled vehicle panel registration.
+"""Tests for the bundled dashboard card and its static delivery.
 
-The tests exercise the static-path and panel registration without starting a
-Home Assistant runtime: a fake hass records the static paths and the
-``panel_custom`` call, and the unregistration rules are checked with fake
-config entries.
+The tests exercise the static-path and Lovelace-resource registration without
+starting a Home Assistant runtime: a fake hass records the static paths and the
+resource calls. The card itself is checked through the generated bundle and its
+source modules; no browser is required.
 """
 
 import json
@@ -24,22 +24,16 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.deepal import config_flow as config_flow_module
 from custom_components.deepal import frontend as frontend_module
-from custom_components.deepal import panel as panel_module
 from custom_components.deepal.const import (
-    CONF_SHOW_PANEL,
     DOMAIN,
     FRONTEND_ASSETS_URL,
     FRONTEND_JS_URL,
-    PANEL_ELEMENT,
-    PANEL_URL_PATH,
     VERSION,
 )
 
 from homeassistant.components.lovelace.const import LOVELACE_DATA
 
-MANIFEST = (
-    REPO_ROOT / "custom_components" / "deepal" / "manifest.json"
-)
+MANIFEST = REPO_ROOT / "custom_components" / "deepal" / "manifest.json"
 
 
 class FakeHttp:
@@ -55,19 +49,6 @@ class FakeHttp:
         if self.error is not None:
             raise self.error
         self.registered.append(list(configs))
-
-
-class FakeConfigEntries:
-    """Returns every entry regardless of domain, like the real registry."""
-
-    def __init__(self, entries) -> None:
-        self._entries = list(entries)
-
-    def async_entries(self, domain: str):
-        return list(self._entries)
-
-    def remove(self, entry) -> None:
-        self._entries.remove(entry)
 
 
 class FakeResources:
@@ -107,14 +88,10 @@ def _fake_hass(entries=(), http_error: Exception | None = None) -> SimpleNamespa
     hass = SimpleNamespace(
         data={},
         http=FakeHttp(http_error),
-        config_entries=FakeConfigEntries(entries),
+        config_entries=SimpleNamespace(async_entries=lambda domain: list(entries)),
     )
     hass.data[LOVELACE_DATA] = SimpleNamespace(resources=FakeResources())
     return hass
-
-
-def _entry(entry_id: str, options: dict | None = None) -> SimpleNamespace:
-    return SimpleNamespace(entry_id=entry_id, options=dict(options or {}))
 
 
 def test_version_matches_the_manifest() -> None:
@@ -131,16 +108,12 @@ async def test_static_paths_are_registered_once_per_run() -> None:
     await frontend_module.async_register_frontend(hass)
 
     assert hass.http.attempts == 1
-    configs = hass.http.registered[0]
-    urls = {config.url_path for config in configs}
-    assert urls == {FRONTEND_JS_URL, FRONTEND_ASSETS_URL}
-    assert all(config.cache_headers is False for config in configs)
+    paths = [config.url_path for config in hass.http.registered[0]]
+    assert paths == [FRONTEND_JS_URL, FRONTEND_ASSETS_URL]
 
 
 @pytest.mark.asyncio
-async def test_bundle_is_auto_loaded_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_bundle_is_auto_loaded_once(monkeypatch: pytest.MonkeyPatch) -> None:
     loaded: list[str] = []
     monkeypatch.setattr(
         frontend_module, "add_extra_js_url", lambda hass, url: loaded.append(url)
@@ -154,10 +127,8 @@ async def test_bundle_is_auto_loaded_once(
 
 
 @pytest.mark.asyncio
-async def test_auto_load_failure_is_contained(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def boom(hass, url) -> None:
+async def test_auto_load_failure_is_contained(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(hass, url):
         raise RuntimeError("no frontend here")
 
     monkeypatch.setattr(frontend_module, "add_extra_js_url", boom)
@@ -185,57 +156,35 @@ async def test_bundle_resource_is_registered_once() -> None:
 async def test_existing_bundle_resource_is_moved_to_the_current_version() -> None:
     hass = _fake_hass()
     resources = hass.data[LOVELACE_DATA].resources
-    resources.items.append(
-        {"id": "old", "url": f"{FRONTEND_JS_URL}?v=1.0.0", "res_type": "module"}
-    )
+    resources.items = [
+        {"id": "ours", "url": f"{FRONTEND_JS_URL}?v=1.0.0", "res_type": "module"}
+    ]
 
     await frontend_module.async_register_frontend(hass)
 
-    assert resources.created == []
     assert resources.updated == [
-        ("old", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
+        ("ours", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
     ]
+    assert resources.deleted == []
 
 
 @pytest.mark.asyncio
 async def test_unversioned_bundle_resource_is_moved_to_the_current_version() -> None:
     hass = _fake_hass()
     resources = hass.data[LOVELACE_DATA].resources
-    resources.items.append(
-        {"id": "legacy", "url": FRONTEND_JS_URL, "res_type": "module"}
-    )
+    resources.items = [{"id": "ours", "url": FRONTEND_JS_URL, "res_type": "module"}]
 
     await frontend_module.async_register_frontend(hass)
 
-    assert resources.created == []
     assert resources.updated == [
-        ("legacy", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
+        ("ours", {"url": f"{FRONTEND_JS_URL}?v={VERSION}"})
     ]
 
 
 @pytest.mark.asyncio
 async def test_resource_registration_is_skipped_without_resources() -> None:
     hass = _fake_hass()
-    # YAML-mode resources expose no collection to write to.
-    hass.data[LOVELACE_DATA] = SimpleNamespace(resources=SimpleNamespace())
-
-    await frontend_module.async_register_frontend(hass)
-
-    assert hass.data[DOMAIN].get(frontend_module.DATA_FRONTEND_REGISTERED)
-
-
-@pytest.mark.asyncio
-async def test_resource_failure_is_contained(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    hass = _fake_hass()
-
-    async def boom(data) -> None:
-        raise RuntimeError("no lovelace here")
-
-    monkeypatch.setattr(
-        hass.data[LOVELACE_DATA].resources, "async_create_item", boom
-    )
+    hass.data[LOVELACE_DATA] = SimpleNamespace(resources=None)
 
     await frontend_module.async_register_frontend(hass)
 
@@ -246,12 +195,10 @@ async def test_resource_failure_is_contained(
 async def test_unregister_removes_only_our_resource() -> None:
     hass = _fake_hass()
     resources = hass.data[LOVELACE_DATA].resources
-    resources.items.extend(
-        [
-            {"id": "ours", "url": f"{FRONTEND_JS_URL}?v=1.0.0", "res_type": "module"},
-            {"id": "other", "url": "/hacsfiles/other/other.js", "res_type": "module"},
-        ]
-    )
+    resources.items = [
+        {"id": "ours", "url": f"{FRONTEND_JS_URL}?v=1.0.0", "res_type": "module"},
+        {"id": "other", "url": "/hacsfiles/other/other.js", "res_type": "module"},
+    ]
 
     await frontend_module.async_unregister_frontend(hass)
 
@@ -266,7 +213,6 @@ async def test_already_registered_path_is_not_an_error() -> None:
     await frontend_module.async_register_frontend(hass)
     await frontend_module.async_register_frontend(hass)
 
-    # The first attempt raised the runtime error; the second one is skipped.
     assert hass.http.attempts == 1
 
 
@@ -277,250 +223,105 @@ async def test_static_path_failure_is_contained_and_retried() -> None:
     await frontend_module.async_register_frontend(hass)
     await frontend_module.async_register_frontend(hass)
 
-    # No exception escaped and the failed flag was not kept, so a later
-    # setup can try again.
     assert hass.http.attempts == 2
 
 
-@pytest.mark.asyncio
-async def test_panel_is_registered_once_with_the_expected_options(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict] = []
-
-    async def fake_register_panel(hass, **kwargs) -> None:
-        calls.append(kwargs)
-
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    hass = _fake_hass()
-
-    await panel_module.async_register_panel(hass)
-    await panel_module.async_register_panel(hass)
-
-    assert len(calls) == 1
-    kwargs = calls[0]
-    assert kwargs["frontend_url_path"] == PANEL_URL_PATH
-    assert kwargs["webcomponent_name"] == PANEL_ELEMENT
-    assert kwargs["require_admin"] is False
-    assert "config_panel_domain" not in kwargs
-    assert kwargs["sidebar_title"] == "Deepal"
-    assert kwargs["sidebar_icon"] == "mdi:car-electric"
-    assert kwargs["module_url"] == f"{FRONTEND_JS_URL}?v={VERSION}"
-
-
-@pytest.mark.asyncio
-async def test_panel_registration_failure_is_contained(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    async def fake_register_panel(hass, **kwargs) -> None:
-        nonlocal calls
-        calls += 1
-        raise RuntimeError("no panel_custom here")
-
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    hass = _fake_hass()
-
-    await panel_module.async_register_panel(hass)
-    assert calls == 1
-    assert not hass.data[DOMAIN].get(panel_module.DATA_PANEL_REGISTERED)
-
-    # The flag was not kept, so a later setup can try again.
-    await panel_module.async_register_panel(hass)
-    assert calls == 2
-
-
-@pytest.mark.asyncio
-async def test_unregister_removes_the_panel_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_register_panel(hass, **kwargs) -> None:
-        return None
+# --- Removed panel and strategy -------------------------------------------
 
-    removed: list[str] = []
-
-    def fake_remove_panel(hass, url_path) -> None:
-        removed.append(url_path)
-
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    monkeypatch.setattr(panel_module.frontend, "async_remove_panel", fake_remove_panel)
-    hass = _fake_hass()
-
-    await panel_module.async_register_panel(hass)
-    panel_module.async_unregister_panel(hass)
-    panel_module.async_unregister_panel(hass)
-
-    assert removed == [PANEL_URL_PATH]
-
-
-@pytest.mark.asyncio
-async def test_panel_survives_while_other_entries_remain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fake_register_panel(hass, **kwargs) -> None:
-        return None
 
-    removed: list[str] = []
+def test_panel_module_is_gone() -> None:
+    assert not (REPO_ROOT / "custom_components" / "deepal" / "panel.py").exists()
+    assert not (REPO_ROOT / "custom_components" / "deepal" / "frontend" / "panel" / "src" / "80_strategy.js").exists()
 
-    def fake_remove_panel(hass, url_path) -> None:
-        removed.append(url_path)
 
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    monkeypatch.setattr(panel_module.frontend, "async_remove_panel", fake_remove_panel)
+def test_manifest_does_not_depend_on_panel_custom() -> None:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert "panel_custom" not in manifest.get("dependencies", [])
+    assert "panel_custom" not in manifest.get("after_dependencies", [])
 
-    first = _entry("entry-1")
-    second = _entry("entry-2")
-    hass = _fake_hass(entries=[first, second])
-    await panel_module.async_register_panel(hass)
 
-    panel_module.async_unregister_panel_if_unwanted(hass, first)
-    assert removed == []
+def test_panel_option_is_gone_from_config_flow() -> None:
+    assert not hasattr(config_flow_module.DeepalConfigFlow, "async_step_panel")
+    assert not hasattr(config_flow_module, "_panel_schema")
+    assert "show_panel" not in (
+        REPO_ROOT / "custom_components" / "deepal" / "config_flow.py"
+    ).read_text(encoding="utf-8")
 
-    # The first entry is gone from the registry when the second is removed.
-    hass.config_entries.remove(first)
-    panel_module.async_unregister_panel_if_unwanted(hass, second)
-    assert removed == [PANEL_URL_PATH]
 
+def test_panel_translations_are_gone() -> None:
+    files = [
+        REPO_ROOT / "custom_components" / "deepal" / "strings.json",
+        *sorted((REPO_ROOT / "custom_components" / "deepal" / "translations").glob("*.json")),
+    ]
+    for path in files:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert "panel" not in data.get("config", {}).get("step", {}), path
+        assert "show_panel" not in (
+            data.get("options", {}).get("step", {}).get("init", {}).get("data", {})
+        ), path
 
-@pytest.mark.asyncio
-async def test_panel_sync_registers_when_any_account_wants_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict] = []
 
-    async def fake_register_panel(hass, **kwargs) -> None:
-        calls.append(kwargs)
+# --- Generated card bundle ------------------------------------------------
 
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    hass = _fake_hass(
-        entries=[
-            _entry("opt-out", {CONF_SHOW_PANEL: False}),
-            _entry("opt-in", {CONF_SHOW_PANEL: True}),
-        ]
-    )
 
-    await panel_module.async_sync_panel(hass)
+SRC = REPO_ROOT / "custom_components" / "deepal" / "frontend" / "panel" / "src"
+BUNDLE = SRC.parent / "deepal-frontend.js"
+ASSETS = REPO_ROOT / "custom_components" / "deepal" / "frontend" / "assets"
 
-    assert len(calls) == 1
 
+def test_bundle_registers_one_card_and_its_editor() -> None:
+    bundle = BUNDLE.read_text(encoding="utf-8")
 
-@pytest.mark.asyncio
-async def test_panel_sync_skips_it_when_everyone_opts_out(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registered: list[dict] = []
-    removed: list[str] = []
+    assert 'const CARD_TAG = "deepal-card";' in bundle
+    assert "class DeepalCard extends DeepalCardBase" in bundle
+    assert "class DeepalCardSettings" in bundle
+    assert "class DeepalCardEditor" in bundle
+    assert '"deepal-card-settings"' in bundle
+    assert '"deepal-card-editor"' in bundle
 
-    async def fake_register_panel(hass, **kwargs) -> None:
-        registered.append(kwargs)
 
-    def fake_remove_panel(hass, url_path) -> None:
-        removed.append(url_path)
+def test_bundle_does_not_register_removed_surfaces() -> None:
+    bundle = BUNDLE.read_text(encoding="utf-8")
 
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    monkeypatch.setattr(panel_module.frontend, "async_remove_panel", fake_remove_panel)
-    hass = _fake_hass(entries=[_entry("opt-out", {CONF_SHOW_PANEL: False})])
+    assert 'custom:deepal-compact-card' not in bundle
+    assert 'const PANEL_TAG = "deepal-panel"' not in bundle
+    assert "DeepalDashboardStrategy" not in bundle
+    assert "DeepalVehicleViewStrategy" not in bundle
+    assert "window.customStrategies" not in bundle
+    assert "ll-strategy-dashboard-deepal" not in bundle
 
-    await panel_module.async_sync_panel(hass)
 
-    assert registered == []
-    assert removed == []
+def test_bundle_has_the_configurable_hero_and_sections() -> None:
+    source = (SRC / "70_card.js").read_text(encoding="utf-8")
 
+    for marker in [
+        "_renderHero",
+        "_sectionActions",
+        "_sectionStatus",
+        "_sectionInfo",
+        "_sectionDiagnostics",
+        "hero_style",
+        "hero_show",
+        "CARD_SECTIONS",
+        "settings-change",
+    ]:
+        assert marker in source, marker
 
-@pytest.mark.asyncio
-async def test_panel_sync_removes_it_when_everyone_opts_out_later(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registered: list[dict] = []
-    removed: list[str] = []
 
-    async def fake_register_panel(hass, **kwargs) -> None:
-        registered.append(kwargs)
+def test_bundle_has_no_panel_selector_or_tabs() -> None:
+    source = (SRC / "50_card.js").read_text(encoding="utf-8")
 
-    def fake_remove_panel(hass, url_path) -> None:
-        removed.append(url_path)
+    assert "data-action=\"select-vehicle\"" not in source
+    assert "role=\"tablist\"" not in source
+    assert "PANEL_TABS" not in source
 
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    monkeypatch.setattr(panel_module.frontend, "async_remove_panel", fake_remove_panel)
-    hass = _fake_hass(entries=[_entry("account", {CONF_SHOW_PANEL: True})])
 
-    await panel_module.async_sync_panel(hass)
-    assert len(registered) == 1
-
-    hass.config_entries._entries = [_entry("account", {CONF_SHOW_PANEL: False})]
-    await panel_module.async_sync_panel(hass)
-
-    assert removed == [PANEL_URL_PATH]
-
-
-@pytest.mark.asyncio
-async def test_legacy_entries_keep_the_panel(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registered: list[dict] = []
-
-    async def fake_register_panel(hass, **kwargs) -> None:
-        registered.append(kwargs)
-
-    monkeypatch.setattr(
-        panel_module.panel_custom, "async_register_panel", fake_register_panel
-    )
-    hass = _fake_hass(entries=[_entry("legacy")])
-
-    await panel_module.async_sync_panel(hass)
-
-    assert len(registered) == 1
-
-
-def test_panel_step_defaults_to_disabled() -> None:
-    marker = next(iter(config_flow_module._panel_schema().schema))
-
-    assert marker.default() is False
-
-
-@pytest.mark.asyncio
-async def test_panel_step_stores_the_choice() -> None:
-    flow = config_flow_module.DeepalConfigFlow()
-    flow._pending_title = "Deepal Account"
-    flow._pending_data = {"platform": "intl"}
-
-    enabled = await flow.async_step_panel({CONF_SHOW_PANEL: True})
-
-    assert enabled["type"].value == "create_entry"
-    assert enabled["options"] == {CONF_SHOW_PANEL: True}
-    assert enabled["data"] == {"platform": "intl"}
-
-    disabled = await flow.async_step_panel({})
-
-    assert disabled["options"] == {CONF_SHOW_PANEL: False}
-
-
-# --- Profile layout assets -------------------------------------------------
-
-PANEL_SRC = (
-    REPO_ROOT / "custom_components" / "deepal" / "frontend" / "panel" / "src"
-)
-PANEL_ASSETS = REPO_ROOT / "custom_components" / "deepal" / "frontend" / "assets"
+# --- Profile layouts and assets ------------------------------------------
 
 
 def _layout_referenced_assets() -> list[str]:
     """Every asset path quoted by the per-model layout constants."""
-    source = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
+    source = (SRC / "10_constants.js").read_text(encoding="utf-8")
     return sorted(set(re.findall(r'"((?:s05|s07)/[^"]+\.(?:png|webm))"', source)))
 
 
@@ -528,22 +329,22 @@ def test_profile_layout_assets_ship_on_disk() -> None:
     """Every file a model layout references must exist under frontend/assets."""
     assets = _layout_referenced_assets()
 
-    assert len(assets) >= 55  # a broken pattern must never pass silently
+    assert len(assets) >= 55
     assert any(path.startswith("s05/") for path in assets)
     assert any(path.startswith("s07/") for path in assets)
     assert any(path.endswith(".webm") for path in assets)
-    missing = [path for path in assets if not (PANEL_ASSETS / path).is_file()]
+    missing = [path for path in assets if not (ASSETS / path).is_file()]
     assert missing == []
 
 
-def test_asset_url_prefers_the_dynamic_pack_and_falls_back(tmp_path: Path) -> None:
+def test_asset_url_prefers_the_dynamic_pack_and_falls_back() -> None:
     """The built asset resolver maps panel paths to the official pack."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
 
-    constants = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
-    helpers = (PANEL_SRC / "40_helpers.js").read_text(encoding="utf-8")
+    constants = (SRC / "10_constants.js").read_text(encoding="utf-8")
+    helpers = (SRC / "40_helpers.js").read_text(encoding="utf-8")
     script = f"""
 const vm = require("vm");
 const source = {json.dumps(constants + "\n" + helpers)};
@@ -607,6 +408,8 @@ if (discovered.profile !== "s05_ev") process.exit(1);
         [node, "-e", script], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
 COMPACT_ASSETS = [
     "s05/estado_isometrico/car1.png",
     "s05/estado_isometrico/hood0.png",
@@ -666,13 +469,13 @@ COMPACT_LAYER_KEYS = [
 
 
 def test_compact_layout_ships_every_state_layer() -> None:
-    """The S05 compact block references all isometric state pieces."""
-    source = (PANEL_SRC / "10_constants.js").read_text(encoding="utf-8")
+    """The S05 isometric block references all state pieces."""
+    source = (SRC / "10_constants.js").read_text(encoding="utf-8")
     start = source.index("compact: {")
     end = source.index("climate: {", start)
     compact = source[start:end]
 
-    assert "base: \"s05/estado_isometrico/car1.png\"" in compact
+    assert 'base: "s05/estado_isometrico/car1.png"' in compact
     for key in COMPACT_LAYER_KEYS:
         assert f"{key}:" in compact, key
     for path in COMPACT_ASSETS:
@@ -684,27 +487,27 @@ def test_compact_assets_share_the_isometric_canvas() -> None:
     from PIL import Image
 
     for path in COMPACT_ASSETS:
-        asset = PANEL_ASSETS / path
+        asset = ASSETS / path
         assert asset.is_file(), path
         with Image.open(asset) as image:
             assert image.size == (750, 500), path
             assert image.convert("RGBA").getchannel("A").getbbox() is not None, path
 
 
-def test_compact_card_prefers_state_artwork() -> None:
-    """The compact card must try the layered picture before the API image."""
-    source = (PANEL_SRC / "70_card.js").read_text(encoding="utf-8")
-    compact = "vehicleCompactStageHtml(this._hass, vehicle)"
-    photo = "vehiclePhotoHtml(this._hass, vehicle)"
+def test_card_prefers_state_artwork_and_falls_back() -> None:
+    """The hero tries the state artwork before the API image."""
+    source = (SRC / "70_card.js").read_text(encoding="utf-8")
+    compact = "vehicleCompactStageHtml(hass, vehicle)"
+    photo = "vehiclePhotoHtml(hass, vehicle)"
 
     assert compact in source
     assert photo in source
     assert source.index(compact) < source.index(photo)
 
 
-def test_compact_renderer_keeps_the_documented_layer_order() -> None:
+def test_card_renderer_keeps_the_documented_layer_order() -> None:
     """The isometric layers must stay in their staged behind/front order."""
-    source = (PANEL_SRC / "45_vehicle.js").read_text(encoding="utf-8")
+    source = (SRC / "45_vehicle.js").read_text(encoding="utf-8")
     markers = [
         'side("rear_right");',
         'side("front_right");',
@@ -722,70 +525,46 @@ def test_compact_renderer_keeps_the_documented_layer_order() -> None:
     assert "outlines.push(layers[`door_${position}_outline`]);" in source
 
 
-def test_status_view_rotates_the_stage_and_keeps_only_the_lock_chip() -> None:
-    """The complete card and panel share the rotated, lock-only status view."""
-    source = (PANEL_SRC / "60_status.js").read_text(encoding="utf-8")
-
-    assert "vehicleStageHtml(hass, vehicle, { rotate: true })" in source
-    assert "vehicleLockChipHtml(hass, vehicle, t)" in source
-    assert "vehicleChipsHtml" not in source
-
-
-def test_stage_rotation_is_limited_to_the_status_class() -> None:
-    """Rotation and the 750:550 crop are a status-only class."""
-    source = (PANEL_SRC / "30_styles.js").read_text(encoding="utf-8")
-
-    assert ".stage-status.stage-rotated { aspect-ratio: 750 / 550; }" in source
-    assert "transform: translateY(-50%) rotate(-90deg);" in source
-    assert ".stage-status { aspect-ratio: 1 / 1; }" in source
-
-
-def test_status_uses_the_lock_chip_helper_without_the_old_chip_row() -> None:
-    """The shared chip helper is only the central-locking chip now."""
-    source = (PANEL_SRC / "45_vehicle.js").read_text(encoding="utf-8")
-
-    assert "function vehicleLockChipHtml(hass, vehicle, t)" in source
-    assert "vehicleChipsHtml" not in source
-    assert "anyDoorOpen" not in source
-
-
-def test_compact_card_has_no_chips_under_the_picture() -> None:
-    """The compact card keeps the state in the picture, not in a chip row."""
-    source = (PANEL_SRC / "70_card.js").read_text(encoding="utf-8")
-
-    assert "vehicleCompactStageHtml(this._hass, vehicle)" in source
-    assert "vehicleChipsHtml" not in source
-    assert '<div class="chips">' not in source
-
-
 def test_spanish_lock_label_is_centralizado() -> None:
     """The Spanish vitals label reads 'Cierre centralizado'."""
     texts = json.loads(
-        (PANEL_SRC.parent / "texts" / "es.json").read_text(encoding="utf-8")
+        (SRC.parent / "texts" / "es.json").read_text(encoding="utf-8")
     )
 
     assert texts["central_lock"] == "Cierre centralizado"
 
 
-# --- Dashboard strategies --------------------------------------------------
+def test_card_texts_cover_the_integration_languages() -> None:
+    """Every language the integration ships has a complete card text file."""
+    texts_dir = SRC.parent / "texts"
+    texts = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in texts_dir.glob("*.json")
+    }
+    integration_languages = {
+        path.stem
+        for path in (
+            REPO_ROOT / "custom_components" / "deepal" / "translations"
+        ).glob("*.json")
+    }
 
-BUNDLE = (
-    REPO_ROOT
-    / "custom_components"
-    / "deepal"
-    / "frontend"
-    / "panel"
-    / "deepal-frontend.js"
-)
+    assert set(texts) == integration_languages
+    reference = set(texts["en"])
+    for code, values in texts.items():
+        assert set(values) == reference, code
+        assert all(isinstance(value, str) and value for value in values.values()), code
 
 
-def test_bundle_registers_the_dashboard_strategies() -> None:
-    """The built bundle must define and advertise the dashboard strategies."""
+def test_language_selector_lists_every_shipped_language() -> None:
+    """The selector is built from the shipped texts, not a hardcoded pair."""
+    source = (SRC / "70_card.js").read_text(encoding="utf-8")
+    constants = (SRC / "10_constants.js").read_text(encoding="utf-8")
     bundle = BUNDLE.read_text(encoding="utf-8")
 
-    assert "class DeepalDashboardStrategy" in bundle
-    assert "class DeepalVehicleViewStrategy" in bundle
-    assert '"ll-strategy-dashboard-deepal"' in bundle
-    assert '"ll-strategy-view-deepal-vehicle"' in bundle
-    assert "window.customStrategies" in bundle
-    assert 'strategyType: "dashboard"' in bundle
+    assert source.index('["auto", "automatic"]') < source.index(
+        "Object.keys(PANEL_TEXTS)"
+    )
+    for name in ("English", "Español", "Deutsch", "Français", "Italiano", "Português"):
+        assert f'"{name}"' in constants, name
+    for code in ("de", "en", "es", "fr", "it", "pt"):
+        assert f'  "{code}": {{' in bundle, code

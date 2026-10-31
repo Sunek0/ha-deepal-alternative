@@ -338,7 +338,7 @@ Mapping:
 | `vehicleStatus.steeringWheelHeater` | Steering wheel heater (`!= 0`) | `climate.steering_wheel_heater_on` |
 | `vehicleStatus.steeringWheelHeaterLevel` | Heater level | `climate.steering_wheel_heater_level` |
 | `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` (raw string) |
-| `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state). The S05 PHEV ignores it for the cable state because it reports `3` while unplugged too; the MQTT `ChrgSts` path is authoritative | `battery.charger_connected` fallback (`false` for the PHEV without a reliable status) |
+| `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state). The S05 BEV and PHEV ignore it for the cable state because both report it while unplugged; the MQTT `ChrgSts` path is authoritative | `battery.charger_connected` fallback (`false` for an S05 without a reliable status) |
 | `charge.dcChargeGunConnectStatus` | DC gun (`0` not connected, any nonzero value connected) | `battery.dc_gun_connected` |
 | `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
@@ -373,10 +373,12 @@ Notes:
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.
 - The original payload is kept in `VehicleCondition.raw_data`.
-- **S05 PHEV:** `chargeConStatus=3` was reported in every REST condition of the 2026-10-26
-  diagnostic, including while unplugged. The parser accepts a `model_code` argument; when it
-  identifies a PHEV and the condition has no reliable `chargeStatus`, the cable flag is `false` and
-  the AC gun stays unknown. The raw value remains in `raw_data` for diagnostics.
+- **S05 BEV and PHEV:** the REST `chargeConStatus` is a last-known latch, not a live cable state.
+  The PHEV returned `3` in every REST condition of the 2026-10-26 diagnostic, including while
+  unplugged; the BEV returned `3` while driving and `1` for at least 17 minutes after the unplug
+  on 2026-10-30. The parser accepts a `model_code` argument; when it identifies an S05 and the
+  condition has no reliable `chargeStatus`, the cable flag is `false` and the AC gun stays unknown.
+  The raw value remains in `raw_data` for diagnostics.
 
 ## 8. Vehicle capabilities
 

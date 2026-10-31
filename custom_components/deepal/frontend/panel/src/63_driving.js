@@ -3,7 +3,7 @@
 // hides itself when its entity is missing or unknown, so a vehicle that
 // reports only part of them still renders correctly.
 
-DeepalPanel.prototype._renderDriving = function (vehicle) {
+DeepalCardBase.prototype._renderDriving = function (vehicle) {
   const hass = this._hass;
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const t = (key) => this._t(key);
@@ -49,8 +49,6 @@ DeepalPanel.prototype._renderDriving = function (vehicle) {
   const driving = section(PANEL_ICONS.driving, "driving", drivingMetrics);
   const ambience = section(PANEL_ICONS.ambience, "ambience", ambienceMetrics);
 
-  if (!driving && !ambience) {
-    return `<div class="empty">${escapeHtml(t("unavailable"))}</div>`;
-  }
+  if (!driving && !ambience) return "";
   return `${driving}${ambience}`;
 };

@@ -160,16 +160,6 @@
         "data_description": {
           "access_token": "New long-lived SDA access token. The old token is replaced only after it is verified."
         }
-      },
-      "panel": {
-        "title": "Sidebar panel",
-        "description": "Choose whether the integration adds a Deepal panel to the Home Assistant sidebar. You can change this later in the integration options.",
-        "data": {
-          "show_panel": "Show the sidebar panel"
-        },
-        "data_description": {
-          "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
-        }
       }
     },
     "error": {
@@ -199,8 +189,7 @@
           "enable_api_logging": "Log API traffic",
           "wake": "Wake the vehicle when needed",
           "enable_location": "Fetch the vehicle location",
-          "environment": "Regional environment",
-          "show_panel": "Show the sidebar panel"
+          "environment": "Regional environment"
         },
         "description": "Tune polling and diagnostics. The control PIN enables signed remote commands; the diagnostic options change how the API sees the client and should only be touched while troubleshooting.\n\n{diagnostics_status}",
         "data_description": {
@@ -209,8 +198,7 @@
           "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number hidden. Enable only while troubleshooting.",
           "wake": "Wake a sleeping MQTT vehicle before refreshing or sending a PIN command. Enabled by default; disable it to protect the 12 V battery if you refresh very often.",
           "enable_location": "Request and expose the vehicle position. European vehicles currently report no location, so the tracker may stay unknown; the option targets servers that expose it.",
-          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe.",
-          "show_panel": "Adds a Deepal page to the sidebar for every Home Assistant user."
+          "environment": "Regional gateway set used for the international API. Europe by default; entries that stored the removed EU migration or preproduction environments fall back to Europe."
         },
         "sections": {
           "diagnostics": {

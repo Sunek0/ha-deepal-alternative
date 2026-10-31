@@ -1,6 +1,6 @@
 // Shared animation layer: the profile clips (air start, seat ventilation and
 // battery capacity) rendered as progressive enhancement over the matching
-// static layers. The panel re-renders by replacing its shadow HTML, so every
+// static layers. The card re-renders by replacing its shadow HTML, so every
 // <video> lives in a persistent host node that is re-appended after each
 // render and moved into the current stage slot; a clip only plays when its
 // transition becomes true (never on page loads or tab changes) and it never
@@ -8,7 +8,7 @@
 // prefers reduced motion, the static layers stay visible and nothing else
 // changes.
 
-DeepalPanel.prototype._animationsEnabled = function () {
+DeepalCardBase.prototype._animationsEnabled = function () {
   if (typeof window === "undefined") return false;
   if (window.DEEPAL_DISABLE_ANIMATIONS) return false;
   try {
@@ -22,7 +22,7 @@ DeepalPanel.prototype._animationsEnabled = function () {
 };
 
 /** Persistent node that parks the <video> elements between re-renders. */
-DeepalPanel.prototype._animationHost = function () {
+DeepalCardBase.prototype._animationHost = function () {
   if (!this._animHost) {
     this._animHost = document.createElement("div");
     this._animHost.className = "anim-host";
@@ -32,7 +32,7 @@ DeepalPanel.prototype._animationHost = function () {
 };
 
 /** Cached <video> of one clip for one vehicle. */
-DeepalPanel.prototype._animationVideo = function (vehicle, key, source) {
+DeepalCardBase.prototype._animationVideo = function (vehicle, key, source) {
   const cacheKey = `${vehicle.deviceId}:${key}`;
   let video = this._animVideos[cacheKey];
   if (!video) {
@@ -57,7 +57,7 @@ DeepalPanel.prototype._animationVideo = function (vehicle, key, source) {
 };
 
 /** Transition-relevant state of one vehicle. */
-DeepalPanel.prototype._transitionStates = function (vehicle) {
+DeepalCardBase.prototype._transitionStates = function (vehicle) {
   const hass = this._hass || {};
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const climateId = entity("climate", "cabin");
@@ -80,7 +80,7 @@ DeepalPanel.prototype._transitionStates = function (vehicle) {
 };
 
 /** Place a clip and play it once (used for a transition that just happened). */
-DeepalPanel.prototype._playAnimation = function (vehicle, key) {
+DeepalCardBase.prototype._playAnimation = function (vehicle, key) {
   const video = this._animVideos[`${vehicle.deviceId}:${key}`];
   if (!video || !video.closest || !video.closest(".anim-slot")) return;
   video.hidden = false;
@@ -101,8 +101,9 @@ DeepalPanel.prototype._playAnimation = function (vehicle, key) {
  * Move every clip of the current model into its stage slot (or park it) and
  * play the clips whose transition just became true.
  */
-DeepalPanel.prototype._syncAnimations = function () {
+DeepalCardBase.prototype._syncAnimations = function () {
   const vehicle = this._vehicle;
+  if (!vehicle) return;
   const layout = layoutFor(vehicle);
   const animations = (layout && layout.animations) || {};
   const host = this._animationHost();
@@ -144,7 +145,7 @@ DeepalPanel.prototype._syncAnimations = function () {
  * transparency survives (browsers that ignore VP9 alpha return opaque pixels
  * and fall back to the static layers).
  */
-DeepalPanel.prototype._startAnimationProbe = function (source) {
+DeepalCardBase.prototype._startAnimationProbe = function (source) {
   if (this._animProbeStarted) return;
   this._animProbeStarted = true;
   const probe = document.createElement("video");

@@ -6410,8 +6410,11 @@ def test_model_code_from_payload_reads_the_mqtt_envelope():
     assert DeepalIntlClient._model_code_from_payload({}) is None
 
 
+@pytest.mark.parametrize(
+    "model_code", ["SC6460AAAA7HEV", "SC6464AAKBEV", None]
+)
 @pytest.mark.asyncio
-async def test_s05_mqtt_condition_applies_the_phev_gun_rule():
+async def test_s05_mqtt_condition_ignores_the_stale_ac_field(model_code):
     raw_params = {
         "soc": 71,
         "ChrgSts": 0,
@@ -6430,7 +6433,7 @@ async def test_s05_mqtt_condition_applies_the_phev_gun_rule():
             params=dict(raw_params),
             source="legacy-mqtt",
             variants={"legacy-mqtt": dict(raw_params)},
-            model_code="SC6460AAAA7HEV",
+            model_code=model_code,
         )
 
     client = _client(lambda request: httpx.Response(200, json={}))
@@ -6447,7 +6450,7 @@ async def test_s05_mqtt_condition_applies_the_phev_gun_rule():
     assert condition.battery.dc_gun_connected is False
 
 
-def test_parse_condition_ignores_the_phev_rest_charge_connection():
+def test_parse_condition_ignores_the_s05_rest_charge_connection():
     client = _client(lambda request: httpx.Response(200, json={}))
     raw = {
         "vehicleStatus": {"soc": 25},
@@ -6461,10 +6464,20 @@ def test_parse_condition_ignores_the_phev_rest_charge_connection():
     assert phev.raw_data["charge"]["chargeConStatus"] == 3
 
     bev = client.parse_condition(raw, "car-1", model_code="SC6464AAKBEV")
-    assert bev.battery.charger_connected is True
+    assert bev.battery.charger_connected is False
+    assert bev.battery.ac_gun_connected is None
+    assert bev.battery.dc_gun_connected is False
+    assert bev.raw_data["charge"]["chargeConStatus"] == 3
 
     generic = client.parse_condition(raw, "car-1")
     assert generic.battery.charger_connected is True
+
+    state_zero = client.parse_condition(
+        {"charge": {"chargeStatus": 0, "chargeConStatus": True}},
+        "car-1",
+        model_code="SC6464AAKBEV",
+    )
+    assert state_zero.battery.charger_connected is False
 
     unknown_unplugged = client.parse_condition(
         {"charge": {"chargeStatus": 9, "chargeConStatus": False}},

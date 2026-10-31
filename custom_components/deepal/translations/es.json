@@ -160,16 +160,6 @@
         "data_description": {
           "access_token": "Nuevo access token SDA de larga duración. El anterior solo se reemplaza tras verificarlo."
         }
-      },
-      "panel": {
-        "title": "Panel en la barra lateral",
-        "description": "Elige si la integración añade un panel de Deepal a la barra lateral de Home Assistant. Puedes cambiarlo más tarde en las opciones de la integración.",
-        "data": {
-          "show_panel": "Mostrar el panel en la barra lateral"
-        },
-        "data_description": {
-          "show_panel": "Añade una página de Deepal a la barra lateral para todos los usuarios de Home Assistant."
-        }
       }
     },
     "error": {
@@ -199,8 +189,7 @@
           "enable_api_logging": "Registrar tráfico API",
           "wake": "Despertar el vehículo cuando haga falta",
           "enable_location": "Obtener la ubicación del coche",
-          "environment": "Entorno regional",
-          "show_panel": "Mostrar el panel en la barra lateral"
+          "environment": "Entorno regional"
         },
         "description": "Ajusta el sondeo y los diagnósticos. El PIN de control habilita los comandos remotos firmados; las opciones de diagnóstico cambian cómo ve la API al cliente, tócalas solo al solucionar problemas.\n\n{diagnostics_status}",
         "data_description": {
@@ -209,8 +198,7 @@
           "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie ocultos. Actívalo solo al solucionar problemas.",
           "wake": "Despertar un vehículo MQTT dormido antes de actualizar o enviar un comando con PIN. Activado por defecto; desactívalo para cuidar la batería de 12 V si actualizas muy a menudo.",
           "enable_location": "Solicita y expone la posición del coche. Actualmente los vehículos europeos no la envían, así que el rastreador puede quedarse desconocido; está pensado para servidores que sí la expongan.",
-          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto.",
-          "show_panel": "Añade una página de Deepal a la barra lateral para todos los usuarios de Home Assistant."
+          "environment": "Conjunto de gateways regionales para la API internacional. Europa por defecto."
         },
         "sections": {
           "diagnostics": {

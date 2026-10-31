@@ -72,6 +72,11 @@ appears in the Home Assistant sidebar.
 
 ### 6. Add the repository to HACS
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+The badge opens HACS on your instance and offers to add the repository as a custom repository. If
+you prefer to add it by hand:
+
 1. In Home Assistant, open the **HACS** tab.
 2. Open the three-dot menu (⋮) in the top right corner and choose **Custom repositories**.
 3. Paste the repository URL:
@@ -122,24 +127,24 @@ Assistant to create their entities:
 - The commands that depend on the PIN (doors, windows, trunk) are signed with the PIN you created
   with the secondary account; if they fail, recheck step 9.
 
-### 11. The vehicle panel
+### 11. The vehicle card
 
-The integration ships its own panel, with no dashboard YAML and no extra cards:
+The integration ships **one configurable card**, `custom:deepal-card`; there is no sidebar panel,
+generated dashboard or compact card any more.
 
-- The panel is **optional**: the setup asks whether to add it (disabled by default) and the
-  integration options can change it later. With the panel enabled, **Deepal** appears in the
-  sidebar for every Home Assistant user; the **Configure** button opens the integration options
-  (enable or disable the panel there).
-- Tabs: **Status** (vehicle picture, doors, windows, trunk, hood, lights and tires), **Climate**
-  (temperature, seats and steering wheel) and **Charging** (battery, cable, current, time left and
-  the tracked sessions).
+- Add it from **Edit dashboard → Add card → Deepal vehicle** and select the car in the visual
+  editor (the form fills in the `device_id`).
+- In the card **Settings** choose what appears on top (name, plate, range, closure, cloud and
+  freshness), the image style (**plant**, **isometric**, photos or the vehicle image entity) and
+  the sections below (actions, status, climate, charging, driving, energy, information, diagnostics
+  and tyres), their order and visibility.
+- The card discovers the car and its entities from the Home Assistant registries, so it works with
+  any name, area or language and only shows that model's artwork and sections.
 - Door, window and trunk controls only appear when you saved the PIN (step 9); lights, horn,
   climate, seats and steering wheel work without a PIN.
 
-For the example dashboard (which needs nothing beyond the integration) and the Deepal cards — the
-complete `deepal-card` (vitals and the panel's three tabs) and the compact `deepal-compact-card`
-(vitals, picture, chips and quick actions) — see the
-**[panel, example dashboard and cards guide](dashboard-guide.en.md)**.
+For the example dashboard and every card setting, see the
+**[dashboard card guide](dashboard-guide.en.md)**.
 
 ## Notes and troubleshooting
 

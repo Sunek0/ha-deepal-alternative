@@ -1,10 +1,10 @@
-"""Serve the bundled vehicle panel bundle and its view assets.
+"""Serve the bundled vehicle card and its view assets.
 
-The panel is a plain JavaScript custom element shipped with the integration.
+The card is a plain JavaScript custom element shipped with the integration.
 Home Assistant can only load it from a URL, so the integration publishes one
 static path for the built bundle and one for the view assets. Registration is
 idempotent per Home Assistant run and contained: a failure only logs, so
-integration setup and the entities keep working without the panel.
+integration setup and the entities keep working without the card.
 """
 
 from __future__ import annotations
@@ -109,11 +109,11 @@ async def async_unregister_frontend(hass: HomeAssistant) -> None:
 async def async_register_frontend(hass: HomeAssistant) -> None:
     """Publish the frontend bundle and its assets as static paths.
 
-    The bundle carries the sidebar panel and the dashboard card; it is also
-    auto-loaded through ``frontend.add_extra_js_url`` so dashboards can use
-    the card without a Lovelace resource. Safe to call on every entry setup:
-    the paths are registered once per Home Assistant run, and a failure is
-    logged but never allowed to break the integration.
+    The bundle carries the dashboard card; it is also auto-loaded through
+    ``frontend.add_extra_js_url`` so dashboards can use the card without a
+    Lovelace resource. Safe to call on every entry setup: the paths are
+    registered once per Home Assistant run, and a failure is logged but never
+    allowed to break the integration.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
     if domain_data.get(DATA_FRONTEND_REGISTERED):

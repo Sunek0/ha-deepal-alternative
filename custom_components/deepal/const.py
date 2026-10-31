@@ -50,17 +50,12 @@ CONF_DIAGNOSTICS_ACTION = "diagnostics_action"
 CONF_DIAGNOSTICS_CONFIRM_DELETE = "diagnostics_confirm_delete"
 CONF_ENABLE_LOCATION = "enable_location"
 CONF_WAKE = "wake"
-CONF_SHOW_PANEL = "show_panel"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 300  # seconds (5 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 DEFAULT_WAKE = True
-# New entries start without the sidebar panel (the setup flow asks for it).
-# A missing preference means the entry predates the option, so the panel is
-# kept for those entries.
-DEFAULT_SHOW_PANEL = False
 
 # Vehicle location: opt-in and off by default (European vehicles currently do
 # not report a position; the option targets servers that expose it).
@@ -98,12 +93,8 @@ DIAGNOSTICS_DOWNLOAD_TTL_MINUTES = 10
 MANUFACTURER = "Changan Auto"
 DEFAULT_MODEL = "Deepal S05 Max"
 
-# Bundled frontend panel and dashboard card
-PANEL_URL_PATH = "deepal-panel"
-PANEL_ELEMENT = "deepal-panel"
+# Bundled dashboard card
 FRONTEND_JS_FILE = "deepal-frontend.js"
-PANEL_SIDEBAR_TITLE = "Deepal"
-PANEL_SIDEBAR_ICON = "mdi:car-electric"
 FRONTEND_URL_PATH = "/deepal/frontend"
 FRONTEND_JS_URL = f"{FRONTEND_URL_PATH}/{FRONTEND_JS_FILE}"
 FRONTEND_ASSETS_URL = f"{FRONTEND_URL_PATH}/assets"

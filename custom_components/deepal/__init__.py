@@ -25,7 +25,6 @@ from .diagnostics_capture import (
     async_shutdown_capture,
 )
 from .frontend import async_register_frontend, async_unregister_frontend
-from .panel import async_sync_panel, async_unregister_panel_if_unwanted
 from .const import (
     DOMAIN,
     PLATFORM_SDA,
@@ -461,11 +460,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
         )
     _sync_mqtt_reauth_issue(hass, entry, coordinator)
 
-    # The panel and its assets are an addition: registration is contained and
-    # happens once per Home Assistant run, even with several entries. Whether
-    # the panel shows depends on the accounts' stored preference.
+    # The card and its assets are an addition: registration is contained and
+    # happens once per Home Assistant run, even with several entries.
     await async_register_frontend(hass)
-    await async_sync_panel(hass)
 
     platforms = _platforms(entry)
     _LOGGER.debug(
@@ -522,7 +519,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> N
     if manager is not None:
         await manager.async_remove_cache()
     ir.async_delete_issue(hass, DOMAIN, _mqtt_reauth_issue_id(entry))
-    async_unregister_panel_if_unwanted(hass, entry)
     if not any(
         other.entry_id != entry.entry_id
         for other in hass.config_entries.async_entries(DOMAIN)

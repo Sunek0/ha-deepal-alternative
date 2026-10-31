@@ -1,4 +1,4 @@
-// Shared vehicle rendering used by the sidebar panel and the dashboard card:
+// Shared vehicle rendering used by the dashboard card:
 // the layered status picture, the state chips and the pointer-freeze helper
 // that keeps clicks reliable while states update.
 
@@ -179,20 +179,7 @@ function vehicleHeroHtml(vehicle) {
   return "";
 }
 
-/**
- * Central-locking chip displayed below the status picture, or "" when the
- * vehicle has no lock entity or its state is unknown.
- */
-function vehicleLockChipHtml(hass, vehicle, t) {
-  const locked = lockStateFor(hass, vehicle);
-  if (locked === null) return "";
-  return `<span class="chip ${locked ? "" : "warn"}">
-    <ha-icon icon="${locked ? PANEL_ICONS.lock : PANEL_ICONS.unlock}"></ha-icon>
-    ${escapeHtml(locked ? t("locked") : t("unlocked"))}
-  </span>`;
-}
-
-/** Locked state shared by the vitals strip and the lock control. */
+/** Locked state used by the hero chip and the lock control. */
 function lockStateFor(hass, vehicle) {
   const lockId = entityFor(vehicle, "lock", "doors");
   const lockState = lockId ? stateFor(hass, lockId) : null;
@@ -215,105 +202,4 @@ function chargeStatusText(hass, vehicle, t) {
     return t("plugged");
   }
   return t("not_plugged");
-}
-
-/**
- * Persistent vitals: battery (with a charging bolt), range, lock state and
- * data freshness. Rendered on every tab, above the segmented control. The
- * dashboard cards pass `{ lock: false }` to leave the lock state to their
- * own state chips.
- */
-function vitalsHtml(hass, vehicle, t, options = {}) {
-  const entity = (domain, key) => entityFor(vehicle, domain, key);
-  const vital = (label, value, icon, cls = "", title = "") => `
-    <div class="vital ${cls}" title="${escapeHtml(title)}">
-      <ha-icon icon="${icon}"></ha-icon>
-      <div class="vital-body">
-        <span class="vital-label">${escapeHtml(label)}</span>
-        <span class="vital-value">${escapeHtml(value ?? "—")}</span>
-      </div>
-    </div>`;
-  const items = [];
-
-  const charging = isOn(hass, entity("binary_sensor", "charging"));
-  items.push(
-    vital(
-      t("battery"),
-      formatState(hass, entity("sensor", "battery")),
-      charging ? PANEL_ICONS.bolt : PANEL_ICONS.battery,
-      charging ? "on" : "",
-    ),
-  );
-
-  items.push(
-    vital(
-      t("range"),
-      formatState(hass, entity("sensor", "range")),
-      PANEL_ICONS.range,
-    ),
-  );
-
-  const locked =
-    options.lock === false ? null : lockStateFor(hass, vehicle);
-  if (locked !== null) {
-    items.push(
-      vital(
-        t("central_lock"),
-        locked ? t("locked") : t("unlocked"),
-        locked ? PANEL_ICONS.lock : PANEL_ICONS.unlock,
-        locked ? "" : "warn",
-      ),
-    );
-  }
-
-  const connectedId = entity("binary_sensor", "connected");
-  const connectedState = stateFor(hass, connectedId);
-  const connected = connectedState ? connectedState.state === "on" : null;
-  const updatedId = entity("sensor", "updated");
-  const updatedState = stateFor(hass, updatedId);
-  const relative = updatedState
-    ? formatRelativeTime(
-        panelLanguage(hass),
-        updatedState.state,
-      )
-    : null;
-  const absolute = updatedState
-    ? formatDateTime(panelLanguage(hass), updatedState.state)
-    : "";
-  items.push(
-    vital(
-      t("updated"),
-      relative || (connected === true ? t("online") : null),
-      connected === false ? PANEL_ICONS.cloud_off : PANEL_ICONS.cloud,
-      connected === false ? "warn" : "",
-      absolute,
-    ),
-  );
-
-  return `<div class="vitals">${items.join("")}</div>`;
-}
-
-/** Active health warnings, in the panel's stable order. */
-function activeWarnings(hass, vehicle) {
-  return PANEL_WARNINGS.filter(([key]) =>
-    isOn(hass, entityFor(vehicle, "binary_sensor", key)),
-  );
-}
-
-/** Warnings section: rendered only while at least one warning is active. */
-function warningsHtml(hass, vehicle, t) {
-  const active = activeWarnings(hass, vehicle);
-  if (!active.length) return "";
-  return `<div class="section">
-    <div class="section-head">
-      <ha-icon icon="${PANEL_ICONS.alert}"></ha-icon>
-      <span class="section-title">${escapeHtml(t("warnings"))}</span>
-    </div>
-    <div class="chips">${active
-      .map(
-        ([key, icon]) =>
-          `<span class="chip warn"><ha-icon icon="${icon}"></ha-icon>${escapeHtml(t(key))}</span>`,
-      )
-      .join("")}</div>
-  </div>`;
 }

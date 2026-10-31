@@ -74,6 +74,11 @@ installato, appare la scheda **HACS** nella barra laterale di Home Assistant.
 
 ### 6. Aggiungere il repository a HACS
 
+[![Apri la tua istanza di Home Assistant e apri un repository nel Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+Il pulsante apre HACS sulla tua istanza e propone di aggiungere il repository come repository
+personalizzato. Se preferisci aggiungerlo a mano:
+
 1. In Home Assistant, apri la scheda **HACS**.
 2. Apri il menu a tre punti (⋮) in alto a destra e scegli **Repository personalizzati**.
 3. Incolla l'URL del repository:
@@ -124,26 +129,24 @@ bagagliaio) e perché Home Assistant crei le relative entità:
 - I comandi che dipendono dal PIN (portiere, finestrini, bagagliaio) sono firmati con il PIN creato
   con l'account secondario; se falliscono, ricontrolla il passaggio 9.
 
-### 11. Il pannello del veicolo
+### 11. La scheda del veicolo
 
-L'integrazione include il proprio pannello, senza YAML della dashboard e senza carte aggiuntive:
+L'integrazione include **una sola scheda configurabile**, `custom:deepal-card`; non ci sono più il
+pannello laterale, la dashboard generata o la scheda compatta.
 
-- Il pannello è **opzionale**: durante la configurazione ti viene chiesto se aggiungerlo
-  (disattivato per impostazione predefinita) e puoi cambiarlo nelle opzioni dell'integrazione. Con
-  il pannello attivo, **Deepal** appare nella barra laterale per tutti gli utenti di Home
-  Assistant; il pulsante **Configura** apre le opzioni dell'integrazione (lì attivi o disattivi il
-  pannello).
-- Schede: **Stato** (immagine del veicolo, portiere, finestrini, bagagliaio, cofano, luci e
-  pneumatici), **Clima** (temperatura, sedili e volante) e **Ricarica** (batteria, cavo, corrente,
-  tempo rimanente e le sessioni registrate).
-- I comandi di portiere, finestrini e bagagliaio compaiono solo se hai salvato il PIN (passo 9);
-  luci, clacson, clima, sedili e volante funzionano senza PIN.
+- Aggiungila da **Modifica dashboard → Aggiungi scheda → Veicolo Deepal** e scegli l'auto
+  nell'editor visuale (il modulo compila il `device_id`).
+- Nelle **Impostazioni** della scheda scegli il contenuto in alto (nome, targa, autonomia,
+  chiusura, cloud e freschezza), lo stile dell'immagine (**pianta**, **isometrico**, foto o l'entità
+  immagine) e le sezioni sotto (azioni, stato, clima, ricarica, guida, energia, informazioni,
+  diagnostica e pneumatici), il loro ordine e la visibilità.
+- La scheda scopre l'auto e le sue entità dai registri di Home Assistant: funziona con qualsiasi
+  nome, area o lingua e mostra solo l'arte e le sezioni di quel modello.
+- I comandi di porte, finestrini e bagagliaio compaiono solo con il PIN salvato (passo 9); luci,
+  clacson, clima, sedili e volante funzionano senza PIN.
 
-Per la dashboard di esempio (che non richiede nulla oltre all'integrazione) e le carte Deepal — la
-completa `deepal-card` (barra degli indicatori e le tre schede del pannello) e la compatta
-`deepal-compact-card` (barra degli indicatori, immagine, chip e azioni rapide) — consulta la guida
-completa in inglese e spagnolo: [dashboard-guide.en.md](dashboard-guide.en.md) ·
-[dashboard-guide.es.md](dashboard-guide.es.md).
+Per la dashboard di esempio e tutte le impostazioni della scheda, consulta la
+**[guida della scheda dashboard](dashboard-guide.en.md)**.
 
 ## Note e risoluzione dei problemi
 

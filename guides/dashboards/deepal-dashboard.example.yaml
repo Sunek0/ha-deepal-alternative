@@ -1,10 +1,7 @@
 # Deepal Alternative - example dashboard
 #
-# Prefer the generated dashboard: Settings > Dashboards > Add dashboard >
-# Community dashboards > Deepal creates one view per car with no YAML (it
-# needs Home Assistant 2026.5+; on older versions use the same strategy from
-# a YAML-mode dashboard with `strategy: {type: custom:deepal}`). This file
-# stays as the manual, dependency-free alternative.
+# The integration ships one configurable card. This file is a copy-ready
+# sections view that shows it together with core Home Assistant cards.
 #
 # A copy-ready sections view built only on the integration: the bundled
 # `custom:deepal-card` (available from the card picker, no Lovelace resource
@@ -27,8 +24,8 @@
 #   4. Save.
 #
 # Card choices follow the repository's dashboard design system:
-#   * Tier 1: `custom:deepal-card` for the vehicle (layered picture, chips,
-#     controls, climate and charging tabs).
+#   * Tier 1: `custom:deepal-card` for the vehicle (hero, configurable
+#     sections, controls, climate and charging).
 #   * Core fallbacks: `tile` for the quick controls and tire pressures,
 #     `history-graph` for the trends (one metric per graph; the Tier-1 mini
 #     graph card needs a HACS install, which this example avoids) and
@@ -59,8 +56,8 @@ views:
         name: Cargador
         color: amber
     sections:
-      # Full-width wrapper with the bundled card: the vehicle, its picture,
-      # controls, climate and charging tabs, all first-party.
+      # Full-width wrapper with the bundled card: the vehicle hero and its
+      # configurable sections, all first-party.
       - type: grid
         column_span: 2
         cards:

@@ -80,6 +80,11 @@ installé, l'onglet **HACS** apparaît dans la barre latérale de Home Assistant
 
 ### 6. Ajouter le dépôt à HACS
 
+[![Ouvrez votre instance Home Assistant et ouvrez un dépôt dans le Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+Le bouton ouvre HACS sur votre instance et propose d'ajouter le dépôt comme dépôt personnalisé. Si
+vous préférez l'ajouter à la main :
+
 1. Dans Home Assistant, ouvrez l'onglet **HACS**.
 2. Ouvrez le menu à trois points (⋮) en haut à droite et choisissez **Dépôts personnalisés**.
 3. Collez l'URL du dépôt :
@@ -131,25 +136,24 @@ vitres et coffre) et pour que Home Assistant crée leurs entités :
 - Les commandes qui dépendent du code PIN (portes, vitres, coffre) sont signées avec le code PIN
   créé avec le compte secondaire ; si elles échouent, revérifiez l'étape 9.
 
-### 11. Le panneau du véhicule
+### 11. La carte du véhicule
 
-L'intégration fournit son propre panneau, sans YAML de tableau de bord ni cartes supplémentaires :
+L'intégration fournit **une seule carte configurable**, `custom:deepal-card` ; il n'y a plus de
+panneau latéral, de tableau de bord généré ni de carte compacte.
 
-- Le panneau est **facultatif** : la configuration demande si vous voulez l'ajouter (désactivé
-  par défaut) et les options de l'intégration permettent de le modifier ensuite. Avec le panneau
-  activé, **Deepal** apparaît dans la barre latérale pour tous les utilisateurs de Home Assistant ;
-  le bouton **Configurer** ouvre les options de l'intégration (activez ou désactivez-y le panneau).
-- Onglets : **État** (image du véhicule, portes, vitres, coffre, capot, feux et pneus), **Climat**
-  (température, sièges et volant) et **Charge** (batterie, câble, courant, temps restant et les
-  sessions enregistrées).
-- Les commandes des portes, vitres et coffre n'apparaissent que si vous avez enregistré le PIN
-  (étape 9) ; les feux, le klaxon, le climat, les sièges et le volant fonctionnent sans PIN.
+- Ajoutez-la via **Modifier le tableau de bord → Ajouter une carte → Véhicule Deepal** et choisissez
+  la voiture dans l'éditeur visuel (le formulaire remplit le `device_id`).
+- Dans les **Réglages** de la carte, choisissez le contenu du haut (nom, plaque, autonomie,
+  verrouillage, cloud et fraîcheur), le style d'image (**vue du dessus**, **isométrique**, photos ou
+  l'entité d'image) et les sections du bas (actions, état, climat, charge, conduite, énergie,
+  informations, diagnostic et pneus), leur ordre et leur visibilité.
+- La carte découvre la voiture et ses entités dans les registres de Home Assistant : elle fonctionne
+  avec n'importe quel nom, zone ou langue et n'affiche que l'art et les sections de ce modèle.
+- Les commandes portes, vitres et coffre n'apparaissent qu'avec le PIN enregistré (étape 9) ; les
+  lumières, le klaxon, le climat, les sièges et le volant fonctionnent sans PIN.
 
-Pour le tableau de bord d'exemple (qui ne demande rien d'autre que l'intégration) et les cartes
-Deepal — la carte complète `deepal-card` (bandeau d'indicateurs et les trois onglets du panneau) et
-la carte compacte `deepal-compact-card` (bandeau d'indicateurs, image, pastilles et actions
-rapides) — consultez le guide complet en anglais et en espagnol : [dashboard-guide.en.md](dashboard-guide.en.md) ·
-[dashboard-guide.es.md](dashboard-guide.es.md).
+Pour le tableau de bord d'exemple et tous les réglages de la carte, consultez le
+**[guide de la carte du tableau de bord](dashboard-guide.en.md)**.
 
 ## Remarques et dépannage
 

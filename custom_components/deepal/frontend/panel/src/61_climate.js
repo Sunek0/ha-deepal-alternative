@@ -4,7 +4,7 @@
 // ambient readings when available. Every control hides itself when the
 // vehicle does not expose its entity.
 
-DeepalPanel.prototype._renderClimate = function (vehicle) {
+DeepalCardBase.prototype._renderClimate = function (vehicle) {
   const hass = this._hass;
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const t = (key) => this._t(key);
@@ -164,8 +164,6 @@ DeepalPanel.prototype._renderClimate = function (vehicle) {
   // --- Ambience readings live inside the climate section (humidity next to
   // the inside temperature); no separate section.
 
-  if (!climateSection && !seatsSection) {
-    return `<div class="empty">${escapeHtml(t("unavailable"))}</div>`;
-  }
+  if (!climateSection && !seatsSection) return "";
   return `${climateSection}${seatsSection}`;
 };

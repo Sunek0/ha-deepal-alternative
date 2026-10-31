@@ -121,7 +121,7 @@ function layoutFor(vehicle) {
  *
  * Reads the frontend registries only: `hass.entities` carries the platform,
  * device and translation key of every entity, and `hass.devices` the vehicle
- * names. No entity id is assumed, so the panel works on any installation.
+ * names. No entity id is assumed, so the card works on any installation.
  * Every vehicle also carries its detected model profile.
  */
 function discoverVehicles(hass) {
@@ -208,6 +208,21 @@ function formatState(hass, entityId) {
   }
   const unit = state.attributes.unit_of_measurement;
   return unit ? `${state.state} ${unit}` : state.state;
+}
+
+/** Localized whole-number state, or null when there is nothing to show. */
+function formatIntegerState(hass, entityId) {
+  const state = stateFor(hass, entityId);
+  if (!state) return null;
+  const value = Number.parseFloat(state.state);
+  if (!Number.isFinite(value)) {
+    return hass.formatEntityState ? hass.formatEntityState(state) : state.state;
+  }
+  const text = new Intl.NumberFormat(panelLanguage(hass), {
+    maximumFractionDigits: 0,
+  }).format(Math.round(value));
+  const unit = state.attributes.unit_of_measurement;
+  return unit ? `${text} ${unit}` : text;
 }
 
 /** Numeric attribute of an entity, or null. */

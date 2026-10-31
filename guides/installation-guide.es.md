@@ -75,6 +75,11 @@ aparecerá la pestaña **HACS** en la barra lateral de Home Assistant.
 
 ### 6. Añadir el repositorio a HACS
 
+[![Abre tu instancia de Home Assistant y abre un repositorio en la tienda comunitaria de Home Assistant.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+El botón abre HACS en tu instancia y ofrece añadir el repositorio como repositorio personalizado. Si
+prefieres añadirlo a mano:
+
 1. En Home Assistant, entra en la pestaña **HACS**.
 2. Abre el menú de tres puntos (⋮) de la esquina superior derecha y elige
    **Repositorios personalizados**.
@@ -126,24 +131,24 @@ maletero) y para que Home Assistant cree sus entidades:
 - Los comandos que dependen del PIN (puertas, ventanillas, maletero) se firman con el PIN que
   creaste con la cuenta secundaria; si fallan, revisa el paso 9.
 
-### 11. El panel del vehículo
+### 11. La tarjeta del vehículo
 
-La integración incluye su propio panel, sin YAML de dashboards ni tarjetas adicionales:
+La integración incluye **una sola tarjeta configurable**, `custom:deepal-card`; ya no hay panel
+lateral, dashboard generado ni tarjeta compacta.
 
-- El panel es **opcional**: al añadir la integración se pregunta si quieres añadirlo (viene
-  desactivado) y puedes cambiarlo en las opciones. Con el panel activado, **Deepal** aparece en la
-  barra lateral para todos los usuarios de Home Assistant; el botón **Configurar** abre las opciones
-  de la integración (allí activas o desactivas el panel).
-- Pestañas **Estado** (imagen del coche, puertas, ventanillas, maletero, capó, luces y neumáticos),
-  **Clima** (temperatura, asientos y volante) y **Carga** (batería, cable, corriente, tiempo
-  restante y las sesiones registradas).
+- Añádela desde **Editar dashboard → Añadir tarjeta → Vehículo Deepal** y elige el coche en el
+  editor visual (el formulario rellena el `device_id`).
+- En los **Ajustes** de la tarjeta eliges qué se ve en la parte superior (nombre, matrícula,
+  autonomía, cierre, conexión y frescura), el estilo de imagen (**planta**, **isométrico**, fotos o
+  la entidad de imagen) y las secciones de debajo (acciones, estado, clima, carga, conducción,
+  energía, información, diagnóstico y neumáticos), su orden y visibilidad.
+- La tarjeta descubre el coche y sus entidades desde los registros de Home Assistant: funciona con
+  cualquier nombre, área o idioma y solo muestra el arte y las secciones de ese modelo.
 - Los controles de puertas, ventanillas y maletero solo aparecen si guardaste el PIN (paso 9);
   luces, claxon, clima, asientos y volante funcionan sin PIN.
 
-Para el dashboard de ejemplo (que no necesita nada más que la integración) y las tarjetas Deepal
-—la completa `deepal-card` (franja de datos fijos y las tres pestañas del panel) y la compacta
-`deepal-compact-card` (franja de datos fijos, imagen, chips y acciones rápidas)— consulta la
-**[guía del panel, el dashboard de ejemplo y las tarjetas](dashboard-guide.es.md)**.
+Para el dashboard de ejemplo y todos los ajustes de la tarjeta, consulta la
+**[guía de la tarjeta del dashboard](dashboard-guide.es.md)**.
 
 ## Notas y solución de problemas
 

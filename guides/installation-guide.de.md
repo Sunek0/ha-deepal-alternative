@@ -78,6 +78,11 @@ der Seitenleiste von Home Assistant.
 
 ### 6. Das Repository zu HACS hinzufügen
 
+[![Öffne deine Home-Assistant-Instanz und öffne ein Repository im Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+Der Button öffnet HACS in deiner Instanz und bietet an, das Repository als benutzerdefiniertes
+Repository hinzuzufügen. Wenn du es lieber manuell machst:
+
 1. Öffne in Home Assistant den Tab **HACS**.
 2. Öffne das Drei-Punkte-Menü (⋮) oben rechts und wähle **Benutzerdefinierte Repositories**.
 3. Füge die Repository-URL ein:
@@ -129,26 +134,24 @@ Kofferraum) zu verwenden und damit Home Assistant deren Entitäten erstellt:
 - Die Befehle, die von der PIN abhängen (Türen, Fenster, Kofferraum), werden mit der PIN signiert,
   die du mit dem Zweitkonto erstellt hast; wenn sie fehlschlagen, prüfe Schritt 9 erneut.
 
-### 11. Das Fahrzeug-Panel
+### 11. Die Fahrzeugkarte
 
-Die Integration bringt ihr eigenes Panel mit, ohne Dashboard-YAML und ohne zusätzliche Karten:
+Die Integration bringt **eine konfigurierbare Karte** mit, `custom:deepal-card`; ein Seitenleisten-
+Panel, ein generiertes Dashboard und eine kompakte Karte gibt es nicht mehr.
 
-- Das Panel ist **optional**: Bei der Einrichtung wirst du gefragt, ob du es hinzufügen möchtest
-  (standardmäßig deaktiviert); in den Integrationsoptionen kannst du es später ändern. Mit
-  aktiviertem Panel erscheint **Deepal** für alle Home-Assistant-Benutzer in der Seitenleiste; die
-  Schaltfläche **Konfigurieren** öffnet die Integrationsoptionen (dort aktivierst oder deaktivierst
-  du das Panel).
-- Tabs: **Status** (Fahrzeugbild, Türen, Fenster, Kofferraum, Motorhaube, Lichter und Reifen),
-  **Klima** (Temperatur, Sitze und Lenkrad) und **Laden** (Batterie, Kabel, Strom, Restzeit und
-  die aufgezeichneten Ladevorgänge).
-- Steuerungen für Türen, Fenster und Kofferraum erscheinen nur, wenn du die PIN gespeichert hast
-  (Schritt 9); Lichter, Hupe, Klima, Sitze und Lenkrad funktionieren ohne PIN.
+- Füge sie über **Dashboard bearbeiten → Karte hinzufügen → Deepal-Fahrzeug** hinzu und wähle das
+  Auto im visuellen Editor (das Formular füllt die `device_id` aus).
+- In den **Einstellungen** der Karte wählst du den Inhalt oben (Name, Kennzeichen, Reichweite,
+  Verriegelung, Cloud und Aktualität), den Bildstil (**Draufsicht**, **isometrisch**, Fotos oder die
+  Fahrzeugbild-Entität) und die Abschnitte darunter (Aktionen, Status, Klima, Laden, Fahren, Energie,
+  Informationen, Diagnose und Reifen) sowie Reihenfolge und Sichtbarkeit.
+- Die Karte findet Auto und Entitäten über die Home-Assistant-Registries; sie funktioniert mit jedem
+  Namen, Bereich oder jeder Sprache und zeigt nur die Kunst und Abschnitte dieses Modells.
+- Türen, Fenster und Kofferraum erscheinen nur mit gespeicherter PIN (Schritt 9); Licht, Hupe,
+  Klima, Sitze und Lenkrad funktionieren ohne PIN.
 
-Eine vollständige Anleitung zu Panel, Beispiel-Dashboard (das nichts außer der Integration
-benötigt) und den Deepal-Karten — der vollständigen `deepal-card` (Statusleiste und die drei Tabs
-des Panels) und der kompakten `deepal-compact-card` (Statusleiste, Bild, Chips und
-Schnellaktionen) — gibt es auf Englisch und Spanisch: [dashboard-guide.en.md](dashboard-guide.en.md) ·
-[dashboard-guide.es.md](dashboard-guide.es.md).
+Die Beispiel-Dashboard-Ansicht und alle Kartenoptionen stehen im
+**[Dashboard-Kartenleitfaden](dashboard-guide.en.md)**.
 
 ## Hinweise und Fehlerbehebung
 
