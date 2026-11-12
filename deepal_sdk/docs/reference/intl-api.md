@@ -354,7 +354,7 @@ Mapping:
 | `hvac.acStatus` | AC (`!= 0` on; absent stays unknown) | `climate.power_on` |
 | `hvac.remoteTemp` | Target temperature (tenths of degree) | `climate.target_temperature_c` |
 | `hvac.insideTemp` / `outsideTemp` | Cabin / outside temperature (tenths) | `climate.inside_temperature_c` / `outside_temperature_c` |
-| `hvac.insideHumidity` | Cabin humidity (fixed-point tenths of a percent, `0-1000`) | `climate.humidity` |
+| `hvac.insideHumidity` | Cabin humidity (fixed-point tenths of a percent, `1-1000`; `0` is a no-reading placeholder and becomes unknown) | `climate.humidity` |
 | `hvac.insidePm25` / `insideAirQualityLevel` | Air quality | `climate.inside_pm25` / `air_quality_level` |
 | `hvac.defrostStatus` / `fanLevel` | Defrost / fan | `climate.defrost_on` / `fan_level` |
 | `lamp.highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `leftTurn`, `rightTurn` | Exterior lamps | `lamps.*` |
@@ -367,8 +367,9 @@ Notes:
 
 - Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
   valid snapshot.
-- `hvac.insideHumidity` is a fixed-point integer from 0 to 1000 tenths of a percent (`453` is
-  45.3 %); values outside `0-1000` become unknown.
+- `hvac.insideHumidity` is a fixed-point integer from 1 to 1000 tenths of a percent (`453` is
+  45.3 %); `0` (a no-reading placeholder seen alternating with real values on a parked PHEV) and
+  values outside `1-1000` become unknown.
 - Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.

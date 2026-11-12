@@ -243,64 +243,64 @@
         "name": "Kilométrage total"
       },
       "mileage_yesterday": {
-        "name": "Kilométrage d'hier"
+        "name": "Kilométrage hier"
       },
       "trip_mileage": {
-        "name": "Kilométrage du trajet"
+        "name": "Kilométrage trajet"
       },
       "tire_pressure_front_left": {
-        "name": "Pression du pneu avant gauche"
+        "name": "Pression pneu avant gauche"
       },
       "tire_pressure_front_right": {
-        "name": "Pression du pneu avant droit"
+        "name": "Pression pneu avant droit"
       },
       "tire_pressure_rear_left": {
-        "name": "Pression du pneu arrière gauche"
+        "name": "Pression pneu arrière gauche"
       },
       "tire_pressure_rear_right": {
-        "name": "Pression du pneu arrière droit"
+        "name": "Pression pneu arrière droit"
       },
       "seat_heating_level_front_left": {
-        "name": "Niveau de chauffage du siège avant gauche"
+        "name": "Chauffage siège niveau avant gauche"
       },
       "seat_heating_level_front_right": {
-        "name": "Niveau de chauffage du siège avant droit"
+        "name": "Chauffage siège niveau avant droit"
       },
       "seat_heating_level_rear_left": {
-        "name": "Niveau de chauffage du siège arrière gauche"
+        "name": "Chauffage siège niveau arrière gauche"
       },
       "seat_heating_level_rear_right": {
-        "name": "Niveau de chauffage du siège arrière droit"
+        "name": "Chauffage siège niveau arrière droit"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Niveau de ventilation du siège avant gauche"
+        "name": "Ventilation siège niveau avant gauche"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Niveau de ventilation du siège avant droit"
+        "name": "Ventilation siège niveau avant droit"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Niveau de ventilation du siège arrière gauche"
+        "name": "Ventilation siège niveau arrière gauche"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Niveau de ventilation du siège arrière droit"
+        "name": "Ventilation siège niveau arrière droit"
       },
       "speed": {
         "name": "Vitesse"
       },
       "inside_temperature": {
-        "name": "Température intérieure"
+        "name": "Climatisation température intérieure"
       },
       "outside_temperature": {
-        "name": "Température extérieure"
+        "name": "Climatisation température extérieure"
       },
       "cabin_humidity": {
-        "name": "Humidité de l'habitacle"
+        "name": "Climatisation humidité de l'habitacle"
       },
       "inside_pm25": {
-        "name": "PM2.5 intérieur"
+        "name": "Climatisation PM2.5 intérieur"
       },
       "air_quality_level": {
-        "name": "Niveau de qualité de l'air"
+        "name": "Climatisation niveau de qualité de l'air"
       },
       "charge_status": {
         "name": "État de charge",
@@ -314,7 +314,7 @@
         }
       },
       "charge_mode": {
-        "name": "Type de charge",
+        "name": "Charge type",
         "state": {
           "ac": "AC",
           "dc": "DC"
@@ -324,13 +324,13 @@
         "name": "Courant de charge"
       },
       "ac_charge_current": {
-        "name": "Courant de charge CA"
+        "name": "Charge courant CA"
       },
       "dc_charge_current": {
-        "name": "Courant de charge CC"
+        "name": "Charge courant CC"
       },
       "remaining_charge_time": {
-        "name": "Temps de charge restant"
+        "name": "Charge temps restant"
       },
       "charge_limit": {
         "name": "Limite de charge"
@@ -373,7 +373,7 @@
         "name": "Dernière mise à jour"
       },
       "remaining_charge_time_formatted": {
-        "name": "Temps de charge restant (H:MM)"
+        "name": "Charge temps restant (H:MM)"
       },
       "climate_target_temperature": {
         "name": "Température cible de la climatisation"
@@ -385,54 +385,54 @@
         "name": "Plaque d'immatriculation"
       },
       "window_opening_front_left": {
-        "name": "Ouverture vitre avant gauche"
+        "name": "Vitre avant gauche ouverture"
       },
       "window_opening_front_right": {
-        "name": "Ouverture vitre avant droite"
+        "name": "Vitre avant droite ouverture"
       },
       "window_opening_rear_left": {
-        "name": "Ouverture vitre arrière gauche"
+        "name": "Vitre arrière gauche ouverture"
       },
       "window_opening_rear_right": {
-        "name": "Ouverture vitre arrière droite"
+        "name": "Vitre arrière droite ouverture"
       }
     },
     "binary_sensor": {
       "charger_plugged": {
-        "name": "Chargeur branché"
+        "name": "Charge branchée"
       },
       "doors_lock_state": {
-        "name": "État du verrouillage"
+        "name": "Porte verrouillage"
       },
       "tire_alarm_front_left": {
-        "name": "Alarme du pneu avant gauche"
+        "name": "Alarme pneu avant gauche"
       },
       "tire_alarm_front_right": {
-        "name": "Alarme du pneu avant droit"
+        "name": "Alarme pneu avant droit"
       },
       "tire_alarm_rear_left": {
-        "name": "Alarme du pneu arrière gauche"
+        "name": "Alarme pneu arrière gauche"
       },
       "tire_alarm_rear_right": {
-        "name": "Alarme du pneu arrière droit"
+        "name": "Alarme pneu arrière droit"
       },
       "window_open_front_left": {
         "name": "Vitre avant gauche ouverte"
       },
       "window_open_front_right": {
-        "name": "Vitre avant droit ouverte"
+        "name": "Vitre avant droite ouverte"
       },
       "window_open_rear_left": {
         "name": "Vitre arrière gauche ouverte"
       },
       "window_open_rear_right": {
-        "name": "Vitre arrière droit ouverte"
+        "name": "Vitre arrière droite ouverte"
       },
       "steering_wheel_heater": {
         "name": "Chauffage du volant"
       },
       "engine": {
-        "name": "Moteur"
+        "name": "Véhicule sous tension"
       },
       "climate_on": {
         "name": "Climatisation"
@@ -441,22 +441,22 @@
         "name": "Connexion au cloud"
       },
       "high_beam": {
-        "name": "Feux de route"
+        "name": "Éclairage feux de route"
       },
       "low_beam": {
-        "name": "Feux de croisement"
+        "name": "Éclairage feux de croisement"
       },
       "position_lamp": {
-        "name": "Feux de position"
+        "name": "Éclairage position"
       },
       "left_turn_signal": {
-        "name": "Clignotant gauche"
+        "name": "Éclairage clignotant gauche"
       },
       "right_turn_signal": {
-        "name": "Clignotant droit"
+        "name": "Éclairage clignotant droit"
       },
       "any_door_open": {
-        "name": "Une porte ouverte"
+        "name": "Porte une ouverte"
       },
       "door_front_left": {
         "name": "Porte avant gauche"
@@ -477,43 +477,43 @@
         "name": "Capot"
       },
       "dc_gun_connected": {
-        "name": "Pistolet DC connecté"
+        "name": "Charge pistolet DC connecté"
       },
       "ac_gun_connected": {
-        "name": "Pistolet CA connecté"
+        "name": "Charge pistolet CA connecté"
       },
       "charging": {
-        "name": "En charge"
+        "name": "Charge active"
       },
       "charge_schedule_enabled": {
         "name": "Plage de charge activée"
       },
       "front_left_seat_heating": {
-        "name": "Chauffage du siège avant gauche"
+        "name": "Chauffage siège avant gauche"
       },
       "front_right_seat_heating": {
-        "name": "Chauffage du siège avant droit"
+        "name": "Chauffage siège avant droit"
       },
       "rear_left_seat_heating": {
-        "name": "Chauffage du siège arrière gauche"
+        "name": "Chauffage siège arrière gauche"
       },
       "rear_right_seat_heating": {
-        "name": "Chauffage du siège arrière droit"
+        "name": "Chauffage siège arrière droit"
       },
       "front_left_seat_ventilation": {
-        "name": "Ventilation du siège avant gauche"
+        "name": "Ventilation siège avant gauche"
       },
       "front_right_seat_ventilation": {
-        "name": "Ventilation du siège avant droit"
+        "name": "Ventilation siège avant droit"
       },
       "key_battery_low": {
         "name": "Pile de la clé faible"
       },
       "air_recirculation": {
-        "name": "Recirculation d'air"
+        "name": "Climatisation recirculation d'air"
       },
       "rear_fog_lamp": {
-        "name": "Feu de brouillard arrière"
+        "name": "Éclairage antibrouillard arrière"
       },
       "warning_12v_battery": {
         "name": "Voyant batterie 12 V"
@@ -586,28 +586,28 @@
         "name": "Limite de charge"
       },
       "seat_heating_level_front_left": {
-        "name": "Niveau de chauffage du siège avant gauche"
+        "name": "Chauffage siège niveau avant gauche"
       },
       "seat_heating_level_front_right": {
-        "name": "Niveau de chauffage du siège avant droit"
+        "name": "Chauffage siège niveau avant droit"
       },
       "seat_heating_level_rear_left": {
-        "name": "Niveau de chauffage du siège arrière gauche"
+        "name": "Chauffage siège niveau arrière gauche"
       },
       "seat_heating_level_rear_right": {
-        "name": "Niveau de chauffage du siège arrière droit"
+        "name": "Chauffage siège niveau arrière droit"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Niveau de ventilation du siège avant gauche"
+        "name": "Ventilation siège niveau avant gauche"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Niveau de ventilation du siège avant droit"
+        "name": "Ventilation siège niveau avant droit"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Niveau de ventilation du siège arrière gauche"
+        "name": "Ventilation siège niveau arrière gauche"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Niveau de ventilation du siège arrière droit"
+        "name": "Ventilation siège niveau arrière droit"
       }
     },
     "switch": {

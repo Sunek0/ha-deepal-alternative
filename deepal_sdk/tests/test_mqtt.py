@@ -4,10 +4,12 @@ import asyncio
 import inspect
 import json
 import re
+from typing import Any
 
 import pytest
 
 from deepal.mqtt import (
+    rest_subsystem_warnings,
     CHARGE_STATE_CHARGE_STOPPED,
     MAPPED_S05_KEYS,
     aes_cbc_decrypt,
@@ -1716,3 +1718,60 @@ def test_normalize_s05_params_keeps_the_phev_ac_gun_unknown_when_the_state_is_ab
     assert condition["charge"]["chargeConStatus"] is False
     assert condition["charge"]["acChargeGunConnectStatus"] is None
     assert condition["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_rest_subsystem_warnings_read_zero_as_healthy():
+    status = {
+        "powerStatus": 2,
+        "airBagSysStatus": 0,
+        "absAntiLockBrakingSysStatus": 0,
+        "powerSteeringSysStatus": 0,
+    }
+
+    assert rest_subsystem_warnings(status, 2) == {
+        "airbag": False,
+        "abs": False,
+        "eps": False,
+    }
+
+
+def test_rest_subsystem_warnings_report_a_non_zero_register_as_a_fault():
+    status = {"powerStatus": 2, "airBagSysStatus": 1, "powerSteeringSysStatus": "2"}
+
+    assert rest_subsystem_warnings(status, 2) == {
+        "airbag": True,
+        "abs": None,
+        "eps": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        None,
+        {},
+        "not a dict",
+        {"powerStatus": 0, "airBagSysStatus": 1, "absAntiLockBrakingSysStatus": 1},
+        {"powerStatus": 2, "airBagSysStatus": None, "absAntiLockBrakingSysStatus": "x"},
+    ],
+)
+def test_rest_subsystem_warnings_are_unknown_without_a_trusted_report(status):
+    assert rest_subsystem_warnings(status, 2) == {
+        "airbag": None,
+        "abs": None,
+        "eps": None,
+    }
+
+
+@pytest.mark.parametrize("live_power", [None, 0, 1, 3])
+def test_rest_subsystem_warnings_are_unknown_unless_the_live_power_state_is_ready(
+    live_power,
+):
+    # The REST block can keep the last awake values after the car has gone off.
+    status = {"powerStatus": 2, "airBagSysStatus": 1}
+
+    assert rest_subsystem_warnings(status, live_power) == {
+        "airbag": None,
+        "abs": None,
+        "eps": None,
+    }

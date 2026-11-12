@@ -250,67 +250,67 @@
         "name": "Remaining range"
       },
       "total_odometer": {
-        "name": "Total odometer"
+        "name": "Odometer total"
       },
       "mileage_yesterday": {
-        "name": "Mileage yesterday"
+        "name": "Odometer yesterday"
       },
       "trip_mileage": {
-        "name": "Trip mileage"
+        "name": "Odometer trip"
       },
       "tire_pressure_front_left": {
-        "name": "Front left tire pressure"
+        "name": "Tire pressure front left"
       },
       "tire_pressure_front_right": {
-        "name": "Front right tire pressure"
+        "name": "Tire pressure front right"
       },
       "tire_pressure_rear_left": {
-        "name": "Rear left tire pressure"
+        "name": "Tire pressure rear left"
       },
       "tire_pressure_rear_right": {
-        "name": "Rear right tire pressure"
+        "name": "Tire pressure rear right"
       },
       "seat_heating_level_front_left": {
-        "name": "Front left seat heating level"
+        "name": "Seat heating level front left"
       },
       "seat_heating_level_front_right": {
-        "name": "Front right seat heating level"
+        "name": "Seat heating level front right"
       },
       "seat_heating_level_rear_left": {
-        "name": "Rear left seat heating level"
+        "name": "Seat heating level rear left"
       },
       "seat_heating_level_rear_right": {
-        "name": "Rear right seat heating level"
+        "name": "Seat heating level rear right"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Front left seat ventilation level"
+        "name": "Seat ventilation level front left"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Front right seat ventilation level"
+        "name": "Seat ventilation level front right"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Rear left seat ventilation level"
+        "name": "Seat ventilation level rear left"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Rear right seat ventilation level"
+        "name": "Seat ventilation level rear right"
       },
       "speed": {
         "name": "Speed"
       },
       "inside_temperature": {
-        "name": "Inside temperature"
+        "name": "Climate inside temperature"
       },
       "outside_temperature": {
-        "name": "Outside temperature"
+        "name": "Climate outside temperature"
       },
       "cabin_humidity": {
-        "name": "Cabin humidity"
+        "name": "Climate cabin humidity"
       },
       "inside_pm25": {
-        "name": "Inside PM2.5"
+        "name": "Climate inside PM2.5"
       },
       "air_quality_level": {
-        "name": "Air quality level"
+        "name": "Climate air quality level"
       },
       "charge_status": {
         "name": "Charge status",
@@ -324,7 +324,7 @@
         }
       },
       "charge_mode": {
-        "name": "Charging type",
+        "name": "Charge type",
         "state": {
           "ac": "AC",
           "dc": "DC"
@@ -334,13 +334,13 @@
         "name": "Charge current"
       },
       "ac_charge_current": {
-        "name": "AC charge current"
+        "name": "Charge AC current"
       },
       "dc_charge_current": {
-        "name": "DC charge current"
+        "name": "Charge DC current"
       },
       "remaining_charge_time": {
-        "name": "Remaining charge time"
+        "name": "Charge remaining time"
       },
       "charge_limit": {
         "name": "Charge limit"
@@ -383,7 +383,7 @@
         "name": "Last updated"
       },
       "remaining_charge_time_formatted": {
-        "name": "Remaining charge time (H:MM)"
+        "name": "Charge remaining time (H:MM)"
       },
       "climate_target_temperature": {
         "name": "Climate target temperature"
@@ -395,54 +395,54 @@
         "name": "License plate"
       },
       "window_opening_front_left": {
-        "name": "Front left window opening"
+        "name": "Window front left opening"
       },
       "window_opening_front_right": {
-        "name": "Front right window opening"
+        "name": "Window front right opening"
       },
       "window_opening_rear_left": {
-        "name": "Rear left window opening"
+        "name": "Window rear left opening"
       },
       "window_opening_rear_right": {
-        "name": "Rear right window opening"
+        "name": "Window rear right opening"
       }
     },
     "binary_sensor": {
       "charger_plugged": {
-        "name": "Charger plugged"
+        "name": "Charge plugged"
       },
       "doors_lock_state": {
-        "name": "Doors lock state"
+        "name": "Door lock state"
       },
       "tire_alarm_front_left": {
-        "name": "Front left tire alarm"
+        "name": "Tire alarm front left"
       },
       "tire_alarm_front_right": {
-        "name": "Front right tire alarm"
+        "name": "Tire alarm front right"
       },
       "tire_alarm_rear_left": {
-        "name": "Rear left tire alarm"
+        "name": "Tire alarm rear left"
       },
       "tire_alarm_rear_right": {
-        "name": "Rear right tire alarm"
+        "name": "Tire alarm rear right"
       },
       "window_open_front_left": {
-        "name": "Front left window open"
+        "name": "Window front left open"
       },
       "window_open_front_right": {
-        "name": "Front right window open"
+        "name": "Window front right open"
       },
       "window_open_rear_left": {
-        "name": "Rear left window open"
+        "name": "Window rear left open"
       },
       "window_open_rear_right": {
-        "name": "Rear right window open"
+        "name": "Window rear right open"
       },
       "steering_wheel_heater": {
         "name": "Steering wheel heater"
       },
       "engine": {
-        "name": "Engine"
+        "name": "Vehicle powered on"
       },
       "climate_on": {
         "name": "Climate On"
@@ -451,34 +451,34 @@
         "name": "Cloud connection"
       },
       "high_beam": {
-        "name": "High beam"
+        "name": "Light high beam"
       },
       "low_beam": {
-        "name": "Low beam"
+        "name": "Light low beam"
       },
       "position_lamp": {
-        "name": "Position lamp"
+        "name": "Light position"
       },
       "left_turn_signal": {
-        "name": "Left turn signal"
+        "name": "Light left turn signal"
       },
       "right_turn_signal": {
-        "name": "Right turn signal"
+        "name": "Light right turn signal"
       },
       "any_door_open": {
-        "name": "Any door open"
+        "name": "Door any open"
       },
       "door_front_left": {
-        "name": "Front left door"
+        "name": "Door front left"
       },
       "door_front_right": {
-        "name": "Front right door"
+        "name": "Door front right"
       },
       "door_rear_left": {
-        "name": "Rear left door"
+        "name": "Door rear left"
       },
       "door_rear_right": {
-        "name": "Rear right door"
+        "name": "Door rear right"
       },
       "trunk": {
         "name": "Trunk"
@@ -487,76 +487,76 @@
         "name": "Hood"
       },
       "dc_gun_connected": {
-        "name": "DC gun connected"
+        "name": "Charge DC gun connected"
       },
       "ac_gun_connected": {
-        "name": "AC gun connected"
+        "name": "Charge AC gun connected"
       },
       "charging": {
-        "name": "Charging"
+        "name": "Charge active"
       },
       "charge_schedule_enabled": {
         "name": "Charge schedule enabled"
       },
       "front_left_seat_heating": {
-        "name": "Front left seat heating"
+        "name": "Seat heating front left"
       },
       "front_right_seat_heating": {
-        "name": "Front right seat heating"
+        "name": "Seat heating front right"
       },
       "rear_left_seat_heating": {
-        "name": "Rear left seat heating"
+        "name": "Seat heating rear left"
       },
       "rear_right_seat_heating": {
-        "name": "Rear right seat heating"
+        "name": "Seat heating rear right"
       },
       "front_left_seat_ventilation": {
-        "name": "Front left seat ventilation"
+        "name": "Seat ventilation front left"
       },
       "front_right_seat_ventilation": {
-        "name": "Front right seat ventilation"
+        "name": "Seat ventilation front right"
       },
       "key_battery_low": {
         "name": "Key fob battery low"
       },
       "air_recirculation": {
-        "name": "Air recirculation"
+        "name": "Climate air recirculation"
       },
       "rear_fog_lamp": {
-        "name": "Rear fog lamp"
+        "name": "Light rear fog"
       },
       "warning_12v_battery": {
-        "name": "12 V battery warning"
+        "name": "Warning 12 V battery"
       },
       "warning_tpms": {
-        "name": "Tire pressure warning"
+        "name": "Warning tire pressure"
       },
       "warning_abs": {
-        "name": "ABS warning"
+        "name": "Warning ABS"
       },
       "warning_airbag": {
-        "name": "Airbag warning"
+        "name": "Warning airbag"
       },
       "warning_brake_fluid": {
-        "name": "Brake fluid warning"
+        "name": "Warning brake fluid"
       },
       "warning_brake": {
-        "name": "Brake warning"
+        "name": "Warning brake"
       },
       "warning_eps": {
-        "name": "Power steering warning"
+        "name": "Warning power steering"
       },
       "warning_power_limit": {
-        "name": "Power limit warning"
+        "name": "Warning power limit"
       },
       "warning_power_system": {
-        "name": "Power system warning"
+        "name": "Warning power system"
       },
       "warning_traction_battery_low": {
-        "name": "Traction battery low warning"
+        "name": "Warning traction battery low"
       },
       "warning_coolant_temperature": {
-        "name": "Coolant temperature warning"
+        "name": "Warning coolant temperature"
       }
     },
     "button": {
@@ -596,28 +596,28 @@
         "name": "Charge limit"
       },
       "seat_heating_level_front_left": {
-        "name": "Front left seat heating level"
+        "name": "Seat heating level front left"
       },
       "seat_heating_level_front_right": {
-        "name": "Front right seat heating level"
+        "name": "Seat heating level front right"
       },
       "seat_heating_level_rear_left": {
-        "name": "Rear left seat heating level"
+        "name": "Seat heating level rear left"
       },
       "seat_heating_level_rear_right": {
-        "name": "Rear right seat heating level"
+        "name": "Seat heating level rear right"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Front left seat ventilation level"
+        "name": "Seat ventilation level front left"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Front right seat ventilation level"
+        "name": "Seat ventilation level front right"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Rear left seat ventilation level"
+        "name": "Seat ventilation level rear left"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Rear right seat ventilation level"
+        "name": "Seat ventilation level rear right"
       }
     },
     "switch": {

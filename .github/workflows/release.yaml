@@ -53,11 +53,36 @@ jobs:
           case "${GITHUB_REF_NAME}" in
             *-*) prerelease="--prerelease" ;;
           esac
+
+          version="${GITHUB_REF_NAME#v}"
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          : > "$notes_file"
+          if [ -f CHANGELOG.md ]; then
+            awk -v version="$version" '
+              $0 ~ "^## " version "([[:space:]]|$)" { found=1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md > "$notes_file"
+          fi
+
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" $prerelease
+            if [ -s "$notes_file" ]; then
+              gh release edit "${GITHUB_REF_NAME}" \
+                --title "${GITHUB_REF_NAME}" \
+                --notes-file "$notes_file" $prerelease
+            else
+              gh release edit "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" $prerelease
+            fi
           else
-            gh release create "${GITHUB_REF_NAME}" \
-              --title "${GITHUB_REF_NAME}" \
-              --generate-notes \
-              --verify-tag $prerelease
+            if [ -s "$notes_file" ]; then
+              gh release create "${GITHUB_REF_NAME}" \
+                --title "${GITHUB_REF_NAME}" \
+                --notes-file "$notes_file" \
+                --verify-tag $prerelease
+            else
+              gh release create "${GITHUB_REF_NAME}" \
+                --title "${GITHUB_REF_NAME}" \
+                --generate-notes \
+                --verify-tag $prerelease
+            fi
           fi

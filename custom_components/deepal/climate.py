@@ -50,7 +50,7 @@ class DeepalCabinClimateEntity(
     _attr_has_entity_name = True
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_min_temp = 18.0
     _attr_max_temp = 32.0
@@ -86,7 +86,7 @@ class DeepalCabinClimateEntity(
         return HVACMode.HEAT_COOL if cond.climate.power_on else HVACMode.OFF
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return the target temperature."""
         cond = self._condition
         return cond.climate.target_temperature_c if cond else None
@@ -115,11 +115,11 @@ class DeepalCabinClimateEntity(
 
     async def async_turn_on(self) -> None:
         """Turn the AC on."""
-        await self._async_send(True, self.target_temperature or 21.0)
+        await self._async_send(True, self.native_target_temperature or 21.0)
 
     async def async_turn_off(self) -> None:
         """Turn the AC off."""
-        await self._async_send(False, self.target_temperature or 21.0)
+        await self._async_send(False, self.native_target_temperature or 21.0)
 
     async def _async_send(self, enabled: bool, temperature: float) -> None:
         # The gateway rejects targetTemp outside 18.0-32.0 °C with

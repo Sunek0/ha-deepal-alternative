@@ -14,6 +14,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import ssl
 import struct
 from collections.abc import Iterator, Mapping, Sequence
@@ -1385,13 +1386,40 @@ def wake_request_payload(
     }
 
 
-def _as_int(value: Any) -> Optional[int]:
+def _as_float(value: Any) -> Optional[float]:
+    """Return a finite float, or None for a missing or non-numeric value.
+
+    ``NaN`` and ``Infinity`` parse as floats (``json.loads`` accepts both) but
+    are never a measurement, so they are unknown instead of a sensor state.
+    """
     if value is None:
         return None
     try:
-        return int(float(value))
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
+
+
+def _as_int(value: Any) -> Optional[int]:
+    """Return an integer, or None for a missing or non-numeric value.
+
+    Integers pass through exactly. Numeric strings such as ``"85"``, ``"85.0"``
+    or ``"85.7"`` follow the same truncation as the float ``85.7``; a value that
+    is not finite (``inf``, ``nan``) is unknown rather than an ``OverflowError``
+    that would abort the whole coordinator refresh.
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    number = _as_float(value)
+    return None if number is None else int(number)
 
 
 # The app reports 8191 in chargDeltMins when it has no remaining-time estimate.
@@ -1453,15 +1481,6 @@ def _as_charge_time(value: Any) -> Optional[int]:
     return minutes
 
 
-def _as_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _as_bool(value: Any) -> Optional[bool]:
     """Return a boolean for zero/non-zero values, ``None`` when absent."""
     number = _as_int(value)
@@ -1479,6 +1498,45 @@ def _warning_light(value: Any, power_status: Optional[int]) -> Optional[bool]:
     if power_status == 0:
         return None
     return _as_bool(value)
+
+
+# Dashboard lights that have a REST ``vehicleStatus`` subsystem register. The
+# MQTT light bits (notably ``airBagLightStatus``) glitch to 1 on a healthy car,
+# while the app paints these registers, which read 0 on a healthy car.
+REST_SUBSYSTEM_WARNING_KEYS = {
+    "airbag": "airBagSysStatus",
+    "abs": "absAntiLockBrakingSysStatus",
+    "eps": "powerSteeringSysStatus",
+}
+
+
+def rest_subsystem_warnings(
+    status: Any, live_power_status: Optional[int] = None
+) -> dict[str, Optional[bool]]:
+    """Return the airbag, ABS and power steering lights from the REST registers.
+
+    The registers read ``0`` on a healthy car; any other number is a fault
+    (the polarity is the app's label and a fault has not been observed yet).
+    Everything is unknown when the REST ``powerStatus`` is ``0`` (cached
+    snapshot of a sleeping T-Box), when the live MQTT power state is not ``2``
+    (ready): ``0`` is off, ``3`` is the transient seen at start (the airbag
+    light showed a fault at that exact moment on the S05 2026-11-12) and the
+    REST block can keep the last awake values after the car is already off.
+    It is also unknown when the block is missing or a register is missing or
+    not a number.
+    """
+    unknown: dict[str, Optional[bool]] = {
+        field: None for field in REST_SUBSYSTEM_WARNING_KEYS
+    }
+    if live_power_status != 2:
+        return unknown
+    if not isinstance(status, dict) or _as_int(status.get("powerStatus")) == 0:
+        return unknown
+    result = dict(unknown)
+    for field, key in REST_SUBSYSTEM_WARNING_KEYS.items():
+        value = _as_int(status.get(key))
+        result[field] = None if value is None else value != 0
+    return result
 
 
 def _first(params: dict[str, Any], *keys: str) -> Any:
@@ -1793,6 +1851,9 @@ def normalize_s05_params(
         "fuel": {
             "leftPercent": _as_int(params.get("remainingFuel")),
             "remainingRange": _as_int(params.get("remainedOilMile")),
+            # Litres left in the tank: 27 with remainingFuel 53 % on the live
+            # S05 PHEV (about 51 L tank, 2026-11-10/11 capture).
+            "leftVolume": _as_float(params.get("fuelLeftover")),
         },
         "door": {
             "doors": [
@@ -1949,6 +2010,7 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         # Fuel (PHEV / range extender)
         "remainingFuel",
         "remainedOilMile",
+        "fuelLeftover",
         # Doors, trunk and locks
         "driverDoor",
         "passengerDoor",

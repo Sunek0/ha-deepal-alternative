@@ -134,6 +134,7 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds `600 A` become unknown; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
 | `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |
 | `remainingFuel` / `remainedOilMile` | `fuel.leftPercent` / `fuel.remainingRange` | `fuel.level_percent` / `fuel.remaining_range_km` |
+| `fuelLeftover` | `fuel.leftVolume` (litres; 27 at 53 % on the S05 PHEV, about a 51 L tank) | `fuel.volume_l` |
 | `driverDoor`, `passengerDoor`, `leftRearDoor`, `rightRearDoor` | `door.doors[0..3]` | `doors.*_door_open` |
 | `trunk` | `door.trunk` | `doors.trunk_open` |
 | `hood`, `hoodStatus` | `door.hood` | `doors.hood_open` |

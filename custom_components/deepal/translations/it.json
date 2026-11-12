@@ -243,10 +243,10 @@
         "name": "Contachilometri totale"
       },
       "mileage_yesterday": {
-        "name": "Chilometri di ieri"
+        "name": "Contachilometri ieri"
       },
       "trip_mileage": {
-        "name": "Chilometri del viaggio"
+        "name": "Contachilometri viaggio"
       },
       "tire_pressure_front_left": {
         "name": "Pressione pneumatico anteriore sinistro"
@@ -261,46 +261,46 @@
         "name": "Pressione pneumatico posteriore destro"
       },
       "seat_heating_level_front_left": {
-        "name": "Livello riscaldamento sedile anteriore sinistro"
+        "name": "Riscaldamento sedile livello anteriore sinistro"
       },
       "seat_heating_level_front_right": {
-        "name": "Livello riscaldamento sedile anteriore destro"
+        "name": "Riscaldamento sedile livello anteriore destro"
       },
       "seat_heating_level_rear_left": {
-        "name": "Livello riscaldamento sedile posteriore sinistro"
+        "name": "Riscaldamento sedile livello posteriore sinistro"
       },
       "seat_heating_level_rear_right": {
-        "name": "Livello riscaldamento sedile posteriore destro"
+        "name": "Riscaldamento sedile livello posteriore destro"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Livello ventilazione sedile anteriore sinistro"
+        "name": "Ventilazione sedile livello anteriore sinistro"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Livello ventilazione sedile anteriore destro"
+        "name": "Ventilazione sedile livello anteriore destro"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Livello ventilazione sedile posteriore sinistro"
+        "name": "Ventilazione sedile livello posteriore sinistro"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Livello ventilazione sedile posteriore destro"
+        "name": "Ventilazione sedile livello posteriore destro"
       },
       "speed": {
         "name": "Velocità"
       },
       "inside_temperature": {
-        "name": "Temperatura interna"
+        "name": "Clima temperatura interna"
       },
       "outside_temperature": {
-        "name": "Temperatura esterna"
+        "name": "Clima temperatura esterna"
       },
       "cabin_humidity": {
-        "name": "Umidità dell'abitacolo"
+        "name": "Clima umidità dell'abitacolo"
       },
       "inside_pm25": {
-        "name": "PM2.5 interno"
+        "name": "Clima PM2.5 interno"
       },
       "air_quality_level": {
-        "name": "Livello qualità aria"
+        "name": "Clima livello qualità aria"
       },
       "charge_status": {
         "name": "Stato di ricarica",
@@ -314,7 +314,7 @@
         }
       },
       "charge_mode": {
-        "name": "Tipo di ricarica",
+        "name": "Ricarica tipo",
         "state": {
           "ac": "AC",
           "dc": "DC"
@@ -324,13 +324,13 @@
         "name": "Corrente di ricarica"
       },
       "ac_charge_current": {
-        "name": "Corrente di ricarica CA"
+        "name": "Ricarica corrente CA"
       },
       "dc_charge_current": {
-        "name": "Corrente di ricarica CC"
+        "name": "Ricarica corrente CC"
       },
       "remaining_charge_time": {
-        "name": "Tempo di ricarica rimanente"
+        "name": "Ricarica tempo rimanente"
       },
       "charge_limit": {
         "name": "Limite di ricarica"
@@ -373,7 +373,7 @@
         "name": "Ultimo aggiornamento"
       },
       "remaining_charge_time_formatted": {
-        "name": "Tempo di ricarica rimanente (H:MM)"
+        "name": "Ricarica tempo rimanente (H:MM)"
       },
       "climate_target_temperature": {
         "name": "Temperatura obiettivo climatizzatore"
@@ -385,24 +385,24 @@
         "name": "Targa"
       },
       "window_opening_front_left": {
-        "name": "Apertura finestrino anteriore sinistro"
+        "name": "Finestrino anteriore sinistro apertura"
       },
       "window_opening_front_right": {
-        "name": "Apertura finestrino anteriore destro"
+        "name": "Finestrino anteriore destro apertura"
       },
       "window_opening_rear_left": {
-        "name": "Apertura finestrino posteriore sinistro"
+        "name": "Finestrino posteriore sinistro apertura"
       },
       "window_opening_rear_right": {
-        "name": "Apertura finestrino posteriore destro"
+        "name": "Finestrino posteriore destro apertura"
       }
     },
     "binary_sensor": {
       "charger_plugged": {
-        "name": "Caricatore collegato"
+        "name": "Ricarica collegata"
       },
       "doors_lock_state": {
-        "name": "Stato bloccaggio"
+        "name": "Porta bloccaggio"
       },
       "tire_alarm_front_left": {
         "name": "Allarme pneumatico anteriore sinistro"
@@ -432,7 +432,7 @@
         "name": "Riscaldamento volante"
       },
       "engine": {
-        "name": "Motore"
+        "name": "Veicolo acceso"
       },
       "climate_on": {
         "name": "Climatizzatore"
@@ -441,22 +441,22 @@
         "name": "Connessione cloud"
       },
       "high_beam": {
-        "name": "Abbaglianti"
+        "name": "Luci abbaglianti"
       },
       "low_beam": {
-        "name": "Anabbaglianti"
+        "name": "Luci anabbaglianti"
       },
       "position_lamp": {
-        "name": "Luce di posizione"
+        "name": "Luci di posizione"
       },
       "left_turn_signal": {
-        "name": "Indicatore di direzione sinistro"
+        "name": "Luci indicatore sinistro"
       },
       "right_turn_signal": {
-        "name": "Indicatore di direzione destro"
+        "name": "Luci indicatore destro"
       },
       "any_door_open": {
-        "name": "Una porta aperta"
+        "name": "Porta una aperta"
       },
       "door_front_left": {
         "name": "Porta anteriore sinistra"
@@ -477,13 +477,13 @@
         "name": "Cofano"
       },
       "dc_gun_connected": {
-        "name": "Pistola DC collegata"
+        "name": "Ricarica pistola DC collegata"
       },
       "ac_gun_connected": {
-        "name": "Pistola CA collegata"
+        "name": "Ricarica pistola CA collegata"
       },
       "charging": {
-        "name": "In carica"
+        "name": "Ricarica attiva"
       },
       "charge_schedule_enabled": {
         "name": "Programma di ricarica attivo"
@@ -510,10 +510,10 @@
         "name": "Batteria del telecomando scarica"
       },
       "air_recirculation": {
-        "name": "Ricircolo dell'aria"
+        "name": "Clima ricircolo dell'aria"
       },
       "rear_fog_lamp": {
-        "name": "Fendinebbia posteriore"
+        "name": "Luci fendinebbia posteriore"
       },
       "warning_12v_battery": {
         "name": "Spia batteria 12 V"
@@ -586,28 +586,28 @@
         "name": "Limite di ricarica"
       },
       "seat_heating_level_front_left": {
-        "name": "Livello riscaldamento sedile anteriore sinistro"
+        "name": "Riscaldamento sedile livello anteriore sinistro"
       },
       "seat_heating_level_front_right": {
-        "name": "Livello riscaldamento sedile anteriore destro"
+        "name": "Riscaldamento sedile livello anteriore destro"
       },
       "seat_heating_level_rear_left": {
-        "name": "Livello riscaldamento sedile posteriore sinistro"
+        "name": "Riscaldamento sedile livello posteriore sinistro"
       },
       "seat_heating_level_rear_right": {
-        "name": "Livello riscaldamento sedile posteriore destro"
+        "name": "Riscaldamento sedile livello posteriore destro"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Livello ventilazione sedile anteriore sinistro"
+        "name": "Ventilazione sedile livello anteriore sinistro"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Livello ventilazione sedile anteriore destro"
+        "name": "Ventilazione sedile livello anteriore destro"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Livello ventilazione sedile posteriore sinistro"
+        "name": "Ventilazione sedile livello posteriore sinistro"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Livello ventilazione sedile posteriore destro"
+        "name": "Ventilazione sedile livello posteriore destro"
       }
     },
     "switch": {

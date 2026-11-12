@@ -243,64 +243,64 @@
         "name": "Odómetro total"
       },
       "mileage_yesterday": {
-        "name": "Quilómetros de ontem"
+        "name": "Odómetro ontem"
       },
       "trip_mileage": {
-        "name": "Quilómetros da viagem"
+        "name": "Odómetro viagem"
       },
       "tire_pressure_front_left": {
-        "name": "Pressão do pneu dianteiro esquerdo"
+        "name": "Pressão pneu dianteiro esquerdo"
       },
       "tire_pressure_front_right": {
-        "name": "Pressão do pneu dianteiro direito"
+        "name": "Pressão pneu dianteiro direito"
       },
       "tire_pressure_rear_left": {
-        "name": "Pressão do pneu traseiro esquerdo"
+        "name": "Pressão pneu traseiro esquerdo"
       },
       "tire_pressure_rear_right": {
-        "name": "Pressão do pneu traseiro direito"
+        "name": "Pressão pneu traseiro direito"
       },
       "seat_heating_level_front_left": {
-        "name": "Nível de aquecimento do assento dianteiro esquerdo"
+        "name": "Aquecimento assento nível dianteiro esquerdo"
       },
       "seat_heating_level_front_right": {
-        "name": "Nível de aquecimento do assento dianteiro direito"
+        "name": "Aquecimento assento nível dianteiro direito"
       },
       "seat_heating_level_rear_left": {
-        "name": "Nível de aquecimento do assento traseiro esquerdo"
+        "name": "Aquecimento assento nível traseiro esquerdo"
       },
       "seat_heating_level_rear_right": {
-        "name": "Nível de aquecimento do assento traseiro direito"
+        "name": "Aquecimento assento nível traseiro direito"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Nível de ventilação do assento dianteiro esquerdo"
+        "name": "Ventilação assento nível dianteiro esquerdo"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Nível de ventilação do assento dianteiro direito"
+        "name": "Ventilação assento nível dianteiro direito"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Nível de ventilação do assento traseiro esquerdo"
+        "name": "Ventilação assento nível traseiro esquerdo"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Nível de ventilação do assento traseiro direito"
+        "name": "Ventilação assento nível traseiro direito"
       },
       "speed": {
         "name": "Velocidade"
       },
       "inside_temperature": {
-        "name": "Temperatura interior"
+        "name": "Clima temperatura interior"
       },
       "outside_temperature": {
-        "name": "Temperatura exterior"
+        "name": "Clima temperatura exterior"
       },
       "cabin_humidity": {
-        "name": "Humidade do habitáculo"
+        "name": "Clima humidade do habitáculo"
       },
       "inside_pm25": {
-        "name": "PM2.5 interior"
+        "name": "Clima PM2.5 interior"
       },
       "air_quality_level": {
-        "name": "Nível de qualidade do ar"
+        "name": "Clima nível de qualidade do ar"
       },
       "charge_status": {
         "name": "Estado de carga",
@@ -314,7 +314,7 @@
         }
       },
       "charge_mode": {
-        "name": "Tipo de carga",
+        "name": "Carga tipo",
         "state": {
           "ac": "AC",
           "dc": "DC"
@@ -324,13 +324,13 @@
         "name": "Corrente de carga"
       },
       "ac_charge_current": {
-        "name": "Corrente de carga CA"
+        "name": "Carga corrente CA"
       },
       "dc_charge_current": {
-        "name": "Corrente de carga CC"
+        "name": "Carga corrente CC"
       },
       "remaining_charge_time": {
-        "name": "Tempo de carga restante"
+        "name": "Carga tempo restante"
       },
       "charge_limit": {
         "name": "Limite de carga"
@@ -373,7 +373,7 @@
         "name": "Última atualização"
       },
       "remaining_charge_time_formatted": {
-        "name": "Tempo de carga restante (H:MM)"
+        "name": "Carga tempo restante (H:MM)"
       },
       "climate_target_temperature": {
         "name": "Temperatura definida do climatizador"
@@ -385,36 +385,36 @@
         "name": "Matrícula"
       },
       "window_opening_front_left": {
-        "name": "Abertura do vidro dianteiro esquerdo"
+        "name": "Janela dianteira esquerda abertura"
       },
       "window_opening_front_right": {
-        "name": "Abertura do vidro dianteiro direito"
+        "name": "Janela dianteira direita abertura"
       },
       "window_opening_rear_left": {
-        "name": "Abertura do vidro traseiro esquerdo"
+        "name": "Janela traseira esquerda abertura"
       },
       "window_opening_rear_right": {
-        "name": "Abertura do vidro traseiro direito"
+        "name": "Janela traseira direita abertura"
       }
     },
     "binary_sensor": {
       "charger_plugged": {
-        "name": "Carregador ligado"
+        "name": "Carga ligada"
       },
       "doors_lock_state": {
-        "name": "Estado do bloqueio"
+        "name": "Porta bloqueio"
       },
       "tire_alarm_front_left": {
-        "name": "Alarme do pneu dianteiro esquerdo"
+        "name": "Alarme pneu dianteiro esquerdo"
       },
       "tire_alarm_front_right": {
-        "name": "Alarme do pneu dianteiro direito"
+        "name": "Alarme pneu dianteiro direito"
       },
       "tire_alarm_rear_left": {
-        "name": "Alarme do pneu traseiro esquerdo"
+        "name": "Alarme pneu traseiro esquerdo"
       },
       "tire_alarm_rear_right": {
-        "name": "Alarme do pneu traseiro direito"
+        "name": "Alarme pneu traseiro direito"
       },
       "window_open_front_left": {
         "name": "Janela dianteira esquerda aberta"
@@ -432,7 +432,7 @@
         "name": "Aquecimento do volante"
       },
       "engine": {
-        "name": "Motor"
+        "name": "Veículo ligado"
       },
       "climate_on": {
         "name": "Climatização"
@@ -441,22 +441,22 @@
         "name": "Ligação à nuvem"
       },
       "high_beam": {
-        "name": "Máximos"
+        "name": "Luz máximos"
       },
       "low_beam": {
-        "name": "Médios"
+        "name": "Luz médios"
       },
       "position_lamp": {
-        "name": "Luz de presença"
+        "name": "Luz presença"
       },
       "left_turn_signal": {
-        "name": "Pisca esquerdo"
+        "name": "Luz pisca esquerdo"
       },
       "right_turn_signal": {
-        "name": "Pisca direito"
+        "name": "Luz pisca direito"
       },
       "any_door_open": {
-        "name": "Alguma porta aberta"
+        "name": "Porta alguma aberta"
       },
       "door_front_left": {
         "name": "Porta dianteira esquerda"
@@ -477,43 +477,43 @@
         "name": "Capô"
       },
       "dc_gun_connected": {
-        "name": "Ficha DC ligada"
+        "name": "Carga ficha DC ligada"
       },
       "ac_gun_connected": {
-        "name": "Ficha CA ligada"
+        "name": "Carga ficha CA ligada"
       },
       "charging": {
-        "name": "A carregar"
+        "name": "Carga ativa"
       },
       "charge_schedule_enabled": {
         "name": "Horário de carga ativo"
       },
       "front_left_seat_heating": {
-        "name": "Aquecimento do assento dianteiro esquerdo"
+        "name": "Aquecimento assento dianteiro esquerdo"
       },
       "front_right_seat_heating": {
-        "name": "Aquecimento do assento dianteiro direito"
+        "name": "Aquecimento assento dianteiro direito"
       },
       "rear_left_seat_heating": {
-        "name": "Aquecimento do assento traseiro esquerdo"
+        "name": "Aquecimento assento traseiro esquerdo"
       },
       "rear_right_seat_heating": {
-        "name": "Aquecimento do assento traseiro direito"
+        "name": "Aquecimento assento traseiro direito"
       },
       "front_left_seat_ventilation": {
-        "name": "Ventilação do assento dianteiro esquerdo"
+        "name": "Ventilação assento dianteiro esquerdo"
       },
       "front_right_seat_ventilation": {
-        "name": "Ventilação do assento dianteiro direito"
+        "name": "Ventilação assento dianteiro direito"
       },
       "key_battery_low": {
         "name": "Pilha do comando fraca"
       },
       "air_recirculation": {
-        "name": "Recirculação de ar"
+        "name": "Clima recirculação de ar"
       },
       "rear_fog_lamp": {
-        "name": "Nevoeiro traseiro"
+        "name": "Luz nevoeiro traseiro"
       },
       "warning_12v_battery": {
         "name": "Aviso bateria de 12 V"
@@ -586,28 +586,28 @@
         "name": "Limite de carga"
       },
       "seat_heating_level_front_left": {
-        "name": "Nível de aquecimento do assento dianteiro esquerdo"
+        "name": "Aquecimento assento nível dianteiro esquerdo"
       },
       "seat_heating_level_front_right": {
-        "name": "Nível de aquecimento do assento dianteiro direito"
+        "name": "Aquecimento assento nível dianteiro direito"
       },
       "seat_heating_level_rear_left": {
-        "name": "Nível de aquecimento do assento traseiro esquerdo"
+        "name": "Aquecimento assento nível traseiro esquerdo"
       },
       "seat_heating_level_rear_right": {
-        "name": "Nível de aquecimento do assento traseiro direito"
+        "name": "Aquecimento assento nível traseiro direito"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Nível de ventilação do assento dianteiro esquerdo"
+        "name": "Ventilação assento nível dianteiro esquerdo"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Nível de ventilação do assento dianteiro direito"
+        "name": "Ventilação assento nível dianteiro direito"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Nível de ventilação do assento traseiro esquerdo"
+        "name": "Ventilação assento nível traseiro esquerdo"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Nível de ventilação do assento traseiro direito"
+        "name": "Ventilação assento nível traseiro direito"
       }
     },
     "switch": {

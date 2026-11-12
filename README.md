@@ -2,6 +2,8 @@
 
 Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, E07) over the official international and chinese API.
 
+The integration provides the connection, the telemetry and the remote controls; the look comes from a dashboard card. It ships a built-in card for every model, and **Deepal S05 owners get the best result with the community Deepal Companion dashboard** (see [Dashboards and cards](#dashboards-and-cards)).
+
 ## Important warnings
 
 - Unofficial project, not affiliated with Changan Automobile. Use it at your own risk.
@@ -10,20 +12,6 @@ Home Assistant custom integration for **My Changan / Deepal** connected vehicles
 - Signing in with an account can sign that account out of the official My Changan app, and signing
   in to the app again can invalidate the Home Assistant session. Use a **secondary account** shared
   from your main account to avoid this (see below).
-
-## What's new in 1.7.0
-
-- **One card for everything.** `custom:deepal-card` replaces the sidebar panel, the generated
-  dashboard strategy and the compact card. It has a configurable hero (plant, isometric, photos or
-  the vehicle image entity), configurable sections and actions, climate and tyre dialogs, and an
-  in-card settings panel. Existing dashboards must switch to `custom:deepal-card`; entities,
-  services, unique ids and `device_id` values are unchanged.
-- **Six card languages.** English, Spanish, German, French, Italian and Portuguese, following the
-  Home Assistant language or selectable per card.
-- **Diagnostics download fixed.** The capture link now downloads the bundle instead of closing the
-  options flow and falling back to the default dashboard.
-- **One-click HACS install.** The badge below opens this repository in HACS and offers to add it as
-  a custom repository.
 
 ## Requirements
 
@@ -108,14 +96,33 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   download and validate it, with the bundled art as a per-category fallback; animations stay on the
   bundled WebM files.
 
-### Using the dashboard card
+
+## Dashboards and cards
 
 The integration ships **one configurable card** and nothing else: no sidebar panel, no generated
 dashboard strategy and no second compact card. Everything is served by the integration itself, with
 no HACS cards, no helpers and no Lovelace resources to configure.
 
-1. **Edit dashboard → Add card** and pick **Deepal vehicle**, then select the car in the visual
-   editor. By hand:
+Everything the integration exposes is plain Home Assistant entities, so any dashboard can use it. Two cards are worth knowing:
+
+| | **Bundled card** (`custom:deepal-card`) | **[Deepal Companion](https://github.com/rmxs/deepal-S05-Companion)** |
+| --- | --- | --- |
+| Where it comes from | Included in this integration, nothing else to install | Separate community integration that runs on top of this one |
+| Vehicles | S05, S07, E07 and a generic Deepal profile | Deepal S05 (EV and PHEV) |
+| What you get | One configurable card: hero image, sections, action buttons, climate and tyre dialogs, six languages | Full S05 dashboard: state-aware car view, charging sessions, energy and cost history, Live notifications |
+| Install | Add the card, it is already served | HACS or Marketplace, then add **Deepal Companion** |
+| License | MIT (this repository) | GPL-3.0, maintained by [rmxs](https://github.com/rmxs) |
+
+> **Driving a Deepal S05? [Install Deepal Companion](https://github.com/rmxs/deepal-S05-Companion/tree/main).** It is designed specifically for the S05 and adds the dashboard, the charging archive with costs and the phone notifications, while this integration keeps providing the connection, the telemetry and the remote controls underneath. Install this integration first, then Companion.
+
+### Bundled card: `custom:deepal-card`
+
+<p align="center">
+  <img src="guides/images/deepal_card.webp" alt="The bundled Deepal card on a dashboard">
+</p>
+
+1. **Edit dashboard → Add card** select by card and pick **Deepal vehicle**, then select the car in the visual
+   editor (only if you have more than one vehicle). By hand:
    ```yaml
    type: custom:deepal-card
    device_id: <your vehicle device id>
@@ -134,27 +141,37 @@ area or language works, and the model profiles (S05 EV, S05 PHEV, S07 and generi
 artwork and sections their vehicle exposes. It uses the official per-vehicle image pack when the
 integration can download it, with the bundled art as fallback.
 
-**Upgrading from 1.6.x:** the sidebar panel, the `custom:deepal` dashboard strategy and the
-`custom:deepal-compact-card` card were removed. Replace them with `custom:deepal-card`; its settings
-reproduce the compact composition and the old hero/sections. Entities, services and `device_id`
-values are unchanged.
+### Deepal Companion: the recommended dashboard for the S05
 
-**Example dashboard**: `guides/dashboards/deepal-dashboard.example.yaml` is a copy-ready sections
-view built only on the bundled card and core Home Assistant cards; paste it in the raw editor and
-replace the device and entity ids with yours.
+<p align="center">
+  <img src="guides/images/deepal-companion-1.webp" alt="The Deepal Companion dashboard for the S05" width="40%"><img src="guides/images/deepal-companion-2.webp" alt="Deepal Companion control panel with live preview of the S05" width="60%">
+</p>
 
-Full walkthrough and troubleshooting:
-[dashboard card guide (English)](guides/dashboard-guide.en.md) ·
-[guía de la tarjeta del dashboard (español)](guides/dashboard-guide.es.md).
+[**Deepal Companion**](https://github.com/rmxs/deepal-S05-Companion) is an independent community
+integration built for the Deepal S05 (EV and PHEV). It reads the same `deepal` entities this
+integration creates and adds a complete S05 experience on top of them:
 
-### Community cards
+- state-aware car view with paint colours and wheels, and images that reflect doors, windows,
+  bonnet, tailgate, lights and charging;
+- lock, windows, tailgate, climate, lights, horn and locate controls, plus climate, seats, tyres and
+  diagnostics panels;
+- automatic charging-session recording, a charging archive with curves, energy history and costs
+  with per-location tariffs and charging networks (Spain, Italy and Greece);
+- **Live notifications** on the phone Lock Screen for charging, climate and doors left open
+  (iPhone Live Activities and Android Live Updates);
+- profiles, layouts and a built-in control panel with a live preview of your car.
 
-The bundled card is the supported card and the only one the integration serves. If you prefer a
-layout designed specifically for the S05, [Deepal S05 Card](https://github.com/rmxs/deepal-s05-card)
-is an independent community card that reads the same `deepal` entities: state-aware hero, live Car
-View, range and battery rings, climate and tyre popups, diagnostics and its own settings. It is
-installed separately with HACS, is MIT-licensed and is not maintained by this integration; report
-its issues in its own repository.
+It is installed as its own integration, separate from this one:
+
+1. Add `https://github.com/rmxs/deepal-S05-Companion` as an **Integration** in HACS (or in
+   **Settings > Marketplace > Add from link** on Home Assistant 2026.11 and newer).
+2. Install **Deepal Companion** and restart Home Assistant.
+3. Open **Settings > Devices & services > Add integration**, search for **Deepal Companion** and
+   confirm the detected vehicle.
+4. Open **Deepal Companion → Card Settings**, pick a card profile and use **Add to dashboard**.
+
+[installation guide](https://github.com/rmxs/deepal-S05-Companion/blob/main/docs/INSTALLATION.md);
+report its issues in its own repository.
 
 ### Diagnostics
 
@@ -342,6 +359,10 @@ automation:
 The charging-session tracking follows the approach of
 [DEC Deepal](https://github.com/manuelem1984/dec_deepal) (MIT), which documents the same session
 rules.
+
+[Deepal Companion](https://github.com/rmxs/deepal-S05-Companion) is a separate community project by
+[rmxs](https://github.com/rmxs) (GPL-3.0) that builds its dashboard on the entities of this
+integration.
 
 ## Disclaimer
 

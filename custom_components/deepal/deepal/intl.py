@@ -107,6 +107,8 @@ from .models import (
     WindowsCondition,
 )
 from .mqtt import (
+    _as_float,
+    _as_int,
     CHARGE_TIME_SENTINEL,
     MQTT_CONNACK_REASONS,
     MQTT_DEFAULT_KEEPALIVE,
@@ -325,29 +327,40 @@ def _first_auth_token(data: Any) -> Optional[str]:
     return None
 
 
-def _as_int(value: Any) -> Optional[int]:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def _percent(value: Any) -> Optional[int]:
+    """Return a 0-100 percentage, or None when it is missing or out of range.
+
+    ``BatteryCondition`` validates its percentages, and a ``ValidationError`` is
+    not a ``DeepalError``: one out-of-range reading (for example a ``255``
+    "invalid" marker) would abort the whole condition parse and fail the
+    coordinator refresh for every entity. An impossible percentage is unknown.
+    """
+    number = _as_int(value)
+    return number if number is not None and 0 <= number <= 100 else None
 
 
-def _as_float(value: Any) -> Optional[float]:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def _flag_active(value: Any) -> bool:
+    """Return whether a numeric on/off flag is set; absent or unparsable is not.
+
+    Door, window, lamp and lock flags arrive as numbers, but numeric strings
+    are accepted too: comparing the raw value with ``0`` reads ``"0"`` as set.
+    """
+    number = _as_int(value)
+    return number is not None and number != 0
 
 
 def _humidity_percent(value: Any) -> Optional[float]:
     """Return the cabin humidity as a percentage.
 
-    The API reports ``insideHumidity`` as a fixed-point integer from 0 to 1000
+    The API reports ``insideHumidity`` as a fixed-point integer from 1 to 1000
     with one implied decimal: ``453`` means 45.3 %. Values outside that range,
-    or non-numeric values, are unknown.
+    or non-numeric values, are unknown. ``0`` is a "no reading" placeholder, not
+    0 % humidity: a live S05 PHEV capture (239 reports, 2026-11-10/11) alternated
+    ``0.0`` with real readings of 136-164 while the car was in the same parked
+    state, so a zero is unknown.
     """
     humidity = _as_float(value)
-    if humidity is None or not 0 <= humidity <= 1000:
+    if humidity is None or not 0 < humidity <= 1000:
         return None
     return round(humidity / 10, 1)
 
@@ -1750,11 +1763,10 @@ class DeepalIntlClient:
         doors = door.get("doors") or []
 
         def door_open(index: int) -> bool:
-            value = _path_value(doors, (index,))
-            return value not in (None, 0)
+            return _flag_active(_path_value(doors, (index,)))
 
-        driver_lock = door.get("driverLock")
-        passenger_lock = door.get("passengerLock")
+        driver_lock = _as_int(door.get("driverLock"))
+        passenger_lock = _as_int(door.get("passengerLock"))
         if driver_lock is not None:
             locked = driver_lock == 0
         elif passenger_lock is not None:
@@ -1769,7 +1781,7 @@ class DeepalIntlClient:
             remaining_charge_time = None
 
         battery = BatteryCondition(
-            soc_percentage=_as_int(status.get("soc")),
+            soc_percentage=_percent(status.get("soc")),
             remaining_range_km=_as_int(status.get("drvMileage")),
             charging_status=str(charge_status) if charge_status is not None else None,
             charger_connected=charger_connected,
@@ -1787,10 +1799,10 @@ class DeepalIntlClient:
                 charge.get("dcChargeCurrent"), "charge.dcChargeCurrent"
             ),
             remaining_charge_time_min=remaining_charge_time,
-            charge_limit_percent=_as_int(charge.get("maxSocPercent")),
+            charge_limit_percent=_percent(charge.get("maxSocPercent")),
             charge_schedule_enabled=(
-                charge_plan.get("startSwitch") == 1
-                and charge_plan.get("endSwitch") == 1
+                _as_int(charge_plan.get("startSwitch")) == 1
+                and _as_int(charge_plan.get("endSwitch")) == 1
             ),
             charge_schedule_start=(
                 str(charge_plan["startTime"])
@@ -1834,15 +1846,14 @@ class DeepalIntlClient:
             passenger_door_open=door_open(1),
             rear_left_door_open=door_open(2),
             rear_right_door_open=door_open(3),
-            trunk_open=door.get("trunk") not in (None, 0),
-            hood_open=door.get("hood") not in (None, 0),
+            trunk_open=_flag_active(door.get("trunk")),
+            hood_open=_flag_active(door.get("hood")),
         )
 
         window_list = window.get("windows") or []
 
         def window_open(index: int) -> bool:
-            value = _path_value(window_list, (index,))
-            return value not in (None, 0)
+            return _flag_active(_path_value(window_list, (index,)))
 
         windows_condition = WindowsCondition(
             front_left_open=window_open(0),
@@ -1875,7 +1886,7 @@ class DeepalIntlClient:
             return TireStatus(
                 pressure_bar=round(pressure / 100, 2) if pressure is not None else None,
                 temperature_c=_as_float(data.get("temperature")),
-                alarm=bool(data.get("alarm"))
+                alarm=_flag_active(data.get("alarm"))
                 or status_value not in (None, 0, "0"),
             )
 
@@ -1909,13 +1920,13 @@ class DeepalIntlClient:
         )
 
         lamps = LampsCondition(
-            high_beam=lamp.get("highBeam") not in (None, 0),
-            low_beam=lamp.get("lowBeam") not in (None, 0),
-            position_lamp=lamp.get("positionLamp") not in (None, 0),
-            front_fog=lamp.get("frontFoglamp") not in (None, 0),
-            rear_fog=lamp.get("rearFoglamp") not in (None, 0),
-            left_turn=lamp.get("leftTurn") not in (None, 0),
-            right_turn=lamp.get("rightTurn") not in (None, 0),
+            high_beam=_flag_active(lamp.get("highBeam")),
+            low_beam=_flag_active(lamp.get("lowBeam")),
+            position_lamp=_flag_active(lamp.get("positionLamp")),
+            front_fog=_flag_active(lamp.get("frontFoglamp")),
+            rear_fog=_flag_active(lamp.get("rearFoglamp")),
+            left_turn=_flag_active(lamp.get("leftTurn")),
+            right_turn=_flag_active(lamp.get("rightTurn")),
         )
 
         last_updated = _to_millis(
@@ -1980,7 +1991,7 @@ class DeepalIntlClient:
             vehicle_status=_as_int(status.get("status")),
             engine_on=engine_on,
             connected=(
-                status.get("connectStatus") == 1
+                _as_int(status.get("connectStatus")) == 1
                 if status.get("connectStatus") is not None
                 else None
             ),

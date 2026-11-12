@@ -277,7 +277,7 @@ def _not_locked(value: bool | None) -> bool | None:
 BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
     DeepalBinarySensorDescription(
         key="engine",
-        name="Engine",
+        name="Vehicle Powered On",
         value_fn=lambda cond, vehicle: cond.engine_on,
         device_class=BinarySensorDeviceClass.POWER,
     ),

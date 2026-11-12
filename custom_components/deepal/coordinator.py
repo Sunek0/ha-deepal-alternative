@@ -13,6 +13,7 @@ from typing import Any, NoReturn
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .charging import ChargingSessionManager, charging_flag
@@ -31,7 +32,17 @@ from .deepal import (
     VehicleCapabilities,
     VehicleCondition,
 )
-from .deepal.mqtt import S05_CHARGE_GUN_KEYS, S05_DC_GUN_KEYS, is_s05_model
+from .snapshot import (
+    SNAPSHOT_VERSION,
+    conditions_from_snapshot,
+    conditions_to_snapshot,
+)
+from .deepal.mqtt import (
+    S05_CHARGE_GUN_KEYS,
+    S05_DC_GUN_KEYS,
+    is_s05_model,
+    rest_subsystem_warnings,
+)
 from .const import (
     DOMAIN,
     DEFAULT_SCAN_INTERVAL,
@@ -62,6 +73,8 @@ _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 # fraction of the previous value as a meter reset; smaller drops are precision
 # dips that trigger a warning and subtract the delta from the long-term sum.
 _ODOMETER_RESET_RATIO = 0.9
+# The last published condition is written at most this often (seconds).
+_SNAPSHOT_SAVE_DELAY = 30.0
 
 
 class WakeResult(StrEnum):
@@ -437,6 +450,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._charging_read_task: asyncio.Task[None] | None = None
         self._charging_read_stop: asyncio.Event | None = None
         self._charging_read_interval = _CHARGING_READ_INTERVAL
+        # Last conditions stored before the restart; only the previous state of
+        # the merge rules until the first poll of this run has been published.
+        self._store: Store[dict[str, Any]] = Store(
+            hass, SNAPSHOT_VERSION, f"{DOMAIN}.{entry.entry_id}.last_condition"
+        )
+        self._restored: dict[str, VehicleCondition] = {}
+        self._restored_loaded = False
 
     def mqtt_attempt(self, vehicle_id: str) -> dict[str, Any] | None:
         """Return the last failed MQTT exchange details for diagnostics."""
@@ -564,6 +584,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition.climate.steering_wheel_heater_on = remembered[0]
         condition.climate.steering_wheel_heater_level = remembered[1]
 
+    @staticmethod
+    def _apply_rest_subsystem_warnings(
+        vehicle: Vehicle, condition: VehicleCondition, status: Any
+    ) -> None:
+        """Set the S05 airbag, ABS and power steering lights from REST registers."""
+        if not (is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)):
+            return
+        for field, value in rest_subsystem_warnings(
+            status, condition.power_status
+        ).items():
+            setattr(condition.warnings, field, value)
+
     async def _overlay_app_comfort(
         self, vehicle: Vehicle, condition: VehicleCondition
     ) -> VehicleCondition:
@@ -593,6 +625,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """
         if not self._uses_mqtt(vehicle):
             return condition
+        # The MQTT airbag, ABS and power steering light bits glitch on a healthy
+        # car, so for an S05 they are taken from the REST subsystem registers
+        # only: unknown until the app condition confirms them.
+        self._apply_rest_subsystem_warnings(vehicle, condition, None)
         try:
             app_condition = await self.client.get_vehicle_condition(
                 vehicle.car_id,
@@ -605,8 +641,20 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
             self._apply_steering_wheel_state(vehicle, condition)
             return condition
+        self._apply_rest_subsystem_warnings(
+            vehicle, condition, (app_condition.raw_data or {}).get("vehicleStatus")
+        )
         mqtt_ts = condition.last_updated_timestamp
         app_ts = app_condition.last_updated_timestamp
+        if (app_condition.raw_data or {}).get("charge", {}).get("chargePlanList"):
+            # The charge plan only exists in the app condition (the MQTT report
+            # carries no schedule); it is configuration, so it applies even
+            # when the app report is older.
+            _copy_missing_fields(
+                condition.battery,
+                app_condition.battery,
+                ("charge_schedule_start", "charge_schedule_end"),
+            )
         app_is_older = (
             mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts
         )
@@ -855,7 +903,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         def keep(path: str) -> bool:
             return pending is None or path not in pending
 
-        previous = (self.data or {}).get(vehicle_id)
+        previous = (self.data or {}).get(vehicle_id) or self._restored.get(
+            vehicle_id
+        )
         if previous is not None:
             if condition.latitude is None:
                 condition.latitude = previous.latitude
@@ -871,6 +921,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     )
             _retain_unreported_groups(previous, condition, pending)
             _retain_odometer(previous, condition)
+            _copy_missing_fields(
+                condition.battery,
+                previous.battery,
+                ("charge_schedule_start", "charge_schedule_end"),
+            )
             _copy_missing_fields(condition.fuel, previous.fuel, _FUEL_FIELDS)
             if condition.battery.charge_limit_percent is None and keep(
                 "battery.charge_limit_percent"
@@ -1350,6 +1405,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
+        await self._async_load_snapshot()
         await self._async_maybe_refresh_tokens()
         try:
             data = await self._async_fetch()
@@ -1378,7 +1434,26 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
         self._track_charging(data)
         self._sync_charging_read(data)
+        # From now on the in-memory data is the previous state.
+        self._restored.clear()
+        self._store.async_delay_save(self._snapshot_payload, _SNAPSHOT_SAVE_DELAY)
         return data
+
+    async def _async_load_snapshot(self) -> None:
+        """Load the conditions stored before the restart, once per run."""
+        if self._restored_loaded:
+            return
+        self._restored_loaded = True
+        try:
+            stored = await self._store.async_load()
+        except Exception:  # noqa: BLE001 - a bad store must never block polling
+            _LOGGER.debug("Deepal stored condition could not be read", exc_info=True)
+            return
+        self._restored = conditions_from_snapshot(VehicleCondition, stored)
+
+    def _snapshot_payload(self) -> dict[str, Any]:
+        """Return the data written to the store (the conditions last published)."""
+        return conditions_to_snapshot(self.data)
 
     def _track_charging(self, data: dict[str, VehicleCondition]) -> None:
         """Feed one telemetry snapshot into the charging-session tracker."""

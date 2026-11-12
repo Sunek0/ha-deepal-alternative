@@ -192,6 +192,9 @@ def _coordinator(
     coordinator._last_wake_at = {}
     coordinator._last_wake_result = {}
     coordinator._wake_locks = {}
+    coordinator._restored = {}
+    coordinator._restored_loaded = False
+    coordinator._store = _RecordingStore()
     coordinator.wake_enabled = True
     coordinator._wake_poll_interval = 0.01
     coordinator._wake_report_timeout = 0.1

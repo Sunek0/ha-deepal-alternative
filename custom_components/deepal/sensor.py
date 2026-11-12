@@ -43,6 +43,7 @@ from .deepal.mqtt import (
     CHARGE_STATE_DC_CHARGING,
     CHARGE_STATE_DC_CONNECTED,
     CHARGE_STATE_NOT_CHARGING,
+    charge_is_active,
     charge_state,
 )
 from .runtime_data import DeepalConfigEntry
@@ -93,6 +94,10 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
     }
 )
 
+# The S05 PHEV never reports an outside temperature (no field in any MQTT report
+# or in the server condition), so the sensor would stay unknown forever.
+S05_PHEV_UNSUPPORTED_SENSOR_KEYS = frozenset({"outside_temperature"})
+
 # The S05 has no rear seat heating hardware (the app disables those controls).
 S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
 
@@ -134,6 +139,41 @@ def format_hours_minutes(minutes: int | None) -> str | None:
         return None
     total = max(0, int(minutes))
     return f"{total // 60}:{total % 60:02d}"
+
+
+def format_clock_time(value: Any) -> str | None:
+    """Format a charge-schedule time as ``HH:MM``.
+
+    The API reports the time as four digits (``"0100"``); an unreadable value
+    is unknown instead of being shown as it came.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().replace(":", "")
+    if len(text) == 3:
+        text = text.zfill(4)
+    if len(text) != 4 or not text.isdigit():
+        return None
+    hour, minute = int(text[:2]), int(text[2:])
+    if hour > 23 or minute > 59:
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+#: Shown by the H:MM sensor when the S05 reports that it is not charging.
+NOT_CHARGING_TEXT = "Not charging"
+
+
+def remaining_charge_time_text(cond: Any, vehicle: Any) -> str | None:
+    """Return ``H:MM``, ``Not charging`` or None when the estimate is unknown.
+
+    Only the S05 charging-state enum is known to mean "not charging" (0 not
+    charging, 1/2 cable connected, 5 stopped); while charging without an
+    estimate, or for any other state or vehicle, the value stays unknown.
+    """
+    if is_s05(vehicle) and charge_is_active(cond.battery.charging_status) is False:
+        return NOT_CHARGING_TEXT
+    return format_hours_minutes(cond.battery.remaining_charge_time_min)
 
 
 def build_sensors(
@@ -181,6 +221,10 @@ def build_sensors(
         def supported(description: DeepalSensorDescription) -> bool:
             if description.key in FUEL_SENSOR_KEYS and not fuel:
                 return False
+            if description.key in S05_PHEV_UNSUPPORTED_SENSOR_KEYS and is_s05_phev(
+                vehicle
+            ):
+                return False
             if not s05:
                 return True
             if description.key in S05_ENUM_SENSOR_KEYS:
@@ -216,7 +260,9 @@ async def async_setup_entry(
     for vehicle in coordinator.vehicles:
         _remove_retired_entities(registry, vehicle)
         if is_s05_phev(vehicle):
-            _remove_sensor_entities(registry, vehicle, {"charge_limit"})
+            _remove_sensor_entities(
+                registry, vehicle, {"charge_limit"} | S05_PHEV_UNSUPPORTED_SENSOR_KEYS
+            )
         entities.extend(build_sensors(coordinator, vehicle))
 
     async_add_entities(entities)
@@ -622,9 +668,7 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
     DeepalSensorDescription(
         key="remaining_charge_time_formatted",
         name="Remaining Charge Time (H:MM)",
-        value_fn=lambda cond, vehicle: format_hours_minutes(
-            cond.battery.remaining_charge_time_min
-        ),
+        value_fn=remaining_charge_time_text,
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
@@ -640,7 +684,9 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
     DeepalSensorDescription(
         key="charge_schedule_start",
         name="Charge Schedule Start",
-        value_fn=lambda cond, vehicle: cond.battery.charge_schedule_start,
+        value_fn=lambda cond, vehicle: format_clock_time(
+            cond.battery.charge_schedule_start
+        ),
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,
@@ -649,7 +695,9 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
     DeepalSensorDescription(
         key="charge_schedule_end",
         name="Charge Schedule End",
-        value_fn=lambda cond, vehicle: cond.battery.charge_schedule_end,
+        value_fn=lambda cond, vehicle: format_clock_time(
+            cond.battery.charge_schedule_end
+        ),
         device_class=None,
         state_class=None,
         native_unit_of_measurement=None,

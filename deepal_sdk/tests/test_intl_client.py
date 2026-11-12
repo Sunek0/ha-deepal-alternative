@@ -4238,7 +4238,9 @@ async def test_get_vehicle_condition_drops_the_negative_charge_current_sentinel(
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        (0, 0.0),
+        (0, None),
+        (0.0, None),
+        (1, 0.1),
         (61, 6.1),
         (100, 10.0),
         (453, 45.3),

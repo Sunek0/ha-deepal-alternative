@@ -240,13 +240,13 @@
         "name": "Restreichweite"
       },
       "total_odometer": {
-        "name": "Gesamtkilometerstand"
+        "name": "Kilometerstand gesamt"
       },
       "mileage_yesterday": {
-        "name": "Kilometer gestern"
+        "name": "Kilometerstand gestern"
       },
       "trip_mileage": {
-        "name": "Kilometer der Fahrt"
+        "name": "Kilometerstand Fahrt"
       },
       "tire_pressure_front_left": {
         "name": "Reifendruck vorne links"
@@ -261,46 +261,46 @@
         "name": "Reifendruck hinten rechts"
       },
       "seat_heating_level_front_left": {
-        "name": "Sitzheizungsstufe vorne links"
+        "name": "Sitzheizung Stufe vorne links"
       },
       "seat_heating_level_front_right": {
-        "name": "Sitzheizungsstufe vorne rechts"
+        "name": "Sitzheizung Stufe vorne rechts"
       },
       "seat_heating_level_rear_left": {
-        "name": "Sitzheizungsstufe hinten links"
+        "name": "Sitzheizung Stufe hinten links"
       },
       "seat_heating_level_rear_right": {
-        "name": "Sitzheizungsstufe hinten rechts"
+        "name": "Sitzheizung Stufe hinten rechts"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Sitzbelüftungsstufe vorne links"
+        "name": "Sitzbelüftung Stufe vorne links"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Sitzbelüftungsstufe vorne rechts"
+        "name": "Sitzbelüftung Stufe vorne rechts"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Sitzbelüftungsstufe hinten links"
+        "name": "Sitzbelüftung Stufe hinten links"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Sitzbelüftungsstufe hinten rechts"
+        "name": "Sitzbelüftung Stufe hinten rechts"
       },
       "speed": {
         "name": "Geschwindigkeit"
       },
       "inside_temperature": {
-        "name": "Innentemperatur"
+        "name": "Klima Innentemperatur"
       },
       "outside_temperature": {
-        "name": "Außentemperatur"
+        "name": "Klima Außentemperatur"
       },
       "cabin_humidity": {
-        "name": "Luftfeuchtigkeit im Innenraum"
+        "name": "Klima Innenraum-Luftfeuchtigkeit"
       },
       "inside_pm25": {
-        "name": "PM2.5 innen"
+        "name": "Klima PM2.5 innen"
       },
       "air_quality_level": {
-        "name": "Luftqualitätsstufe"
+        "name": "Klima Luftqualitätsstufe"
       },
       "charge_status": {
         "name": "Ladestatus",
@@ -314,7 +314,7 @@
         }
       },
       "charge_mode": {
-        "name": "Ladeart",
+        "name": "Laden Art",
         "state": {
           "ac": "AC",
           "dc": "DC"
@@ -324,13 +324,13 @@
         "name": "Ladestrom"
       },
       "ac_charge_current": {
-        "name": "Wechselstrom-Ladestrom"
+        "name": "Laden AC-Strom"
       },
       "dc_charge_current": {
-        "name": "Gleichstrom-Ladestrom"
+        "name": "Laden DC-Strom"
       },
       "remaining_charge_time": {
-        "name": "Restladezeit"
+        "name": "Laden Restzeit"
       },
       "charge_limit": {
         "name": "Ladelimit"
@@ -373,7 +373,7 @@
         "name": "Letzte Aktualisierung"
       },
       "remaining_charge_time_formatted": {
-        "name": "Restladezeit (H:MM)"
+        "name": "Laden Restzeit (H:MM)"
       },
       "climate_target_temperature": {
         "name": "Klima-Zieltemperatur"
@@ -385,24 +385,24 @@
         "name": "Kennzeichen"
       },
       "window_opening_front_left": {
-        "name": "Fensteröffnung vorne links"
+        "name": "Fenster vorne links Öffnung"
       },
       "window_opening_front_right": {
-        "name": "Fensteröffnung vorne rechts"
+        "name": "Fenster vorne rechts Öffnung"
       },
       "window_opening_rear_left": {
-        "name": "Fensteröffnung hinten links"
+        "name": "Fenster hinten links Öffnung"
       },
       "window_opening_rear_right": {
-        "name": "Fensteröffnung hinten rechts"
+        "name": "Fenster hinten rechts Öffnung"
       }
     },
     "binary_sensor": {
       "charger_plugged": {
-        "name": "Ladegerät angeschlossen"
+        "name": "Laden angeschlossen"
       },
       "doors_lock_state": {
-        "name": "Türverriegelungsstatus"
+        "name": "Tür Verriegelung"
       },
       "tire_alarm_front_left": {
         "name": "Reifenalarm vorne links"
@@ -432,7 +432,7 @@
         "name": "Lenkradheizung"
       },
       "engine": {
-        "name": "Motor"
+        "name": "Fahrzeug eingeschaltet"
       },
       "climate_on": {
         "name": "Klimaanlage"
@@ -441,34 +441,34 @@
         "name": "Cloud-Verbindung"
       },
       "high_beam": {
-        "name": "Fernlicht"
+        "name": "Licht Fernlicht"
       },
       "low_beam": {
-        "name": "Abblendlicht"
+        "name": "Licht Abblendlicht"
       },
       "position_lamp": {
-        "name": "Standlicht"
+        "name": "Licht Standlicht"
       },
       "left_turn_signal": {
-        "name": "Blinker links"
+        "name": "Licht Blinker links"
       },
       "right_turn_signal": {
-        "name": "Blinker rechts"
+        "name": "Licht Blinker rechts"
       },
       "any_door_open": {
-        "name": "Irgendeine Tür offen"
+        "name": "Tür irgendeine offen"
       },
       "door_front_left": {
-        "name": "Vordere linke Tür"
+        "name": "Tür vorne links"
       },
       "door_front_right": {
-        "name": "Vordere rechte Tür"
+        "name": "Tür vorne rechts"
       },
       "door_rear_left": {
-        "name": "Hintere linke Tür"
+        "name": "Tür hinten links"
       },
       "door_rear_right": {
-        "name": "Hintere rechte Tür"
+        "name": "Tür hinten rechts"
       },
       "trunk": {
         "name": "Kofferraum"
@@ -477,13 +477,13 @@
         "name": "Motorhaube"
       },
       "dc_gun_connected": {
-        "name": "DC-Stecker angeschlossen"
+        "name": "Laden DC-Stecker angeschlossen"
       },
       "ac_gun_connected": {
-        "name": "AC-Stecker angeschlossen"
+        "name": "Laden AC-Stecker angeschlossen"
       },
       "charging": {
-        "name": "Lädt"
+        "name": "Laden aktiv"
       },
       "charge_schedule_enabled": {
         "name": "Ladezeitplan aktiviert"
@@ -510,10 +510,10 @@
         "name": "Schlüsselbatterie schwach"
       },
       "air_recirculation": {
-        "name": "Umluft"
+        "name": "Klima Umluft"
       },
       "rear_fog_lamp": {
-        "name": "Nebelschlussleuchte"
+        "name": "Licht Nebelschluss"
       },
       "warning_12v_battery": {
         "name": "Warnleuchte 12-V-Batterie"
@@ -586,28 +586,28 @@
         "name": "Ladelimit"
       },
       "seat_heating_level_front_left": {
-        "name": "Sitzheizungsstufe vorne links"
+        "name": "Sitzheizung Stufe vorne links"
       },
       "seat_heating_level_front_right": {
-        "name": "Sitzheizungsstufe vorne rechts"
+        "name": "Sitzheizung Stufe vorne rechts"
       },
       "seat_heating_level_rear_left": {
-        "name": "Sitzheizungsstufe hinten links"
+        "name": "Sitzheizung Stufe hinten links"
       },
       "seat_heating_level_rear_right": {
-        "name": "Sitzheizungsstufe hinten rechts"
+        "name": "Sitzheizung Stufe hinten rechts"
       },
       "seat_ventilation_level_front_left": {
-        "name": "Sitzbelüftungsstufe vorne links"
+        "name": "Sitzbelüftung Stufe vorne links"
       },
       "seat_ventilation_level_front_right": {
-        "name": "Sitzbelüftungsstufe vorne rechts"
+        "name": "Sitzbelüftung Stufe vorne rechts"
       },
       "seat_ventilation_level_rear_left": {
-        "name": "Sitzbelüftungsstufe hinten links"
+        "name": "Sitzbelüftung Stufe hinten links"
       },
       "seat_ventilation_level_rear_right": {
-        "name": "Sitzbelüftungsstufe hinten rechts"
+        "name": "Sitzbelüftung Stufe hinten rechts"
       }
     },
     "switch": {

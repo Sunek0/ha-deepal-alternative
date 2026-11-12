@@ -132,8 +132,10 @@ def _fake_vehicle() -> SimpleNamespace:
     return SimpleNamespace(
         car_id="car-1",
         series_name="Deepal S05 Max",
+        series_code=None,
         car_name=None,
         model_name=None,
+        model_code=None,
         thumbnail_url=None,
         license_plate=None,
         car_platform=None,
@@ -2913,6 +2915,17 @@ async def test_control_pin_validation_error_mapping() -> None:
     assert await config_flow._control_pin_validation_error(
         stored, {CONF_CONTROL_PIN: "0000"}, client
     ) == {"base": "pin_rate_limited"}
+def test_charge_schedule_times_are_shown_as_clock_time() -> None:
+    assert sensor.format_clock_time("0100") == "01:00"
+    assert sensor.format_clock_time("0000") == "00:00"
+    assert sensor.format_clock_time("2359") == "23:59"
+    assert sensor.format_clock_time("01:00") == "01:00"
+    assert sensor.format_clock_time(None) is None
+    assert sensor.format_clock_time("") is None
+    assert sensor.format_clock_time("2460") is None
+    assert sensor.format_clock_time("abcd") is None
+
+
 def test_remaining_charge_time_formatted_sensor() -> None:
     assert sensor.format_hours_minutes(None) is None
     assert sensor.format_hours_minutes(45) == "0:45"
