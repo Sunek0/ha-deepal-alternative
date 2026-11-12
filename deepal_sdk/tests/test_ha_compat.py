@@ -954,7 +954,9 @@ def test_entities_only_expose_allowed_device_info_fields() -> None:
     for platform, entities in _entities_by_platform().items():
         for entity in entities:
             info = entity.device_info
-            assert set(info) <= ALLOWED_DEVICE_INFO_FIELDS, platform
+            # Home Assistant 2026.11 replaced the DeviceInfo TypedDict with a slotted
+            # dataclass that is not iterable, so read the keys instead of the mapping.
+            assert set(info.keys()) <= ALLOWED_DEVICE_INFO_FIELDS, platform
             assert info["identifiers"] == {("deepal", "car-1")}
 
 
