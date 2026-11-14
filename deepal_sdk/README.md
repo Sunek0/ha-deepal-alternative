@@ -189,6 +189,7 @@ from deepal import (
     DeepalCommandAuthError,
     DeepalCommandNotReady,
     DeepalConnectionError,
+    DeepalMqttAuthRejected,
     DeepalRateLimitError,
 )
 
@@ -208,6 +209,8 @@ except DeepalAPIError as err:
 - `DeepalCommandAuthError`: the command-signing material was rejected, or the PIN is expired/not
   set.
 - `DeepalCommandNotReady`: a signed command was attempted without the private key or the PIN.
+- `DeepalMqttAuthRejected`: the MQTT broker rejected CONNECT with `0x86`, `0x87` or `0x8C` after the
+  SDK's single retry with fresh bootstrap material; `reason_code` carries the CONNACK code.
 - `DeepalAPIError`: any other gateway or HTTP failure, with `code` and `status_code`.
 - `DeepalConnectionError`: transport failure (`httpx.RequestError`).
 

@@ -69,10 +69,9 @@ DeepalIntlClient(
     os_version="9",
     tsp_token_source="access",
     environment="release_eu",
-    mqtt_config_fallback=True,
     mqtt_client_id=None,
     mqtt_username=None,
-    mqtt_keepalive=60,
+    mqtt_keepalive=None,
     mqtt_clean_start=True,
     mqtt_tls_insecure=False,
     mqtt_sda_probe_grace=3.0,
@@ -100,11 +99,10 @@ DeepalIntlClient(
 | `app_version`, `app_type`, `device_type`, `os_version` | Declared app identity; defaults match the 1.12.0 app capture. Overridable for diagnostics. |
 | `tsp_token_source` | Which session value is sent as `X-Tsp-User-Token`/`X-VCS-User-Token`: `access` (default, verified live), `cac`, `cac_user_id` or `ca_user_id`. Diagnostic only. |
 | `environment` | Regional gateway set (see [Environments](#2-environments)). |
-| `mqtt_config_fallback` | Allow the CA `appGetCarConfFunc` fallback when `getConnConf` fails (see `mqtt-telemetry.md`). The CA auth-token request has no cross-gateway fallback. |
 | `mqtt_client_id`, `mqtt_username` | MQTT identity overrides; otherwise resolved from the connection config. |
-| `mqtt_keepalive` | MQTT keepalive seconds (default 60). |
+| `mqtt_keepalive` | Explicit MQTT keepalive override; when left at the default the connection config's `heartTimeInterval` governs the session (fallback 50 seconds). |
 | `mqtt_clean_start` | MQTT clean-start flag (default `True`). |
-| `mqtt_tls_insecure` | Disables MQTT certificate and hostname verification (diagnostic; logs a warning). |
+| `mqtt_tls_insecure` | Disables MQTT certificate and hostname verification (diagnostic; logs a warning). The TLS context is cached per client and rebuilt only when this option changes. |
 | `mqtt_sda_probe_grace` | Seconds an SDA-MQTT session may probe condition variants and signals before falling back (default 3.0). |
 | `mqtt_exchange_timeout` | Timeout for one MQTT condition exchange; default 20 seconds, independent of the HTTP timeout. |
 | `mqtt_wake_timeout` | Timeout waiting for the gateway to acknowledge a `wake_vehicle` request; default 20 seconds, independent of the HTTP timeout. |
@@ -340,7 +338,7 @@ Mapping:
 | `charge.chargeStatus` | Charging state (S05 `ChrgSts` enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` (raw string) |
 | `charge.chargeConStatus` | Cable state (`0` not connected, any nonzero value connected; `1` is the DC connected state and `3` the AC connected state). The S05 BEV and PHEV ignore it for the cable state because both report it while unplugged; the MQTT `ChrgSts` path is authoritative | `battery.charger_connected` fallback (`false` for an S05 without a reliable status) |
 | `charge.dcChargeGunConnectStatus` | DC gun (`0` not connected, any nonzero value connected) | `battery.dc_gun_connected` |
-| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
+| `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`, or to `0-250 A` for an S05 PHEV identified by a `HEV` model code without `BEV`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
 | `charge.maxSocPercent` | Charge limit (%). The S05 PHEV condition does not return it; its charge-limit entities are not created until a readable source is verified | `battery.charge_limit_percent` |
 | `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
@@ -380,6 +378,10 @@ Notes:
   on 2026-10-30. The parser accepts a `model_code` argument; when it identifies an S05 and the
   condition has no reliable `chargeStatus`, the cable flag is `false` and the AC gun stays unknown.
   The raw value remains in `raw_data` for diagnostics.
+- **S05 PHEV charge current:** the same `model_code` selects a `250 A` magnitude ceiling for an
+  S05 PHEV (`HEV` without `BEV`); the S05 BEV and a caller that omits `model_code` keep `600 A`.
+  The tighter bound rejects the `400 A` reading observed on 2026-11-13 while the real current was
+  about `17-18 A`, and keeps the PHEV's real peak of about `200 A`.
 
 ## 8. Vehicle capabilities
 
@@ -520,6 +522,7 @@ result = await client.control_result_status(vehicle_id, command_id)  # CommandRe
 | Rate limit (`CAC_1_1_01_033`) or exhausted PIN attempts (`HW_1_1_01_047`) | `DeepalRateLimitError` |
 | PIN expired (`HW_1_1_01_073`) or not set (`HW_1_1_01_074`) | `DeepalCommandAuthError` |
 | `COMMON_1_1_01_001` on `serial-no/get`, serial decryption failure or rejected `rcToken` | `DeepalCommandAuthError` |
+| MQTT CONNECT rejected with `0x86`, `0x87` or `0x8C` after the single retry | `DeepalMqttAuthRejected` (with `reason_code`) |
 | Signed command without a private key or required PIN | `DeepalCommandNotReady` |
 | Any other `success: false` code | `DeepalAPIError` (with `code`) |
 | Non-2xx HTTP status | `DeepalAPIError` (with `status_code`) |
@@ -595,13 +598,13 @@ Vehicles and telemetry:
 | `is_sda_mqtt_vehicle(vehicle)` | Static: whether the vehicle uses the SDA `SDA-MQTT` protocol |
 | `get_mqtt_config(vehicle_id)` | CA MQTT connection configuration |
 | `get_mqtt_token(force=False)` | MQTT auth token, reused within `mqtt_token_ttl` |
-| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service) |
+| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service); an authentication CONNACK rejection is retried once with fresh bootstrap material |
 | `get_sda_broker_config(vehicle_id)` | SDA broker configuration (SDA-MQTT, beta) |
 | `get_sda_auth_token()` | SDA `vot-auth` broker token (SDA-MQTT, beta) |
 | `open_sda_session(vehicle_id, *, device_ids=None, topics=None, seconds=10.0, login=False)` | Read-only SDA broker session (SDA-MQTT, beta) |
 | `get_sda_vehicle_condition(vehicle_id, vin=None)` | SDA REST condition snapshot (SDA-MQTT, beta) |
 | `get_car_function_config(vehicle_id)` | Per-function VOT tree used to build the SDA plan (beta) |
-| `wake_vehicle(vehicle_id)` | Wake an MQTT-backed vehicle so it publishes fresh data |
+| `wake_vehicle(vehicle_id)` | Wake an MQTT-backed vehicle so it publishes fresh data; the wake is published at QoS 1 unless the broker's CONNACK caps it at 0 |
 | `get_digital_key_support(vehicle_id=None)` | Phone digital key scheme or `None` |
 | `get_vehicle_authorizations(car_id)` | Function codes or `None` |
 

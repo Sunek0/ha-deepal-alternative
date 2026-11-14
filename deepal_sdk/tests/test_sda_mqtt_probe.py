@@ -101,7 +101,7 @@ class _FakeWriter:
 
 
 def _connack(reason: int) -> bytes:
-    return bytes([0x20, 0x02, 0x00, reason])
+    return bytes([0x20, 0x03, 0x00, reason, 0x00])
 
 
 def _suback(packet_id: int, reasons: list[int]) -> bytes:

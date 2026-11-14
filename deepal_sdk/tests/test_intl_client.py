@@ -22,6 +22,7 @@ from deepal import (
     DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalIntlClient,
+    DeepalMqttAuthRejected,
     DeepalRateLimitError,
     DeepalSessionInvalidated,
     SeatCapabilities,
@@ -46,6 +47,7 @@ from deepal.mqtt import (
 from deepal.intl import (
     CAR_CONTROL_REFRESH_THROTTLE_SECONDS,
     INTL_REFRESH_THROTTLE_SECONDS,
+    _S05Logout,
 )
 import deepal.intl as intl_module
 from deepal.endpoints import (
@@ -132,6 +134,12 @@ def _split_mqtt_packet(data: bytes) -> tuple[int, bytes]:
     return first, data[pos : pos + remaining]
 
 
+def _connect_keepalive(packet: bytes) -> int:
+    _first, body = _split_mqtt_packet(packet)
+    assert body[:6] == b"\x00\x04MQTT"
+    return int.from_bytes(body[8:10], "big")
+
+
 class _FakeMqttBroker:
     """In-process MQTT 5.0 broker for the one-shot S05 exchange."""
 
@@ -146,6 +154,8 @@ class _FakeMqttBroker:
         condition_sequence: Optional[list[Optional[dict[str, Any]]]] = None,
         wake_reply: bool = True,
         suback_packet: Optional[bytes] = None,
+        connack_packet: Optional[bytes] = None,
+        connack_reason_codes: Optional[list[int]] = None,
     ) -> None:
         self.reader = asyncio.StreamReader()
         self.writes: list[bytes] = []
@@ -155,6 +165,7 @@ class _FakeMqttBroker:
         self.subscribe_packet: Optional[bytes] = None
         self.login_topic: Optional[str] = None
         self.login_payload: Optional[dict[str, Any]] = None
+        self.logout_payload: Optional[dict[str, Any]] = None
         self.condition_topic: Optional[str] = None
         self.condition_payload: Optional[dict[str, Any]] = None
         self.wake_topic: Optional[str] = None
@@ -163,6 +174,12 @@ class _FakeMqttBroker:
         self.wake_success = True
         self.wake_reply = wake_reply
         self.suback_packet = suback_packet
+        self.connack_packet = connack_packet
+        self.connack_reason_codes = (
+            list(connack_reason_codes)
+            if connack_reason_codes is not None
+            else None
+        )
         self.condition_publishes: list[dict[str, Any]] = []
         self.condition_sequence = (
             list(condition_sequence) if condition_sequence is not None else None
@@ -180,8 +197,14 @@ class _FakeMqttBroker:
         first, body = _split_mqtt_packet(data)
         if first == 0x10:
             self.connect_packet = data
+            if self.connack_reason_codes:
+                self.connack_reason_code = self.connack_reason_codes.pop(0)
             self.reader.feed_data(
-                bytes([0x20, 0x03, 0x00, self.connack_reason_code & 0xFF, 0x00])
+                self.connack_packet
+                if self.connack_packet is not None
+                else bytes(
+                    [0x20, 0x03, 0x00, self.connack_reason_code & 0xFF, 0x00]
+                )
             )
         elif first == 0x82:
             self.subscribe_packet = data
@@ -204,6 +227,14 @@ class _FakeMqttBroker:
     def _on_publish(self, first: int, body: bytes) -> None:
         topic, payload, _packet_id = parse_publish(first, body)
         if "loginout" in topic:
+            services = [
+                item.get("service_code")
+                for item in payload.get("sers") or []
+                if isinstance(item, dict)
+            ]
+            if "logout" in services:
+                self.logout_payload = payload
+                return
             self.login_topic = topic
             self.login_payload = payload
             self.reader.feed_data(
@@ -324,6 +355,7 @@ def _install_fake_broker(monkeypatch, broker: _FakeMqttBroker) -> dict[str, Any]
         captured["host"] = host
         captured["port"] = port
         captured["ssl"] = ssl
+        captured.setdefault("ssl_contexts", []).append(ssl)
         captured["server_hostname"] = server_hostname
         return broker.reader, broker
 
@@ -2362,7 +2394,123 @@ async def test_rejected_connection_invalidates_the_cached_configuration(monkeypa
     await client.get_mqtt_config("car-1")
     await client.close()
 
-    assert sum("getConnConf" in path for path in calls) == 2
+    # The initial fetch, the retry bootstrap and the explicit fetch after the
+    # rejected exchange.
+    assert sum("getConnConf" in path for path in calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_retries_an_auth_rejection_once(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_codes=[0x87, 0]
+    )
+    _install_fake_broker(monkeypatch, broker)
+    token_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/getConnConf"):
+            return httpx.Response(
+                200, json={"success": True, "code": "000000", "data": _mqtt_config()}
+            )
+        if path.endswith("/getAuthTokenByUserId"):
+            token_calls.append(path)
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "000000",
+                    "data": {"authToken": "test-mqtt-token"},
+                },
+            )
+        return httpx.Response(
+            200, json={"success": True, "code": "000000", "data": {}}
+        )
+
+    client = _client(handler)
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert condition.battery.soc_percentage == 71
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
+    assert len(token_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_stops_after_a_second_auth_rejection(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_codes=[0x87, 0x87]
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalMqttAuthRejected) as err:
+        await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert err.value.reason_code == 0x87
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
+
+
+@pytest.mark.parametrize("reason_code", [0x85, 0x88, 0x89])
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_does_not_retry_non_auth_rejections(
+    monkeypatch, reason_code
+):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_code=reason_code
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError) as err:
+        await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert not isinstance(err.value, DeepalMqttAuthRejected)
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_retries_an_auth_rejection_once(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_codes=[0x86, 0]
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert broker.wake_payload is not None
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
+
+
+@pytest.mark.asyncio
+async def test_wake_stops_after_a_second_auth_rejection(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_codes=[0x86, 0x87]
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalMqttAuthRejected) as err:
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    assert err.value.reason_code == 0x87
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
 
 
 @pytest.mark.asyncio
@@ -2875,6 +3023,7 @@ def test_mqtt_constructor_defaults_and_overrides():
     assert client.mqtt_client_id is None
     assert client.mqtt_username is None
     assert client.mqtt_keepalive == 50
+    assert client._mqtt_keepalive_override is False
     assert client.mqtt_config_ttl == 660
     assert client.mqtt_clean_start is True
     assert client.mqtt_tls_insecure is False
@@ -2892,6 +3041,7 @@ def test_mqtt_constructor_defaults_and_overrides():
     assert overridden.mqtt_client_id == "client-1"
     assert overridden.mqtt_username == "user-1"
     assert overridden.mqtt_keepalive == 30
+    assert overridden._mqtt_keepalive_override is True
     assert overridden.mqtt_clean_start is False
     assert overridden.mqtt_tls_insecure is True
 
@@ -3109,11 +3259,33 @@ async def test_s05_wait_for_report_raises_on_rejected_connection(monkeypatch):
     client.access_token = "test-access-token"
     client.user_id = "test-user-1"
 
-    with pytest.raises(DeepalAPIError):
+    with pytest.raises(DeepalMqttAuthRejected):
         await client.s05_wait_for_report(
             "car-1", previous_timestamp=1, interval=0.01, timeout=0.5
         )
     await client.close()
+
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
+
+
+@pytest.mark.asyncio
+async def test_s05_wait_for_report_retries_an_auth_rejection_once(monkeypatch):
+    broker = _FakeMqttBroker(
+        {**S05_BROKER_PARAMS, "lastUpdatedTime": 9000},
+        connack_reason_codes=[0x86, 0],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    condition = await client.s05_wait_for_report(
+        "car-1", previous_timestamp=1, interval=0.01, timeout=1.0
+    )
+    await client.close()
+
+    assert condition is not None
+    assert sum(packet[0] == 0x10 for packet in broker.writes) == 2
 
 
 class _MalformedFirstBroker(_FakeMqttBroker):
@@ -3189,9 +3361,153 @@ async def test_wake_vehicle_publishes_wake_service(monkeypatch):
     _wake_topic, _wake_body, wake_packet_id = parse_publish(
         *_split_mqtt_packet(wake_packet)
     )
-    assert wake_packet_id == 2
+    login_packet = next(
+        packet for packet in broker.writes if b"client/loginout" in packet
+    )
+    _login_topic, _login_body, login_packet_id = parse_publish(
+        *_split_mqtt_packet(login_packet)
+    )
+    assert wake_packet_id > 1
+    assert wake_packet_id != login_packet_id
     assert broker.writes[-1] == b"\xe0\x02\x00\x00"
     assert broker.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_wake_uses_qos_one_when_the_cluster_asks_for_qos_zero(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/getConnConf"):
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "000000",
+                    "data": _mqtt_config(
+                        clusterInfos=[
+                            {
+                                "brokerUrl": "ssl://broker.example",
+                                "brokerPort": 8883,
+                                "qos": 0,
+                            }
+                        ]
+                    ),
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "code": "000000",
+                "data": {"authToken": "test-mqtt-token"},
+            },
+        )
+
+    client = _client(handler)
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.wake_vehicle("car-1")
+    await client.close()
+
+    wake_packet = next(
+        packet for packet in broker.writes if b"properties/set/req" in packet
+    )
+    assert wake_packet[0] == 0x32  # PUBLISH with QoS 1
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.source == "wake"
+    assert client.last_mqtt_exchange.qos == 1
+    assert client.last_mqtt_exchange.effective_qos == 1
+    assert client.last_mqtt_exchange.logout_sent is True
+
+
+@pytest.mark.asyncio
+async def test_wake_downgrades_to_qos_zero_when_the_broker_caps_it(
+    monkeypatch, caplog
+):
+    connack = bytes([0x20, 0x08, 0x00, 0x00, 0x05, 0x13, 0x00, 0x2D, 0x24, 0x00])
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_packet=connack)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    with caplog.at_level(logging.WARNING, logger="deepal_sdk"):
+        await client.wake_vehicle("car-1")
+    await client.close()
+
+    wake_packet = next(
+        packet for packet in broker.writes if b"properties/set/req" in packet
+    )
+    assert wake_packet[0] == 0x30  # PUBLISH with QoS 0
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.maximum_qos == 0
+    assert client.last_mqtt_exchange.effective_qos == 0
+    assert "caps QoS at 0" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_mqtt_tls_context_is_cached_across_sessions(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    captured = _install_fake_broker(monkeypatch, broker)
+    built: list[ssl.SSLContext] = []
+    real_create_default_context = ssl.create_default_context
+
+    def counting_create_default_context(*args, **kwargs):
+        context = real_create_default_context(*args, **kwargs)
+        built.append(context)
+        return context
+
+    monkeypatch.setattr(
+        ssl, "create_default_context", counting_create_default_context
+    )
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.s05_mqtt_condition("car-1")
+    await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    contexts = captured["ssl_contexts"]
+    assert len(contexts) == 2
+    assert contexts[0] is contexts[1]
+    assert len(built) == 1
+
+
+@pytest.mark.asyncio
+async def test_mqtt_tls_context_is_rebuilt_when_the_insecure_mode_changes(
+    monkeypatch,
+):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    captured = _install_fake_broker(monkeypatch, broker)
+    built: list[ssl.SSLContext] = []
+    real_create_default_context = ssl.create_default_context
+
+    def counting_create_default_context(*args, **kwargs):
+        context = real_create_default_context(*args, **kwargs)
+        built.append(context)
+        return context
+
+    monkeypatch.setattr(
+        ssl, "create_default_context", counting_create_default_context
+    )
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test-access-token"
+    client.user_id = "test-user-1"
+
+    await client.s05_mqtt_condition("car-1")
+    client.mqtt_tls_insecure = True
+    await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    contexts = captured["ssl_contexts"]
+    assert len(contexts) == 2
+    assert contexts[0] is not contexts[1]
+    assert len(built) == 2
 
 
 @pytest.mark.asyncio
@@ -3318,7 +3634,15 @@ async def test_mqtt_sessions_are_serialized():
     active = 0
     peak = 0
 
-    async def fake_open(config, token, *, sda=False, vehicle_id=None):
+    async def fake_open(
+        config,
+        token,
+        *,
+        sda=False,
+        vehicle_id=None,
+        settings=None,
+        exchange=None,
+    ):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -3373,6 +3697,25 @@ async def test_read_s05_params_rejects_connack_reason_code(monkeypatch):
     assert client._mqtt_token is None
 
 
+@pytest.mark.parametrize("reason_code", [0x86, 0x87, 0x8C])
+@pytest.mark.asyncio
+async def test_read_s05_params_maps_authentication_connack_reasons(
+    monkeypatch, reason_code
+):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS, connack_reason_code=reason_code
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalMqttAuthRejected) as err:
+        await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert err.value.reason_code == reason_code
+
+
 @pytest.mark.asyncio
 async def test_read_s05_params_sends_pingreq_when_keepalive_elapses(monkeypatch):
     broker = _FakeMqttBroker(S05_BROKER_PARAMS, reply_condition_after_pings=2)
@@ -3421,6 +3764,267 @@ async def test_read_s05_params_resolves_template_topics(monkeypatch):
     assert broker.subscribe_packet is not None
     assert b"$vdp/did-9/server/loginout" in broker.subscribe_packet
     assert b"$vdp/did-9/did-9/server/event" in broker.subscribe_packet
+
+
+@pytest.mark.asyncio
+async def test_one_shot_uses_cluster_settings(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+    config = _mqtt_config(
+        clusterInfos=[
+            {
+                "brokerUrl": "ssl://broker.example",
+                "brokerPort": 8883,
+                "qos": 0,
+                "timeOutInterval": 30,
+                "heartTimeInterval": 60,
+            }
+        ]
+    )
+
+    result = await client._read_s05_params(config, "test-mqtt-token")
+    await client.close()
+
+    assert _connect_keepalive(broker.connect_packet) == 60
+    assert broker.subscribe_packet is not None
+    assert broker.subscribe_packet[-1] == 0
+    login_packet = next(
+        packet
+        for packet in broker.writes
+        if b"client/loginout" in packet and b'"login"' in packet
+    )
+    condition_packet = next(
+        packet for packet in broker.writes if b"properties/get/req" in packet
+    )
+    assert login_packet[0] == 0x30
+    assert condition_packet[0] == 0x30
+    assert result.qos == 0
+    assert result.keepalive == 60
+    assert result.effective_qos == 0
+    assert result.effective_keepalive == 60
+    assert result.connect_timeout == 30
+
+
+@pytest.mark.asyncio
+async def test_one_shot_applies_connack_limits(monkeypatch):
+    connack = bytes([0x20, 0x08, 0x00, 0x00, 0x05, 0x13, 0x00, 0x2D, 0x24, 0x00])
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_packet=connack)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    result = await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert result.server_keep_alive == 45
+    assert result.maximum_qos == 0
+    assert result.qos == 1
+    assert result.keepalive == 50
+    assert result.effective_qos == 0
+    assert result.effective_keepalive == 45
+    login_packet = next(
+        packet
+        for packet in broker.writes
+        if b"client/loginout" in packet and b'"login"' in packet
+    )
+    assert login_packet[0] == 0x30
+
+
+@pytest.mark.asyncio
+async def test_rejected_connack_keeps_the_connack_limits(monkeypatch):
+    connack = bytes([0x20, 0x08, 0x01, 0x86, 0x05, 0x13, 0x00, 0x2D, 0x24, 0x00])
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_packet=connack)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError):
+        await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.server_keep_alive == 45
+    assert client.last_mqtt_exchange.maximum_qos == 0
+    assert client.last_mqtt_exchange.effective_qos == 0
+    assert client.last_mqtt_exchange.effective_keepalive == 45
+
+
+@pytest.mark.asyncio
+async def test_failed_suback_keeps_the_connack_limits(monkeypatch):
+    connack = bytes([0x20, 0x08, 0x00, 0x00, 0x05, 0x13, 0x00, 0x2D, 0x24, 0x00])
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        connack_packet=connack,
+        suback_packet=b"\x30\x02{}",
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError):
+        await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.server_keep_alive == 45
+    assert client.last_mqtt_exchange.maximum_qos == 0
+    assert client.last_mqtt_exchange.effective_qos == 0
+    assert client.last_mqtt_exchange.effective_keepalive == 45
+
+
+@pytest.mark.asyncio
+async def test_one_shot_publishes_qos_one_with_unique_ids(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    login_packet = next(
+        packet
+        for packet in broker.writes
+        if b"client/loginout" in packet and b'"login"' in packet
+    )
+    condition_packet = next(
+        packet for packet in broker.writes if b"properties/get/req" in packet
+    )
+    assert login_packet[0] == 0x32
+    assert condition_packet[0] == 0x32
+    _login_topic, _login_body, login_packet_id = parse_publish(
+        *_split_mqtt_packet(login_packet)
+    )
+    _condition_topic, _condition_body, condition_packet_id = parse_publish(
+        *_split_mqtt_packet(condition_packet)
+    )
+    assert login_packet_id is not None
+    assert condition_packet_id is not None
+    assert login_packet_id != condition_packet_id
+
+
+@pytest.mark.asyncio
+async def test_one_shot_keepalive_override_wins(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+    client.mqtt_keepalive = 30
+    config = _mqtt_config(
+        clusterInfos=[
+            {
+                "brokerUrl": "ssl://broker.example",
+                "brokerPort": 8883,
+                "heartTimeInterval": 60,
+            }
+        ]
+    )
+
+    await client._read_s05_params(config, "test-mqtt-token")
+    await client.close()
+
+    assert _connect_keepalive(broker.connect_packet) == 30
+
+
+@pytest.mark.asyncio
+async def test_failed_bootstrap_does_not_logout(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, connack_reason_code=0x86)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with pytest.raises(DeepalAPIError):
+        await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert broker.logout_payload is None
+    assert not any(b'"service_code":"logout"' in packet for packet in broker.writes)
+
+
+class _FailingConditionBroker(_FakeMqttBroker):
+    """Fail the condition publish after a successful login."""
+
+    def _on_publish(self, first: int, body: bytes) -> None:
+        topic, _payload, _packet_id = parse_publish(first, body)
+        if "properties/get/req" in topic:
+            raise ConnectionError("condition publish failed")
+        super()._on_publish(first, body)
+
+
+@pytest.mark.asyncio
+async def test_failed_exchange_keeps_the_close_result(monkeypatch):
+    broker = _FailingConditionBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    with pytest.raises(ConnectionError):
+        await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert client.last_mqtt_exchange is not None
+    assert client.last_mqtt_exchange.logout_sent is True
+    assert client.last_mqtt_exchange.logout_error is None
+    assert broker.logout_payload is not None
+
+
+@pytest.mark.asyncio
+async def test_one_shot_sends_logout_before_disconnect(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.user_id = "test-user-1"
+
+    await client._read_s05_params(_mqtt_config(), "test-mqtt-token")
+    await client.close()
+
+    assert broker.logout_payload is not None
+    assert broker.logout_payload["sers"][0]["service_code"] == "logout"
+    assert broker.writes[-1] == b"\xe0\x02\x00\x00"
+    assert b'"service_code":"logout"' in broker.writes[-2]
+
+
+class _FailingDrainWriter:
+    """Writer whose drain fails so the logout failure path is exercised."""
+
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        raise ConnectionError("socket is gone")
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_one_shot_close_tolerates_a_logout_failure():
+    client = _client(lambda request: httpx.Response(200, json={}))
+    writer = _FailingDrainWriter()
+    logout = _S05Logout(
+        topic="$vdp/login-did/client/loginout",
+        login_did="login-did",
+        basic_info={},
+        qos=1,
+    )
+
+    result = await client._close_s05_mqtt(writer, logout=logout)
+    await client.close()
+
+    assert result.logout_sent is False
+    assert result.logout_error is not None
+    assert "ConnectionError" in result.logout_error
+    assert writer.closed is True
+    assert b"\xe0\x02\x00\x00" in writer.writes
 
 
 def _sda_client():
@@ -4233,6 +4837,123 @@ async def test_get_vehicle_condition_drops_the_negative_charge_current_sentinel(
     await client.close()
 
     assert condition.battery.charge_current_a is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_drops_a_phev_current_above_the_phev_ceiling():
+    payload = {
+        "charge": {
+            "chargeStatus": 4,
+            "chargeCurrent": 400,
+            "acChargeCurrent": 0,
+            "dcChargeCurrent": 400,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition(
+        "car-1", model_code="SC6460AAAA7HEV"
+    )
+    await client.close()
+
+    assert condition.battery.charge_current_a is None
+    assert condition.battery.ac_charge_current_a == 0.0
+    assert condition.battery.dc_charge_current_a is None
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_keeps_a_phev_real_current():
+    payload = {
+        "charge": {
+            "chargeStatus": 4,
+            "chargeCurrent": 200,
+            "acChargeCurrent": 0,
+            "dcChargeCurrent": 200,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition(
+        "car-1", model_code="SC6460AAAA7HEV"
+    )
+    await client.close()
+
+    assert condition.battery.charge_current_a == 200.0
+    assert condition.battery.ac_charge_current_a == 0.0
+    assert condition.battery.dc_charge_current_a == 200.0
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_keeps_a_bev_current_above_the_phev_ceiling():
+    payload = {
+        "charge": {
+            "chargeStatus": 4,
+            "chargeCurrent": 400,
+            "acChargeCurrent": 0,
+            "dcChargeCurrent": 400,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition(
+        "car-1", model_code="SC6464AAKBEV"
+    )
+    await client.close()
+
+    assert condition.battery.charge_current_a == 400.0
+    assert condition.battery.ac_charge_current_a == 0.0
+    assert condition.battery.dc_charge_current_a == 400.0
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_keeps_the_global_ceiling_without_a_model_code():
+    payload = {
+        "charge": {
+            "chargeStatus": 4,
+            "chargeCurrent": 400,
+            "acChargeCurrent": 0,
+            "dcChargeCurrent": 400,
+        }
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charge_current_a == 400.0
+    assert condition.battery.ac_charge_current_a == 0.0
+    assert condition.battery.dc_charge_current_a == 400.0
+
+
+def test_parse_sda_rest_condition_keeps_the_non_s05_currents():
+    payload = {
+        **E07_SDA_CONDITION,
+        "ObcChrgDcI": "8.5",
+        "BcuBattI": "-8.4",
+    }
+    client = DeepalIntlClient.__new__(DeepalIntlClient)
+
+    condition = client._parse_sda_rest_condition(payload, "car-1")
+
+    assert condition.battery.charge_current_a is None
+    assert condition.battery.ac_charge_current_a == 28.3
+    assert condition.battery.dc_charge_current_a == 8.5
 
 
 @pytest.mark.parametrize(
@@ -5612,63 +6333,56 @@ async def test_timestamp_headers_are_never_sent():
 
 
 @pytest.mark.asyncio
-async def test_get_mqtt_config_falls_back_to_app_endpoint():
+async def test_get_mqtt_config_does_not_fall_back_to_app_endpoint():
     paths = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
-        if request.url.path.endswith("getConnConf"):
-            return httpx.Response(
-                200,
-                json={
-                    "success": False,
-                    "code": "APIGW_-1_7_01_004",
-                    "msg": "invalided token",
-                },
-            )
         return httpx.Response(
             200,
             json={
-                "success": True,
-                "code": "0",
-                "data": {"mqttConnectionInfos": []},
+                "success": False,
+                "code": "APIGW_-1_7_01_004",
+                "msg": "invalided token",
             },
         )
 
     client = _client(handler)
     client.access_token = "test_token_123"
-    data = await client.get_mqtt_config("car-1")
+
+    with pytest.raises(DeepalSessionInvalidated) as err:
+        await client.get_mqtt_config("car-1")
     await client.close()
 
-    assert data == {"mqttConnectionInfos": []}
+    assert "APIGW_-1_7_01_004" in str(err.value)
+    assert len(paths) == 1
     assert paths[0].endswith("getConnConf")
-    assert paths[1] == INTL_CA_GET_CAR_CONF_FUNC
+    assert INTL_CA_GET_CAR_CONF_FUNC not in paths
 
 
 @pytest.mark.asyncio
-async def test_mqtt_config_fallback_can_be_disabled():
+async def test_get_car_function_config_uses_the_app_endpoint():
     paths = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
         return httpx.Response(
             200,
-            json={"success": False, "code": "APIGW_-1_7_01_004", "msg": "nope"},
+            json={
+                "success": True,
+                "code": "0",
+                "data": {"confList": ["#driverSeatHeat"]},
+            },
         )
 
-    transport = httpx.MockTransport(handler)
-    client = DeepalIntlClient(
-        country="GB",
-        device_id="test-device-id",
-        mqtt_config_fallback=False,
-        httpx_client=httpx.AsyncClient(transport=transport),
-    )
+    client = _client(handler)
     client.access_token = "test_token_123"
 
-    with pytest.raises(DeepalAPIError):
-        await client.get_mqtt_config("car-1")
+    data = await client.get_car_function_config("car-1")
     await client.close()
-    assert len(paths) == 1
+
+    assert data == {"confList": ["#driverSeatHeat"]}
+    assert paths == [INTL_CA_GET_CAR_CONF_FUNC]
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,7 @@ from custom_components.deepal.deepal import (
     DeepalRateLimitError,
     VehicleCapabilities,
 )
+from custom_components.deepal.deepal.mqtt import MqttExchangeResult
 from custom_components.deepal.vehicle_model import (
     is_bev,
     is_phev,
@@ -2383,6 +2384,44 @@ async def test_diagnostics_report_lists_capabilities_and_unmapped_keys() -> None
         "chargeCoverStatus",
         "latitude",
     ]
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_includes_the_last_mqtt_exchange() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN-REAL-1", protocol_type="MQTT")
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
+    )
+    coordinator.client = SimpleNamespace(
+        last_mqtt_exchange=MqttExchangeResult(
+            params={"soc": 71},
+            source="legacy-mqtt",
+            variants={"legacy-mqtt": {"soc": 71, "latitude": 40.4}},
+            qos=1,
+            keepalive=60.0,
+            connect_timeout=30.0,
+            server_keep_alive=45,
+            maximum_qos=0,
+            effective_qos=0,
+            effective_keepalive=45.0,
+            logout_sent=True,
+        )
+    )
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    last = report["mqtt_last_exchange"]
+    assert last["qos"] == 1
+    assert last["keepalive"] == 60.0
+    assert last["connect_timeout"] == 30.0
+    assert last["server_keep_alive"] == 45
+    assert last["maximum_qos"] == 0
+    assert last["effective_qos"] == 0
+    assert last["effective_keepalive"] == 45.0
+    assert last["logout_sent"] is True
+    assert last["variants"]["legacy-mqtt"]["latitude"] == REDACTED
 
 
 @pytest.mark.asyncio

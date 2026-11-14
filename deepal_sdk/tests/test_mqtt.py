@@ -12,6 +12,8 @@ from deepal.mqtt import (
     rest_subsystem_warnings,
     CHARGE_STATE_CHARGE_STOPPED,
     MAPPED_S05_KEYS,
+    ConnackInfo,
+    MqttBrokerSettings,
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_connect_packet,
@@ -30,10 +32,13 @@ from deepal.mqtt import (
     is_phev_model,
     is_s05_model,
     login_request_payload,
+    logout_request_payload,
     mqtt_remaining_length,
     normalize_s05_params,
     normalize_sda_params,
     parse_connack,
+    parse_connack_info,
+    parse_mqtt_broker_settings,
     parse_publish,
     parse_sda_broker_config,
     parse_suback,
@@ -144,11 +149,164 @@ def test_qos_one_publish_carries_the_packet_identifier():
     assert packet_id == 7
 
 
+def test_subscribe_packet_honours_the_requested_qos():
+    subscribe = build_subscribe_packet(1, ["$vdp/did-1/up"], qos=0)
+
+    assert subscribe[0] == 0x82
+    assert subscribe[-1] == 0x00
+    assert b"$vdp/did-1/up" in subscribe
+
+
 def test_parse_connack_reason_codes():
     assert parse_connack(0x20, b"\x00\x00\x00") == (0, 0)
     assert parse_connack(0x20, b"\x01\x86\x00") == (1, 0x86)
     assert parse_connack(0x30, b"\x00\x00") == (None, None)
     assert parse_connack(0x20, b"\x00") == (None, None)
+
+
+def test_parse_connack_info_reads_server_limits():
+    info = parse_connack_info(0x20, b"\x00\x00\x05\x13\x00\x2d\x24\x00")
+
+    assert info == ConnackInfo(
+        session_present=False,
+        reason_code=0,
+        properties={"server_keep_alive": 45, "maximum_qos": 0},
+    )
+    settings = MqttBrokerSettings(qos=1, keepalive=60).with_connack(info)
+    assert settings.effective_keepalive == 45
+    assert settings.effective_qos == 0
+
+
+def test_parse_connack_info_accepts_a_legacy_two_byte_body():
+    assert parse_connack_info(0x20, b"\x01\x00") == ConnackInfo(
+        session_present=True, reason_code=0, properties={}
+    )
+
+
+def test_parse_connack_info_rejects_malformed_bodies():
+    assert parse_connack_info(0x20, b"\x00") is None
+    assert parse_connack_info(0x30, b"\x00\x00\x00") is None
+
+
+def test_parse_mqtt_broker_settings_reads_cluster_values():
+    settings = parse_mqtt_broker_settings(
+        {
+            "mqttConnectionInfos": [
+                {
+                    "clusterInfos": [
+                        {
+                            "brokerUrl": "ssl://broker.example",
+                            "brokerPort": "8883",
+                            "qos": "0",
+                            "timeOutInterval": "30",
+                            "heartTimeInterval": "60",
+                            "clusterName": "eu",
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+
+    assert settings == MqttBrokerSettings(
+        host="broker.example",
+        port=8883,
+        qos=0,
+        connect_timeout=30.0,
+        keepalive=60.0,
+    )
+    assert settings.usable is True
+
+
+def test_parse_mqtt_broker_settings_defaults_and_clamps():
+    defaults = parse_mqtt_broker_settings({})
+    assert defaults == MqttBrokerSettings()
+
+    clamped = parse_mqtt_broker_settings(
+        {
+            "mqttConnectionInfos": [
+                {
+                    "clusterInfos": [
+                        {
+                            "brokerUrl": "tcp://broker.example/",
+                            "brokerPort": 70000,
+                            "qos": 9,
+                            "timeOutInterval": 1,
+                            "heartTimeInterval": 99999,
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+    assert clamped.host == "broker.example"
+    assert clamped.port == 65535
+    assert clamped.qos == 1
+    assert clamped.connect_timeout == 5.0
+    assert clamped.keepalive == 3600.0
+
+
+def test_parse_mqtt_broker_settings_clamps_reported_zero_values():
+    settings = parse_mqtt_broker_settings(
+        {
+            "mqttConnectionInfos": [
+                {
+                    "clusterInfos": [
+                        {
+                            "brokerUrl": "ssl://broker.example",
+                            "brokerPort": 0,
+                            "qos": 0,
+                            "timeOutInterval": 0,
+                            "heartTimeInterval": 0,
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+
+    assert settings.port == 1
+    assert settings.qos == 0
+    assert settings.connect_timeout == 5.0
+    assert settings.keepalive == 15.0
+
+
+def test_parse_mqtt_broker_settings_ignores_root_level_values():
+    settings = parse_mqtt_broker_settings(
+        {"qos": 0, "brokerUrl": "ssl://root.example"}
+    )
+
+    assert settings == MqttBrokerSettings()
+
+
+def test_parse_mqtt_broker_settings_unwraps_the_gateway_data():
+    settings = parse_mqtt_broker_settings(
+        {
+            "data": {
+                "mqttConnectionInfos": [
+                    {"clusterInfos": [{"brokerUrl": "ssl://broker.example"}]}
+                ]
+            }
+        }
+    )
+
+    assert settings.host == "broker.example"
+    assert settings.port == 8883
+
+
+def test_logout_request_payload_shape():
+    payload = logout_request_payload(
+        "did-1", "req-1", {"vin": "VIN-PLACEHOLDER-1"}
+    )
+
+    assert payload["did"] == "did-1"
+    assert payload["r"] == "req-1"
+    assert payload["mt"] == "loginout"
+    assert payload["e"] == 0
+    assert payload["z"] == "unzip"
+    assert payload["sers"][0]["service_code"] == "logout"
+    assert isinstance(payload["sers"][0]["params"]["deviceTimeStamp"], int)
+    assert payload["b"] == {"vin": "VIN-PLACEHOLDER-1"}
 
 
 @pytest.mark.asyncio
@@ -873,6 +1031,84 @@ def test_normalize_s05_params_drops_a_negative_sentinel_while_charging():
     assert condition["charge"]["chargeCurrent"] is None
 
 
+def test_normalize_s05_params_drops_a_phev_current_above_the_phev_ceiling():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": 400},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+
+def test_normalize_s05_params_keeps_a_phev_real_peak():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": 200},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] == 200.0
+    assert condition["charge"]["chargeCurrent"] == 200.0
+
+
+def test_normalize_s05_params_keeps_the_phev_ceiling_boundary():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": 250},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] == 250.0
+    assert condition["charge"]["chargeCurrent"] == 250.0
+
+
+def test_normalize_s05_params_drops_a_phev_current_just_above_the_ceiling():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": 250.1},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+
+def test_normalize_s05_params_keeps_a_bev_current_above_the_phev_ceiling():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": 400},
+        model_code="SC6464AAKBEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] == 400.0
+    assert condition["charge"]["chargeCurrent"] == 400.0
+
+
+def test_normalize_s05_params_keeps_the_global_ceiling_without_a_model_code():
+    condition = normalize_s05_params({"ChrgSts": 4, "BattDCChrgInCurr": 400})
+
+    assert condition["charge"]["dcChargeCurrent"] == 400.0
+    assert condition["charge"]["chargeCurrent"] == 400.0
+
+
+def test_normalize_s05_params_drops_a_negative_phev_current_above_the_ceiling():
+    condition = normalize_s05_params(
+        {"ChrgSts": 4, "BattDCChrgInCurr": -400},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+
+def test_normalize_s05_params_does_not_publish_a_phev_400_amp_unknown_state():
+    condition = normalize_s05_params(
+        {"ChrgSts": 9, "BattDCChrgInCurr": 400},
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+    assert condition["charge"]["acChargeCurrent"] is None
+
+
 def test_normalize_sda_params_keeps_the_generic_current_strict():
     condition = normalize_sda_params(
         {
@@ -1358,7 +1594,7 @@ def _install_broker(monkeypatch: Any, broker: _ScriptedBroker) -> None:
 
 
 def _connack(reason: int) -> bytes:
-    return bytes([0x20, 0x02, 0x00, reason])
+    return bytes([0x20, 0x03, 0x00, reason, 0x00])
 
 
 def _suback(packet_id: int, reasons: list[int]) -> bytes:

@@ -39,11 +39,9 @@ configuration and the MQTT password. All requests are POST with the same session
 | `get_mqtt_config(vehicle_id)` | `/user-apigw/vot-connect-conf-center/api/device/getConnConf` | `deviceId`, `carId`, `deviceType: 1`, `confTimestamp: 0`, `deviceTimestamp` (ms) | `mqttConnectionInfos[0]` with the broker URL/port and the topic maps |
 | `get_mqtt_token()` | `/user-apigw/vot-connect-auth-center/api/auth/getAuthTokenByUserId` | `userId` | `authToken`, used as the MQTT password |
 
-Fallback (recovered from the 1.12.0 app; on by default):
-
-- If `getConnConf` fails with a non-authentication, non-rate-limit API error and
-  `mqtt_config_fallback=True`, the SDK retries
-  `/user-apigw/vot-connect-conf-center/api/device/appGetCarConfFunc` with the same body.
+`getConnConf` is the only broker-configuration source. `appGetCarConfFunc` returns the vehicle
+function tree (used by `get_car_function_config`) and is **not** a broker fallback, so a failed
+`getConnConf` propagates its original error instead of retrying that endpoint.
 
 The CA auth token has no cross-gateway fallback. The `/app-apigw/vot-auth` route is served by the
 SDA gateway (`sda_base_url`) for the SDA broker flow; it does not exist on the CA gateway and its
@@ -61,15 +59,21 @@ rejects the CAC token with `APIGW_-1_7_01_004` and an empty header with `APIGW_1
 
 | Constructor option | Default | Purpose |
 | --- | --- | --- |
-| `mqtt_config_fallback` | `True` | Allow the CA connection-config fallback endpoint |
 | `mqtt_client_id` | `None` | Override the MQTT client id; otherwise resolved from the connection config with a fallback to the login DID |
 | `mqtt_username` | `None` | Override the MQTT username; otherwise resolved from the connection config with a fallback to the login DID |
-| `mqtt_keepalive` | `60` | Keepalive seconds (`PINGREQ` is sent while waiting) |
+| `mqtt_keepalive` | `None` (effective 50) | Explicit keepalive override; when left unset the cluster `heartTimeInterval` governs the session |
 | `mqtt_clean_start` | `True` | MQTT 5.0 clean-start flag |
-| `mqtt_tls_insecure` | `False` | Disables TLS certificate and hostname verification (diagnostic; logs a warning on every connection) |
+| `mqtt_tls_insecure` | `False` | Disables TLS certificate and hostname verification (diagnostic; logs a warning when the context is built). The context is cached per client and rebuilt only when this option changes |
 
-TLS uses `ssl.create_default_context()` by default. The SDK speaks MQTT 5.0 (protocol level 5) with
-an empty properties block, like the app's Paho client.
+The broker limits come from `mqttConnectionInfos[0].clusterInfos[0]`: `qos` selects the SUBSCRIBE
+and PUBLISH QoS (0 or 1), `timeOutInterval` bounds the TCP/TLS connect timeout (5-60 s) and
+`heartTimeInterval` sets the keepalive (15-3600 s). Missing values keep the defaults 1/15/50, and
+out-of-range values are clamped. A CONNACK `server_keep_alive` replaces the keepalive and a
+`maximum_qos` caps the resolved QoS before SUBSCRIBE and PUBLISH.
+
+TLS uses `ssl.create_default_context()` by default. The context is built once per client (off the
+event loop) and reused by every session; changing `mqtt_tls_insecure` rebuilds it. The SDK speaks
+MQTT 5.0 (protocol level 5) with an empty CONNECT properties block, like the app's Paho client.
 
 ## 4. The exchange
 
@@ -77,10 +81,15 @@ an empty properties block, like the app's Paho client.
 
 1. Fetch the connection config and the auth token.
 2. Connect over TLS to the broker (`ssl://host`, default port `8883`) with the resolved client id
-   and username and the auth token as password. A non-zero CONNACK reason code raises
-   `DeepalAPIError` with the MQTT 5.0 reason description.
-3. Subscribe to the configured **subscription** topics; command topics (`/commands/`, `/set/`,
-   `/client/action` and the app `msgType` command values) are excluded. Publish topics are never
+   and username and the auth token as password. The CONNECT keepalive and the SUBSCRIBE/PUBLISH QoS
+   come from the cluster settings; the CONNACK `server_keep_alive` and `maximum_qos` override and
+   cap them. An authentication rejection (`0x86`, `0x87` or `0x8C`) raises
+   `DeepalMqttAuthRejected`; the SDK drops the cached token and configuration and retries the
+   exchange once with fresh bootstrap material. Any other non-zero reason code raises
+   `DeepalAPIError` with the MQTT 5.0 reason description and is not retried.
+3. Subscribe to the configured **subscription** topics with the effective QoS; command topics
+   (`/commands/`, `/set/`, `/client/action` and the app `msgType` command values) are excluded.
+   Publish topics are never
    subscribed, even when their message type is `event`: the S05 configuration lists
    `events/down` as the client publish topic and `events/up` as the event subscription. When the
    config omits the login or event topics, they are derived from the app templates
@@ -91,15 +100,19 @@ an empty properties block, like the app's Paho client.
    missing packet, a different packet id, an unreadable properties block or a failure reason
    (`>= 0x80`, for example `0x87` not authorized) closes the session without publishing the login
    or wake request.
-5. Publish the `loginout` message with the `ReqPayLoad` envelope (`did`, `r`, `v`, `mt`, `e`, `z`,
-   `tf`, `dt`, `sers` and `b` with the known `vin`/`sc`/`mc`/`uid`/`cid`/`ruid` identifiers).
-6. The response carries a `secretKey`. Publish the `car_condition` properties request, with the
-   payload AES-CBC encrypted (key = `secretKey`, IV = MD5 of the request id) over
-   `base64 + gzip + JSON`.
+5. Publish the `loginout` message at the effective QoS (QoS 1 by default, capped by the cluster and
+   CONNACK settings) with the `ReqPayLoad` envelope (`did`, `r`, `v`, `mt`, `e`, `z`, `tf`, `dt`,
+   `sers` and `b` with the known `vin`/`sc`/`mc`/`uid`/`cid`/`ruid` identifiers), using a unique
+   packet id.
+6. The response carries a `secretKey`. Publish the `car_condition` properties request at the
+   effective QoS with the payload AES-CBC encrypted (key = `secretKey`, IV = MD5 of the request id)
+   over `base64 + gzip + JSON`.
 7. Decrypt the `rs`/`sers` fields of the responses and accumulate the parameters of the
    `car_condition`, `BDC_Service`, `BMS_Service`, `OBC_Service` and `THU_Service` services.
-8. Send `PINGREQ` when the keepalive expires while waiting, and `DISCONNECT` (reason code `0`)
-   before closing.
+8. Send `PINGREQ` when the effective keepalive expires while waiting. Before closing, publish the
+   `logout` service on the login topic at the effective QoS (only when the login completed) and
+   then send `DISCONNECT` (reason code `0`). A logout failure is recorded and never prevents the
+   socket from closing.
 
 The exchange returns as soon as a `/properties/get/res` message carries more than 10 parameters, or
 once the accumulated partial set exceeds 30 parameters after the request, or at the timeout
@@ -131,7 +144,7 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `airConditioningHairRatings` | `hvac.fanLevel` | `climate.fan_level` |
 | `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` |
 | `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` (`0` not connected, any other reported value connected). State `0` ignores these raw fields for every S05; state `5` uses the DC field to choose the gun (see below) | `battery.charger_connected` |
-| `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds `600 A` become unknown; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
+| `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds the applicable ceiling become unknown: `600 A` for the S05 BEV and an unknown model, `250 A` for the S05 PHEV; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
 | `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |
 | `remainingFuel` / `remainedOilMile` | `fuel.leftPercent` / `fuel.remainingRange` | `fuel.level_percent` / `fuel.remaining_range_km` |
 | `fuelLeftover` | `fuel.leftVolume` (litres; 27 at 53 % on the S05 PHEV, about a 51 L tank) | `fuel.volume_l` |
@@ -161,6 +174,13 @@ authoritative and state `5` keeps the cable connected, with the raw DC field sel
 and the AC gun assumed otherwise. A response without `b.mc` uses the same state-`0` rule; a PHEV
 keeps the AC gun unknown only when the state is absent or unrecognized.
 
+The same model code selects the charge-current plausibility ceiling. An S05 PHEV (a `HEV` model
+code without `BEV`) uses `250 A`; the S05 BEV and an envelope without `b.mc` keep `600 A`. The
+tighter PHEV bound rejects the `400 A` reading the PHEV published on 2026-11-13 while the real
+current was about `17-18 A`, and still keeps the PHEV's real peak of about `200 A`. The REST
+condition parser applies the same ceiling only when the caller passes `model_code`; a caller that
+omits it keeps `600 A`.
+
 The S05 PHEV advertises `BatteryMaxSoc`/`#chargeSet` in its function configuration, but neither the
 MQTT payload nor the REST condition carries `maxSocPercent` (2026-10-26 diagnostic). The Home
 Assistant integration therefore does not create the charge-limit sensor or number for that model
@@ -187,14 +207,15 @@ which are exposed as unknown when the report omits them.
 | --- | --- |
 | `is_mqtt_vehicle(vehicle)` | Static: `protocol_type` is `MQTT` or `SDA-MQTT` |
 | `is_sda_mqtt_vehicle(vehicle)` | Static: `protocol_type` is `SDA-MQTT` |
-| `get_mqtt_config(vehicle_id)` | CA connection configuration (with fallback) |
+| `get_mqtt_config(vehicle_id)` | CA connection configuration (no fallback) |
 | `get_mqtt_token(force=False)` | MQTT auth token from the account user id: reused within `mqtt_token_ttl` (one minute by default), `force` bypasses the cache after a rejection |
 | `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Full single-use exchange returning a `VehicleCondition`; `sda=True` selects the SDA `Get_CarCondition` service |
 | `wake_vehicle(vehicle_id)` | Wake a sleeping MQTT-backed vehicle (see [SDA-MQTT telemetry and wake](#8-sda-mqtt-telemetry-and-wake-beta)) |
 
 Errors: a refused CONNACK, missing topics, a missing `authToken`, and timeouts/EOF/TLS failures
-surface as `DeepalAPIError`; transport errors on the CA requests use the standard taxonomy
-(`DeepalConnectionError`, `DeepalAuthError`, `DeepalRateLimitError`).
+surface as `DeepalAPIError`; an authentication rejection (`0x86`, `0x87` or `0x8C`) surfaces as
+`DeepalMqttAuthRejected` after one retry. Transport errors on the CA requests use the standard
+taxonomy (`DeepalConnectionError`, `DeepalAuthError`, `DeepalRateLimitError`).
 
 ## 8. SDA-MQTT telemetry and wake (beta)
 
@@ -232,9 +253,11 @@ Condition reads have two paths:
   plan and every raw variant attempted, for diagnostics.
 
 `wake_vehicle(vehicle_id)` publishes the app's `TxWakeup`/`Cnr_ReWakeup` service on the
-`properties/set` topic with QoS 1 and returns once the gateway acknowledges it (`000000`); the car
-then publishes fresh data within a few seconds and the caller reads the condition again. The wait
-is bounded by `mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
+`properties/set` topic at QoS 1 (independent of the cluster's telemetry `qos`, capped only by the
+CONNACK `maximum_qos`) and returns once the gateway acknowledges it (`000000`); the car then
+publishes fresh data within a few seconds and the caller reads the condition again. When the broker
+caps QoS at 0, the wake is published at QoS 0 and the SDK logs that it cannot be queued offline. The
+wait is bounded by `mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
 
 ## 9. Limitations
 

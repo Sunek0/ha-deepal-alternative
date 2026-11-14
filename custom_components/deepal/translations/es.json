@@ -288,19 +288,19 @@
         "name": "Velocidad"
       },
       "inside_temperature": {
-        "name": "Clima temperatura interior"
+        "name": "Temperatura interior"
       },
       "outside_temperature": {
-        "name": "Clima temperatura exterior"
+        "name": "Temperatura exterior"
       },
       "cabin_humidity": {
-        "name": "Clima humedad del habitáculo"
+        "name": "Humedad del habitáculo"
       },
       "inside_pm25": {
-        "name": "Clima PM2.5 interior"
+        "name": "PM2.5 interior"
       },
       "air_quality_level": {
-        "name": "Clima nivel de calidad del aire"
+        "name": "Nivel de calidad del aire"
       },
       "charge_status": {
         "name": "Estado de carga",

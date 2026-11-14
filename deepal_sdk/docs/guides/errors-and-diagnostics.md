@@ -14,6 +14,7 @@ DeepalError
 │   ├── DeepalCommandAuthError    # signing material rejected, PIN expired or not set
 │   └── DeepalCommandNotReady     # private key or PIN missing before signing
 ├── DeepalAPIError                # any other gateway or HTTP failure (code, status_code)
+│   ├── DeepalMqttAuthRejected    # MQTT CONNACK auth rejection (reason_code)
 │   └── DeepalRateLimitError      # 429 or business rate limit (retry_after)
 └── DeepalConnectionError         # transport failure (httpx.RequestError)
 ```
@@ -32,6 +33,7 @@ raises only `DeepalAuthError`, `DeepalAPIError` and `DeepalConnectionError`
 | PIN expired (`HW_1_1_01_073`) or not set (`HW_1_1_01_074`) | `DeepalCommandAuthError` | Create or reset the PIN with the account used by your application |
 | Serial fetch/decrypt failure, rejected `rcToken` | `DeepalCommandAuthError` | Check the keypair and retry; the SDK re-exchanges the PIN once automatically |
 | Signed command without key or PIN | `DeepalCommandNotReady` | Fix the prerequisites before retrying (see the [commands guide](remote-commands.md#1-prerequisites)) |
+| MQTT CONNECT rejected with `0x86`, `0x87` or `0x8C` after the single retry | `DeepalMqttAuthRejected` | Inspect `reason_code`; the SDK already refreshed the MQTT token and configuration once |
 | Any other `success: false` code or non-2xx HTTP status | `DeepalAPIError` | Inspect `code` / `status_code`; usually not retryable without a change |
 | Transport failure or timeout | `DeepalConnectionError` | Retry later; the request never reached the gateway |
 

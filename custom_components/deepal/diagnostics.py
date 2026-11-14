@@ -96,6 +96,10 @@ async def async_get_config_entry_diagnostics(
             if result is not None:
                 wake_results[vehicle.car_id] = result
 
+    last_exchange = getattr(
+        getattr(coordinator, "client", None), "last_mqtt_exchange", None
+    )
+
     report = {
         "vehicles": [_vehicle_data(vehicle) for vehicle in coordinator.vehicles],
         "config_entry_data": dict(entry.data),
@@ -136,6 +140,29 @@ async def async_get_config_entry_diagnostics(
             for vehicle in coordinator.vehicles
             if coordinator.mqtt_attempt(vehicle.car_id) is not None
         },
+        "mqtt_last_exchange": (
+            {
+                "source": last_exchange.source,
+                "model_code": last_exchange.model_code,
+                "qos": last_exchange.qos,
+                "keepalive": last_exchange.keepalive,
+                "connect_timeout": last_exchange.connect_timeout,
+                "server_keep_alive": last_exchange.server_keep_alive,
+                "maximum_qos": last_exchange.maximum_qos,
+                "effective_qos": last_exchange.effective_qos,
+                "effective_keepalive": last_exchange.effective_keepalive,
+                "logout_sent": last_exchange.logout_sent,
+                "logout_error": last_exchange.logout_error,
+                "plan": (
+                    last_exchange.plan.as_dict()
+                    if last_exchange.plan is not None
+                    else None
+                ),
+                "variants": last_exchange.variants,
+            }
+            if last_exchange is not None
+            else None
+        ),
         "wake_results": wake_results,
         "unmapped_mqtt_keys": {
             car_id: sorted(unmapped_s05_keys(condition.mqtt_raw_data or {}))

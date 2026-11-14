@@ -18,7 +18,7 @@ import math
 import ssl
 import struct
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -64,6 +64,12 @@ SDA_CONDITION_SECTIONS = (
 
 MQTT_PROTOCOL_LEVEL = 5
 MQTT_DEFAULT_KEEPALIVE = 50
+MQTT_DEFAULT_QOS = 1
+MQTT_DEFAULT_CONNECT_TIMEOUT = 15.0
+MQTT_MIN_CONNECT_TIMEOUT = 5.0
+MQTT_MAX_CONNECT_TIMEOUT = 60.0
+MQTT_MIN_KEEPALIVE = 15.0
+MQTT_MAX_KEEPALIVE = 3600.0
 # Seconds to wait for one SDA probe response before publishing the next variant.
 MQTT_SDA_PROBE_GRACE = 3.0
 
@@ -109,6 +115,10 @@ MQTT_CONNACK_REASONS = {
 MQTT_CLIENT_ID_KEYS = ("clientId", "client_id", "clientID", "client")
 MQTT_USERNAME_KEYS = ("userName", "username", "user")
 
+# CONNACK reason codes that mean the broker rejected the credentials. A fresh
+# MQTT auth token is worth one retry; other rejections are not.
+MQTT_AUTH_REJECTION_CODES = frozenset({0x86, 0x87, 0x8C})
+
 
 def mqtt_string(value: str) -> bytes:
     """Encode a length-prefixed MQTT UTF-8 string."""
@@ -149,9 +159,14 @@ def build_connect_packet(
     return bytes([0x10]) + mqtt_remaining_length(len(body)) + body
 
 
-def build_subscribe_packet(packet_id: int, topics: list[str]) -> bytes:
-    """Build an MQTT 5.0 SUBSCRIBE packet with QoS 1 subscriptions."""
-    payload = b"".join(mqtt_string(topic) + b"\x01" for topic in topics)
+def build_subscribe_packet(
+    packet_id: int, topics: list[str], *, qos: int = 1
+) -> bytes:
+    """Build an MQTT 5.0 SUBSCRIBE packet with the requested subscription QoS."""
+    requested = max(0, min(1, int(qos)))
+    payload = b"".join(
+        mqtt_string(topic) + bytes([requested]) for topic in topics
+    )
     body = struct.pack("!H", packet_id) + b"\x00" + payload
     return bytes([0x82]) + mqtt_remaining_length(len(body)) + body
 
@@ -260,11 +275,110 @@ def read_variable_byte_integer(data: bytes, pos: int = 0) -> tuple[int, int]:
     raise ValueError("Truncated MQTT variable byte integer.")
 
 
+@dataclass(frozen=True)
+class ConnackInfo:
+    """Parsed MQTT 5 CONNACK: session flag, reason code and properties."""
+
+    session_present: bool
+    reason_code: int
+    properties: dict[str, Any]
+
+
+def _mqtt_utf8(data: bytes, pos: int) -> tuple[str, int]:
+    """Read an MQTT UTF-8 string with its two-byte length prefix."""
+    if len(data) < pos + 2:
+        raise ValueError("Truncated MQTT UTF-8 string length.")
+    length = struct.unpack("!H", data[pos : pos + 2])[0]
+    pos += 2
+    if len(data) < pos + length:
+        raise ValueError("Truncated MQTT UTF-8 string.")
+    return data[pos : pos + length].decode(errors="replace"), pos + length
+
+
+def parse_connack_info(first: int, body: bytes) -> Optional[ConnackInfo]:
+    """Parse a CONNACK with its MQTT 5 properties, or ``None`` when malformed."""
+    if first != 0x20 or len(body) < 2:
+        return None
+    if len(body) == 2:
+        # Tolerate the MQTT 3.1.1-style CONNACK used by legacy probes and
+        # fixtures; a 3.1.1 body carries no properties.
+        return ConnackInfo(
+            session_present=bool(body[0] & 0x01),
+            reason_code=body[1],
+            properties={},
+        )
+    properties: dict[str, Any] = {}
+    pos = 2
+    try:
+        length, pos = read_variable_byte_integer(body, pos)
+        end = pos + length
+        if end > len(body):
+            return None
+        while pos < end:
+            prop = body[pos]
+            pos += 1
+            if prop == 0x11:  # Session Expiry Interval
+                properties["session_expiry"] = struct.unpack(
+                    "!I", body[pos : pos + 4]
+                )[0]
+                pos += 4
+            elif prop in (0x12, 0x1A, 0x1C, 0x1F):  # assigned id / strings
+                value, pos = _mqtt_utf8(body, pos)
+                properties[
+                    {
+                        0x12: "assigned_client_id",
+                        0x1A: "response_information",
+                        0x1C: "server_reference",
+                        0x1F: "reason_string",
+                    }[prop]
+                ] = value
+            elif prop in (0x13, 0x21, 0x22):  # two-byte integers
+                properties[
+                    {
+                        0x13: "server_keep_alive",
+                        0x21: "receive_maximum",
+                        0x22: "topic_alias_maximum",
+                    }[prop]
+                ] = struct.unpack("!H", body[pos : pos + 2])[0]
+                pos += 2
+            elif prop in (0x24, 0x25, 0x28, 0x29, 0x2A):  # one-byte values
+                properties[
+                    {
+                        0x24: "maximum_qos",
+                        0x25: "retain_available",
+                        0x28: "wildcard_subscription_available",
+                        0x29: "subscription_identifier_available",
+                        0x2A: "shared_subscription_available",
+                    }[prop]
+                ] = body[pos]
+                pos += 1
+            elif prop == 0x27:  # Maximum Packet Size
+                properties["maximum_packet_size"] = struct.unpack(
+                    "!I", body[pos : pos + 4]
+                )[0]
+                pos += 4
+            elif prop == 0x26:  # User Property
+                key, pos = _mqtt_utf8(body, pos)
+                value, pos = _mqtt_utf8(body, pos)
+                properties.setdefault("user_properties", []).append([key, value])
+            else:
+                properties[f"unknown_{prop:02x}"] = True
+                break
+    except (ValueError, IndexError, struct.error):
+        return None
+    return ConnackInfo(
+        session_present=bool(body[0] & 0x01),
+        reason_code=body[1],
+        properties=properties,
+    )
+
+
 def parse_connack(first: int, body: bytes) -> tuple[Optional[int], Optional[int]]:
     """Parse a CONNACK into ``(session_present, reason_code)``."""
-    if first != 0x20 or len(body) < 2:
+    info = parse_connack_info(first, body)
+    if info is None:
         return None, None
-    return body[0] & 0x01, body[1]
+    return int(info.session_present), info.reason_code
 
 
 def parse_publish(first: int, body: bytes) -> tuple[str, dict[str, Any], Optional[int]]:
@@ -601,6 +715,144 @@ class MqttTopics:
         return self.device_did or self.login_did
 
 
+def _clamp_setting(
+    value: Any, default: float, minimum: float, maximum: float
+) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return min(maximum, max(minimum, number))
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_setting(source: Mapping[str, Any], *keys: str) -> Any:
+    """Return the first present setting, including a legitimate zero."""
+    for key in keys:
+        if key in source and source[key] is not None:
+            return source[key]
+    return None
+
+
+@dataclass(frozen=True)
+class MqttBrokerSettings:
+    """Broker limits and connection options from the CA ``clusterInfos`` block."""
+
+    host: str = ""
+    port: int = 8883
+    qos: int = MQTT_DEFAULT_QOS
+    connect_timeout: float = MQTT_DEFAULT_CONNECT_TIMEOUT
+    keepalive: float = MQTT_DEFAULT_KEEPALIVE
+    server_keep_alive: Optional[int] = None
+    maximum_qos: Optional[int] = None
+
+    @property
+    def usable(self) -> bool:
+        """Whether the block carries a connectable broker."""
+        return bool(self.host and self.port)
+
+    @property
+    def effective_qos(self) -> int:
+        """Return the resolved QoS, capped by the CONNACK maximum."""
+        qos = max(0, min(1, self.qos))
+        if self.maximum_qos is not None:
+            qos = min(qos, max(0, min(1, self.maximum_qos)))
+        return qos
+
+    @property
+    def effective_keepalive(self) -> float:
+        """Return the CONNACK keepalive when present, else the cluster value."""
+        if self.server_keep_alive is None:
+            return self.keepalive
+        return float(max(1.0, self.server_keep_alive))
+
+    def with_connack(self, info: ConnackInfo) -> MqttBrokerSettings:
+        """Return the settings with the broker-provided CONNACK limits applied."""
+        return replace(
+            self,
+            server_keep_alive=_optional_int(info.properties.get("server_keep_alive")),
+            maximum_qos=_optional_int(info.properties.get("maximum_qos")),
+        )
+
+
+def parse_mqtt_broker_settings(raw: Any) -> MqttBrokerSettings:
+    """Read the broker limits from a CA ``getConnConf`` response.
+
+    Accepts the gateway ``data``/``params`` wrapper and the app's
+    ``mqttConnectionInfos[0].clusterInfos[0]`` shape. Every numeric value is
+    clamped to a safe range; an absent or unusable value keeps the default.
+    """
+    payload: Any = raw
+    if isinstance(payload, Mapping):
+        for key in ("data", "params"):
+            value = payload.get(key)
+            if isinstance(value, Mapping) and value:
+                payload = value
+                break
+    if not isinstance(payload, Mapping):
+        return MqttBrokerSettings()
+
+    info = _first_mapping(payload.get("mqttConnectionInfos"))
+    if info is None:
+        return MqttBrokerSettings()
+    cluster = _first_mapping(info.get("clusterInfos"))
+    if cluster is None:
+        return MqttBrokerSettings()
+
+    host = str(
+        cluster.get("brokerUrl")
+        or cluster.get("host")
+        or cluster.get("mqttHost")
+        or ""
+    ).strip()
+    for prefix in ("ssl://", "tcp://", "mqtt://", "wss://", "ws://"):
+        if host.lower().startswith(prefix):
+            host = host[len(prefix) :]
+            break
+    host = host.rstrip("/")
+
+    return MqttBrokerSettings(
+        host=host,
+        port=int(
+            _clamp_setting(
+                _first_setting(cluster, "brokerPort", "port", "mqttPort"),
+                8883,
+                1,
+                65535,
+            )
+        ),
+        qos=int(
+            _clamp_setting(
+                _first_setting(cluster, "qos"), MQTT_DEFAULT_QOS, 0, 1
+            )
+        ),
+        connect_timeout=_clamp_setting(
+            _first_setting(cluster, "timeOutInterval", "timeout", "connectTimeout"),
+            MQTT_DEFAULT_CONNECT_TIMEOUT,
+            MQTT_MIN_CONNECT_TIMEOUT,
+            MQTT_MAX_CONNECT_TIMEOUT,
+        ),
+        keepalive=_clamp_setting(
+            _first_setting(
+                cluster, "heartTimeInterval", "heartbeatInterval", "keepAlive"
+            ),
+            MQTT_DEFAULT_KEEPALIVE,
+            MQTT_MIN_KEEPALIVE,
+            MQTT_MAX_KEEPALIVE,
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class SdaConditionPlan:
     """SDA condition request plan derived from the CA function tree."""
@@ -628,12 +880,14 @@ class SdaConditionPlan:
 class MqttExchangeResult:
     """Raw parameters of one MQTT condition exchange plus its provenance.
 
-    ``source`` names the condition service that produced the parameters
-    (``sda-mqtt``, ``sda-mqtt-signal-list``, ``legacy-mqtt`` or ``None``), and
-    ``variants`` keeps the raw parameters of every request variant that was
-    attempted, empty entries included, for diagnostics. ``model_code`` is the
-    vehicle model code advertised by the response envelope (``b.mc``) when the
-    vehicle reported one.
+    ``source`` names the operation or condition service that produced the
+    parameters (``sda-mqtt``, ``sda-mqtt-signal-list``, ``legacy-mqtt``,
+    ``wake`` or ``None``), and ``variants`` keeps the raw parameters of every
+    request variant that was attempted, empty entries included, for
+    diagnostics. ``model_code`` is the vehicle model code advertised by the
+    response envelope (``b.mc``) when the vehicle reported one. The remaining
+    fields record the resolved broker settings and the one-shot close result
+    for diagnostics.
     """
 
     params: dict[str, Any]
@@ -641,6 +895,15 @@ class MqttExchangeResult:
     variants: dict[str, dict[str, Any]] = field(default_factory=dict)
     plan: Optional[SdaConditionPlan] = None
     model_code: Optional[str] = None
+    qos: Optional[int] = None
+    keepalive: Optional[float] = None
+    connect_timeout: Optional[float] = None
+    server_keep_alive: Optional[int] = None
+    maximum_qos: Optional[int] = None
+    effective_qos: Optional[int] = None
+    effective_keepalive: Optional[float] = None
+    logout_sent: bool = False
+    logout_error: Optional[str] = None
 
 
 def _config_topic_entries(config: Any) -> list[tuple[str, Optional[str], Optional[str]]]:
@@ -1046,6 +1309,34 @@ def login_request_payload(
     return payload
 
 
+def logout_request_payload(
+    login_did: str,
+    req_id: str,
+    basic_info: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Build the MQTT ``loginout`` request that releases an open session."""
+    payload: dict[str, Any] = {
+        "did": login_did,
+        "r": req_id,
+        "v": "v1.0.0",
+        "mt": "loginout",
+        "e": 0,
+        "z": "unzip",
+        "tf": 0,
+        "dt": iso_now(),
+        "sers": [
+            {
+                "service_code": "logout",
+                "params": {
+                    "deviceTimeStamp": int(datetime.now(UTC).timestamp() * 1000),
+                },
+            }
+        ],
+        "b": _filter_basic_info(basic_info),
+    }
+    return payload
+
+
 def condition_request_services() -> list[dict[str, Any]]:
     """Return the plaintext services carried by a legacy condition request."""
     return [{"service_code": "car_condition", "params": {"fetchPropertyType": 0}}]
@@ -1345,8 +1636,6 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
 # the properties/set/req topic makes the car publish a fresh report in ~20 s.
 WAKE_SERVICE_CODE = "TxWakeup"
 WAKE_COMMAND_CODE = "Cnr_ReWakeup"
-#: Packet identifier for the QoS 1 wake PUBLISH. The SUBSCRIBE exchange uses 1.
-WAKE_PACKET_ID = 2
 
 
 def wake_request_services(req_id: str) -> list[dict[str, Any]]:
@@ -1455,9 +1744,16 @@ DC_GUN_STATES = frozenset({CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING})
 # No S05 charging current can approach this: the reference car sent 2538 in
 # BattDCChrgInCurr while parked after a DC session whose history showed real
 # amperes (0 -> 60 -> 0 -> 2538), so a reading outside 0..MAX_CHARGE_CURRENT_A
-# is a raw glitch and is dropped instead of published as amperes. The car's DC
-# peak is about 480 A, so the bound leaves margin and still rejects 2538.
+# is a raw glitch and is dropped instead of published as amperes. The S05 BEV
+# DC peak is about 425-480 A, so the bound leaves margin and still rejects 2538.
 MAX_CHARGE_CURRENT_A = 600.0
+
+# The S05 PHEV never charges above about 200 A. On 2026-11-13 a PHEV session
+# published 400 A in BattDCChrgInCurr while the real current was about 17-18 A,
+# so the PHEV gets a tighter ceiling: 250 A leaves 25 % margin over the real
+# peak and still rejects the 400 A value. This bound MUST NOT be applied to the
+# S05 BEV, whose real peak is above it.
+MAX_PHEV_CHARGE_CURRENT_A = 250.0
 
 # S05 charge-connection aliases: the app's AC gun name plus the DC gun names the
 # mapping still accepts (the app writes "dcDhargeGun..." with the typo).
@@ -1597,34 +1893,43 @@ def clean_charge_current(value: Any, field: str = "chargeCurrent") -> Optional[f
 
 
 def clean_charge_current_magnitude(
-    value: Any, field: str = "chargeCurrent"
+    value: Any,
+    field: str = "chargeCurrent",
+    *,
+    max_current: float = MAX_CHARGE_CURRENT_A,
 ) -> Optional[float]:
     """Return the magnitude of a believable charging current, or None.
 
     The car reports the current with the battery sign convention, so a negative
     value can be a real charging current (for example ``-60.5`` while DC
     charging). A reading is valid when its absolute value is within
-    ``0..MAX_CHARGE_CURRENT_A`` and the public model exposes its magnitude. A
-    reading whose absolute value exceeds the bound is a raw glitch (the live car
-    published 2538 while parked), so it is logged at debug level and dropped.
+    ``0..max_current`` and the public model exposes its magnitude. The caller
+    passes a tighter ceiling for an S05 PHEV; the default is the global bound.
+    A reading whose absolute value exceeds the bound is a raw glitch (the live
+    car published 2538 while parked), so it is logged at debug level and
+    dropped.
     """
     current = _as_float(value)
     if current is None:
         return None
     magnitude = abs(current)
-    if magnitude > MAX_CHARGE_CURRENT_A:
+    if magnitude > max_current:
         logger.debug(
             "Charge current %s=%r dropped: magnitude above %g A",
             field,
             value,
-            MAX_CHARGE_CURRENT_A,
+            max_current,
         )
         return None
     return magnitude
 
 
 def charge_currents(
-    ac_value: Any, dc_value: Any, state_value: Any
+    ac_value: Any,
+    dc_value: Any,
+    state_value: Any,
+    *,
+    max_current: float = MAX_CHARGE_CURRENT_A,
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
     """Return the (AC, DC, active) charging currents of one S05 report.
 
@@ -1635,13 +1940,18 @@ def charge_currents(
     reported a value, and connected-without-charging (``1``, ``2``), stopped
     (``5``) or unplugged (``0``) report ``0`` instead of a stale value or the
     post-session sentinel. An unrecognized state keeps the sanitized readings,
-    preferring a non-zero one.
+    preferring a non-zero one. ``max_current`` is the model-specific plausibility
+    ceiling; the S05 PHEV passes the tighter bound.
     """
     state = charge_state(state_value)
     ac_reported = _as_float(ac_value) is not None
     dc_reported = _as_float(dc_value) is not None
-    ac = clean_charge_current_magnitude(ac_value, "BattACChrgInCurr")
-    dc = clean_charge_current_magnitude(dc_value, "BattDCChrgInCurr")
+    ac = clean_charge_current_magnitude(
+        ac_value, "BattACChrgInCurr", max_current=max_current
+    )
+    dc = clean_charge_current_magnitude(
+        dc_value, "BattDCChrgInCurr", max_current=max_current
+    )
 
     if state == CHARGE_STATE_DC_CHARGING:
         return (0.0 if ac_reported else None), dc, dc
@@ -1785,16 +2095,18 @@ def normalize_s05_params(
     """
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     charge_status = _as_int(params.get("ChrgSts"))
+    phev = is_phev_model(model_code)
     ac_current, dc_current, active_current = charge_currents(
         _first(params, "BattACChrgInCurr", "battACChrgInCurr"),
         _first(params, "BattDCChrgInCurr", "battDCChrgInCurr"),
         charge_status,
+        max_current=MAX_PHEV_CHARGE_CURRENT_A if phev else MAX_CHARGE_CURRENT_A,
     )
     charge_con_status, ac_gun, dc_gun = charge_gun_flags(
         charge_status,
         ac_gun_value=params.get("acChargeGunConnectionState"),
         dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
-        phev=is_phev_model(model_code),
+        phev=phev,
     )
     power_status = _as_int(params.get("powerStatusFeedBack"))
     outside_temp = _as_float(

@@ -849,6 +849,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 "plan": (
                     exchange.plan.as_dict() if exchange.plan else None
                 ),
+                "qos": exchange.qos,
+                "keepalive": exchange.keepalive,
+                "connect_timeout": exchange.connect_timeout,
+                "server_keep_alive": exchange.server_keep_alive,
+                "maximum_qos": exchange.maximum_qos,
+                "effective_qos": exchange.effective_qos,
+                "effective_keepalive": exchange.effective_keepalive,
+                "logout_sent": exchange.logout_sent,
+                "logout_error": exchange.logout_error,
             }
         _LOGGER.warning(
             "Deepal MQTT telemetry unavailable for %s (%s); using the "

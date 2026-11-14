@@ -2,7 +2,8 @@
 
 import asyncio
 import base64
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
 from ipaddress import ip_address
@@ -79,6 +80,7 @@ from deepal.exceptions import (
     DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalError,
+    DeepalMqttAuthRejected,
     DeepalRateLimitError,
     parse_retry_after,
 )
@@ -110,16 +112,19 @@ from deepal.mqtt import (
     _as_float,
     _as_int,
     CHARGE_TIME_SENTINEL,
+    MAX_CHARGE_CURRENT_A,
+    MAX_PHEV_CHARGE_CURRENT_A,
+    MQTT_AUTH_REJECTION_CODES,
     MQTT_CONNACK_REASONS,
     MQTT_DEFAULT_KEEPALIVE,
     MQTT_SDA_PROBE_GRACE,
+    MqttBrokerSettings,
     MqttTopics,
     S05_SERVICE_CODES,
     SDA_CONDITION_COMMAND,
     SDA_CONDITION_SECTIONS,
     SDA_CONDITION_SERVICE,
     SDA_SERVICE_CODES,
-    WAKE_PACKET_ID,
     MqttExchangeResult,
     SdaBrokerConfig,
     SdaConditionPlan,
@@ -137,12 +142,15 @@ from deepal.mqtt import (
     condition_request_services,
     config_mqtt_identity,
     device_id_candidates,
+    is_phev_model,
     is_s05_model,
     login_request_payload,
+    logout_request_payload,
     new_request_id,
     normalize_s05_params,
     normalize_sda_params,
-    parse_connack,
+    parse_connack_info,
+    parse_mqtt_broker_settings,
     parse_publish,
     parse_sda_broker_config,
     parse_suback,
@@ -245,6 +253,24 @@ WAKE_OK_CODES = frozenset({"000000", "0", "00000"})
 #: raising the HTTP bound never extends a telemetry or wake exchange.
 MQTT_SOCKET_TIMEOUT = 15.0
 MQTT_EXCHANGE_TIMEOUT = 20.0
+
+
+@dataclass(frozen=True)
+class _S05Logout:
+    """The login context needed to release a completed one-shot session."""
+
+    topic: str
+    login_did: str
+    basic_info: Mapping[str, Any]
+    qos: int
+
+
+@dataclass(frozen=True)
+class _S05CloseResult:
+    """Outcome of one one-shot session close."""
+
+    logout_sent: bool = False
+    logout_error: Optional[str] = None
 
 
 def _auth_failure_class(code: Any, message: Any = None) -> Optional[type]:
@@ -496,10 +522,9 @@ class DeepalIntlClient:
         os_version: str = INTL_OS_VERSION,
         tsp_token_source: str = "access",
         environment: str = DEFAULT_INTL_ENVIRONMENT,
-        mqtt_config_fallback: bool = True,
         mqtt_client_id: Optional[str] = None,
         mqtt_username: Optional[str] = None,
-        mqtt_keepalive: float = MQTT_DEFAULT_KEEPALIVE,
+        mqtt_keepalive: Optional[float] = None,
         mqtt_clean_start: bool = True,
         mqtt_tls_insecure: bool = False,
         mqtt_sda_probe_grace: float = MQTT_SDA_PROBE_GRACE,
@@ -535,7 +560,6 @@ class DeepalIntlClient:
         self.environment = environment_config.id
         self.app_id = environment_config.app_id
         self._intl_path_prefix = environment_config.intl_path_prefix
-        self.mqtt_config_fallback = mqtt_config_fallback
         self.mqtt_client_id = mqtt_client_id
         self.mqtt_username = mqtt_username
         self.mqtt_keepalive = mqtt_keepalive
@@ -549,6 +573,9 @@ class DeepalIntlClient:
         self._mqtt_token: Optional[str] = None
         self._mqtt_token_expires_at = 0.0
         self._mqtt_configs: dict[str, tuple[dict[str, Any], float]] = {}
+        # SUBSCRIBE uses packet id 1; publishes start at 2 and must not reuse
+        # an identifier within the same session.
+        self._mqtt_packet_id = 2
         self.last_mqtt_exchange: Optional[MqttExchangeResult] = None
         self.device_id = device_id or secrets.token_hex(16)
         self.base_url = (base_url or environment_config.intl_base_url).rstrip("/")
@@ -577,10 +604,26 @@ class DeepalIntlClient:
         self._client_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
         self._mqtt_lock = asyncio.Lock()
+        self._mqtt_ssl_context_cached: Optional[ssl.SSLContext] = None
+        self._mqtt_ssl_context_insecure: Optional[bool] = None
+        self._mqtt_ssl_context_lock = asyncio.Lock()
         self._last_refresh_attempt_at: Optional[float] = None
         self._refresh_attempt_sequence = 0
         self._refresh_attempt_error: Optional[BaseException] = None
         self._last_refresh_kept_token = False
+
+    @property
+    def mqtt_keepalive(self) -> float:
+        """Return the effective MQTT keepalive (50 s when unset)."""
+        return self._mqtt_keepalive
+
+    @mqtt_keepalive.setter
+    def mqtt_keepalive(self, value: Optional[float]) -> None:
+        """Set the keepalive and remember whether it was an explicit override."""
+        self._mqtt_keepalive = (
+            MQTT_DEFAULT_KEEPALIVE if value is None else float(value)
+        )
+        self._mqtt_keepalive_override = value is not None
 
     async def _http_client(self) -> httpx.AsyncClient:
         """Return the managed HTTP client, creating it outside the event loop."""
@@ -1708,6 +1751,11 @@ class DeepalIntlClient:
     ) -> VehicleCondition:
         """Map a raw condition payload into the shared vehicle model."""
         s05 = is_s05_model(model_code)
+        max_charge_current = (
+            MAX_PHEV_CHARGE_CURRENT_A
+            if s05 and is_phev_model(model_code)
+            else MAX_CHARGE_CURRENT_A
+        )
         status = raw.get("vehicleStatus") or {}
         door = raw.get("door") or {}
         hvac = raw.get("hvac") or {}
@@ -1790,13 +1838,19 @@ class DeepalIntlClient:
                 charge.get("acChargeGunConnectStatus")
             ),
             charge_current_a=clean_charge_current_magnitude(
-                charge.get("chargeCurrent"), "charge.chargeCurrent"
+                charge.get("chargeCurrent"),
+                "charge.chargeCurrent",
+                max_current=max_charge_current,
             ),
             ac_charge_current_a=clean_charge_current_magnitude(
-                charge.get("acChargeCurrent"), "charge.acChargeCurrent"
+                charge.get("acChargeCurrent"),
+                "charge.acChargeCurrent",
+                max_current=max_charge_current,
             ),
             dc_charge_current_a=clean_charge_current_magnitude(
-                charge.get("dcChargeCurrent"), "charge.dcChargeCurrent"
+                charge.get("dcChargeCurrent"),
+                "charge.dcChargeCurrent",
+                max_current=max_charge_current,
             ),
             remaining_charge_time_min=remaining_charge_time,
             charge_limit_percent=_percent(charge.get("maxSocPercent")),
@@ -2055,27 +2109,12 @@ class DeepalIntlClient:
             "confTimestamp": 0,
             "deviceTimestamp": str(int(time.time() * 1000)),
         }
-        try:
-            data = await self._request(
-                INTL_CA_GET_CONN_CONF,
-                json_data=payload,
-                auth_required=True,
-                base_url=self.ca_base_url,
-            )
-        except DeepalRateLimitError:
-            raise
-        except (DeepalAPIError, DeepalSessionInvalidated) as exc:
-            if not self.mqtt_config_fallback:
-                raise
-            logger.warning(
-                "getConnConf failed (%s); retrying with appGetCarConfFunc", exc
-            )
-            data = await self._request(
-                INTL_CA_GET_CAR_CONF_FUNC,
-                json_data=payload,
-                auth_required=True,
-                base_url=self.ca_base_url,
-            )
+        data = await self._request(
+            INTL_CA_GET_CONN_CONF,
+            json_data=payload,
+            auth_required=True,
+            base_url=self.ca_base_url,
+        )
         if not isinstance(data, dict):
             raise DeepalAPIError("Unexpected S05 MQTT configuration response.")
         self._mqtt_configs[vehicle_id] = (
@@ -2092,6 +2131,12 @@ class DeepalIntlClient:
     def _invalidate_mqtt_config(self) -> None:
         """Drop the cached CA connection configurations (rejected bootstrap)."""
         self._mqtt_configs.clear()
+
+    def _next_mqtt_packet_id(self) -> int:
+        """Return the next publish packet id; SUBSCRIBE reserves id 1."""
+        packet_id = self._mqtt_packet_id
+        self._mqtt_packet_id = 2 if packet_id >= 0xFFFF else packet_id + 1
+        return packet_id
 
     async def get_mqtt_token(self, force: bool = False) -> str:
         """Exchange the account user id for a CA MQTT auth token.
@@ -2250,7 +2295,7 @@ class DeepalIntlClient:
             seconds=seconds,
             timeout=MQTT_SOCKET_TIMEOUT,
             keepalive=self.mqtt_keepalive,
-            ssl_context=await asyncio.to_thread(self._mqtt_ssl_context),
+            ssl_context=await self._async_mqtt_ssl_context(),
             login=login,
         )
         if result.connected:
@@ -2268,6 +2313,24 @@ class DeepalIntlClient:
             "Could not reach the SDA broker for the resolved device DIDs."
         )
 
+    async def _retry_mqtt_auth(self, action: Callable[[], Awaitable[Any]]) -> Any:
+        """Run one MQTT exchange, retrying once after an auth rejection.
+
+        ``_open_s05_mqtt`` already drops the cached auth token and connection
+        configuration before raising :class:`DeepalMqttAuthRejected`, so the
+        retry fetches fresh bootstrap material. Every other CONNACK rejection
+        propagates without a retry.
+        """
+        try:
+            return await action()
+        except DeepalMqttAuthRejected as err:
+            logger.warning(
+                "Deepal MQTT broker rejected the credentials (reason code 0x%02X); "
+                "retrying once with a fresh token",
+                err.reason_code,
+            )
+            return await action()
+
     async def s05_mqtt_condition(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
     ) -> VehicleCondition:
@@ -2277,16 +2340,20 @@ class DeepalIntlClient:
         used by ``SDA-MQTT`` vehicles; the legacy ``car_condition`` request
         remains the default and the last fallback probe. Sessions are
         serialized per client because all vehicles of an account share the
-        broker client identity.
+        broker client identity. An authentication rejection is retried once
+        with fresh bootstrap material.
         """
         async with self._mqtt_lock:
-            return await self._s05_mqtt_condition_locked(
-                vehicle_id, vin=vin, sda=sda
+            return await self._retry_mqtt_auth(
+                lambda: self._s05_mqtt_condition_locked(
+                    vehicle_id, vin=vin, sda=sda
+                )
             )
 
     async def _s05_mqtt_condition_locked(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
     ) -> VehicleCondition:
+        self.last_mqtt_exchange = None
         config = await self.get_mqtt_config(vehicle_id)
         if sda:
             plan = sda_condition_plan(config)
@@ -2504,9 +2571,9 @@ class DeepalIntlClient:
             ),
         )
 
-    def _mqtt_ssl_context(self) -> ssl.SSLContext:
-        """Build the TLS context, honouring the explicit insecure override."""
-        if self.mqtt_tls_insecure:
+    def _build_mqtt_ssl_context(self, insecure: bool) -> ssl.SSLContext:
+        """Build the TLS context for the captured insecure mode."""
+        if insecure:
             logger.warning(
                 "Deepal MQTT TLS verification is disabled (mqtt_tls_insecure=True); "
                 "certificate and hostname checks are skipped."
@@ -2516,6 +2583,28 @@ class DeepalIntlClient:
             context.verify_mode = ssl.CERT_NONE
             return context
         return ssl.create_default_context()
+
+    async def _async_mqtt_ssl_context(self) -> ssl.SSLContext:
+        """Return the cached TLS context, building it once when needed.
+
+        The context is immutable once built, so every MQTT session of the
+        client can share it. Building it reads the system certificate store,
+        which is blocking and is therefore kept off the event loop. The cache
+        is rebuilt only when ``mqtt_tls_insecure`` changes. The mode is
+        captured before taking the lock so the built context and the cache key
+        always describe the same configuration.
+        """
+        insecure = bool(self.mqtt_tls_insecure)
+        async with self._mqtt_ssl_context_lock:
+            if (
+                self._mqtt_ssl_context_cached is None
+                or self._mqtt_ssl_context_insecure != insecure
+            ):
+                self._mqtt_ssl_context_cached = await asyncio.to_thread(
+                    self._build_mqtt_ssl_context, insecure
+                )
+                self._mqtt_ssl_context_insecure = insecure
+            return self._mqtt_ssl_context_cached
 
     def _mqtt_basic_identifiers(
         self, config: dict[str, Any], login_did: str
@@ -2549,6 +2638,33 @@ class DeepalIntlClient:
             cid=first_value("carId", "car_id", "cid"),
         )
 
+    def _resolve_broker_settings(
+        self, config: dict[str, Any]
+    ) -> MqttBrokerSettings:
+        """Resolve the cluster settings and apply an explicit keepalive override."""
+        settings = parse_mqtt_broker_settings(config)
+        if self._mqtt_keepalive_override:
+            settings = replace(settings, keepalive=float(self.mqtt_keepalive))
+        return settings
+
+    @staticmethod
+    def _logout_context(
+        resolved: MqttTopics,
+        basic_info: Mapping[str, Any],
+        secret_key: Optional[str],
+        settings: MqttBrokerSettings,
+    ) -> Optional[_S05Logout]:
+        """Return the logout context for a completed login, or ``None``."""
+        login_did = resolved.login_did or resolved.device_did
+        if not secret_key or not resolved.login_publish or not login_did:
+            return None
+        return _S05Logout(
+            topic=resolved.login_publish,
+            login_did=login_did,
+            basic_info=basic_info,
+            qos=settings.effective_qos,
+        )
+
     async def _open_s05_mqtt(
         self,
         config: dict[str, Any],
@@ -2556,6 +2672,8 @@ class DeepalIntlClient:
         *,
         sda: bool = False,
         vehicle_id: Optional[str] = None,
+        settings: Optional[MqttBrokerSettings] = None,
+        exchange: Optional[MqttExchangeResult] = None,
     ) -> tuple[
         asyncio.StreamReader,
         asyncio.StreamWriter,
@@ -2563,26 +2681,33 @@ class DeepalIntlClient:
         dict[str, Any],
         Optional[str],
         Optional[SdaConditionPlan],
+        MqttBrokerSettings,
     ]:
         """Connect, subscribe and log in; return the open session and login result.
 
         The caller owns the returned writer and must close it with
-        :meth:`_close_s05_mqtt`.
+        :meth:`_close_s05_mqtt`. The trailing settings carry the resolved
+        cluster values and the CONNACK limits applied to the session.
         """
-        info = ((config.get("mqttConnectionInfos") or [None])[0]) or {}
-        cluster = ((info.get("clusterInfos") or [None])[0]) or {}
-        host = str(cluster.get("brokerUrl", "")).replace("ssl://", "")
-        port = int(cluster.get("brokerPort") or 8883)
+        if settings is None:
+            settings = self._resolve_broker_settings(config)
         resolved = resolve_mqtt_topics(config, fallback_did=self.mqtt_client_id)
         login_topic = resolved.login_publish
         login_did = resolved.login_did
         properties_topic = resolved.properties_publish
         device_did = resolved.device_did
 
-        if not host or not login_topic or not login_did or not device_did:
+        if (
+            not settings.usable
+            or not login_topic
+            or not login_did
+            or not device_did
+        ):
             raise DeepalAPIError(
                 "S05 MQTT configuration did not include required topics."
             )
+        host = settings.host
+        port = settings.port
 
         plan = sda_condition_plan(config) if sda else None
         sda_did = (plan.device_did if plan and plan.device_did else None) or device_did
@@ -2601,6 +2726,9 @@ class DeepalIntlClient:
             source="sda" if sda else "s05",
             host=host,
             port=port,
+            qos=settings.qos,
+            keepalive=settings.keepalive,
+            connect_timeout=settings.connect_timeout,
             topics={
                 "login": login_topic,
                 "properties": properties_topic,
@@ -2609,10 +2737,10 @@ class DeepalIntlClient:
                 "subscriptions": list(resolved.subscriptions),
             },
         )
-        context = await asyncio.to_thread(self._mqtt_ssl_context)
+        context = await self._async_mqtt_ssl_context()
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(host, port, ssl=context, server_hostname=host),
-            timeout=MQTT_SOCKET_TIMEOUT,
+            timeout=settings.connect_timeout,
         )
         try:
             writer.write(
@@ -2620,15 +2748,31 @@ class DeepalIntlClient:
                     client_id,
                     username,
                     token,
-                    keepalive=self.mqtt_keepalive,
+                    keepalive=settings.keepalive,
                     clean_start=self.mqtt_clean_start,
                 )
             )
             await writer.drain()
             first, body = await asyncio.wait_for(
-                read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT
+                read_packet(reader), timeout=settings.connect_timeout
             )
-            _session_present, reason_code = parse_connack(first, body)
+            connack = parse_connack_info(first, body)
+            if connack is None:
+                raise DeepalAPIError(
+                    "S05 MQTT broker returned a malformed CONNACK."
+                )
+            settings = settings.with_connack(connack)
+            if exchange is not None:
+                self.last_mqtt_exchange = replace(
+                    exchange,
+                    qos=settings.qos,
+                    keepalive=settings.keepalive,
+                    effective_qos=settings.effective_qos,
+                    effective_keepalive=settings.effective_keepalive,
+                    server_keep_alive=settings.server_keep_alive,
+                    maximum_qos=settings.maximum_qos,
+                )
+            reason_code = connack.reason_code
             if reason_code != 0:
                 reason = MQTT_CONNACK_REASONS.get(reason_code, "unknown reason code")
                 # A rejected token must not survive the reuse window; force a
@@ -2644,11 +2788,13 @@ class DeepalIntlClient:
                     reason_code=reason_code,
                     reason=reason,
                 )
-                raise DeepalAPIError(
+                message = (
                     "S05 MQTT broker rejected connection: "
                     f"reason code {reason_code} ({reason})"
                 )
-
+                if reason_code in MQTT_AUTH_REJECTION_CODES:
+                    raise DeepalMqttAuthRejected(message, reason_code=reason_code)
+                raise DeepalAPIError(message)
             subscriptions = set(resolved.subscriptions)
             if sda and sda_topic and sda_topic != properties_topic:
                 sda_response = (
@@ -2657,10 +2803,14 @@ class DeepalIntlClient:
                     else sda_topic
                 )
                 subscriptions.add(sda_response)
-            writer.write(build_subscribe_packet(1, sorted(subscriptions)))
+            writer.write(
+                build_subscribe_packet(
+                    1, sorted(subscriptions), qos=settings.effective_qos
+                )
+            )
             await writer.drain()
             first, body = await asyncio.wait_for(
-                read_packet(reader), timeout=MQTT_SOCKET_TIMEOUT
+                read_packet(reader), timeout=settings.connect_timeout
             )
             packet_id, reasons = parse_suback(first, body)
             if packet_id != 1 or not reasons or any(
@@ -2695,7 +2845,14 @@ class DeepalIntlClient:
                 ],
                 request_id=login_req_id,
             )
-            writer.write(build_publish_packet(login_topic, login_payload))
+            writer.write(
+                build_publish_packet(
+                    login_topic,
+                    login_payload,
+                    qos=settings.effective_qos,
+                    packet_id=self._next_mqtt_packet_id(),
+                )
+            )
             await writer.drain()
 
             secret_key: Optional[str] = None
@@ -2707,7 +2864,7 @@ class DeepalIntlClient:
                         reader,
                         writer,
                         max(0.05, deadline - loop.time()),
-                        self.mqtt_keepalive,
+                        settings.effective_keepalive,
                     )
                 except asyncio.TimeoutError:
                     break
@@ -2743,23 +2900,78 @@ class DeepalIntlClient:
         except BaseException:
             await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
             raise
-        return reader, writer, resolved, basic_info, secret_key, plan
+        return reader, writer, resolved, basic_info, secret_key, plan, settings
 
     async def _close_s05_mqtt(
-        self, writer: asyncio.StreamWriter, *, vehicle_id: Optional[str] = None
-    ) -> None:
-        """Send DISCONNECT and close the one-shot MQTT session."""
-        self._emit_mqtt("session_close", vehicle_id=vehicle_id)
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        vehicle_id: Optional[str] = None,
+        logout: Optional[_S05Logout] = None,
+        timeout: float = MQTT_SOCKET_TIMEOUT,
+    ) -> _S05CloseResult:
+        """Publish the optional logout, send DISCONNECT and close the session."""
+        logout_sent = False
+        logout_error: Optional[str] = None
+        if logout is not None:
+            try:
+                req_id = new_request_id(logout.login_did)
+                payload = logout_request_payload(
+                    logout.login_did, req_id, basic_info=logout.basic_info
+                )
+                writer.write(
+                    build_publish_packet(
+                        logout.topic,
+                        payload,
+                        qos=logout.qos,
+                        packet_id=self._next_mqtt_packet_id(),
+                    )
+                )
+                await asyncio.wait_for(writer.drain(), timeout=timeout)
+                logout_sent = True
+                self._emit_mqtt(
+                    "publish",
+                    vehicle_id=vehicle_id,
+                    stage="logout",
+                    topic=logout.topic,
+                    payload=payload,
+                    services=[
+                        {
+                            "service_code": "logout",
+                            "params": payload["sers"][0]["params"],
+                        }
+                    ],
+                    request_id=req_id,
+                )
+            except Exception as exc:
+                logout_error = f"{type(exc).__name__}: {exc}"
+                self._emit_mqtt(
+                    "error",
+                    vehicle_id=vehicle_id,
+                    stage="logout",
+                    error=logout_error,
+                    error_type=type(exc).__name__,
+                )
+        self._emit_mqtt(
+            "session_close",
+            vehicle_id=vehicle_id,
+            logout_sent=logout_sent,
+            logout_error=logout_error,
+        )
         try:
             writer.write(build_disconnect_packet())
-            await writer.drain()
-        except (ConnectionError, OSError, ssl.SSLError):
-            pass
-        writer.close()
+            await asyncio.wait_for(writer.drain(), timeout=timeout)
+        except Exception as exc:
+            logger.debug("Deepal MQTT DISCONNECT failed: %s", exc)
+        finally:
+            writer.close()
         try:
             await writer.wait_closed()
-        except (ConnectionError, TimeoutError, ssl.SSLError):
-            pass
+        except Exception as exc:
+            logger.debug("Deepal MQTT close wait failed: %s", exc)
+        return _S05CloseResult(
+            logout_sent=logout_sent, logout_error=logout_error
+        )
 
     async def _read_s05_params(
         self,
@@ -2770,6 +2982,16 @@ class DeepalIntlClient:
         vehicle_id: Optional[str] = None,
     ) -> MqttExchangeResult:
         """Run one MQTT 5.0 login + condition exchange and return the raw parameters."""
+        settings = self._resolve_broker_settings(config)
+        self.last_mqtt_exchange = MqttExchangeResult(
+            params={},
+            plan=sda_condition_plan(config) if sda else None,
+            qos=settings.qos,
+            keepalive=settings.keepalive,
+            connect_timeout=settings.connect_timeout,
+            effective_qos=settings.effective_qos,
+            effective_keepalive=settings.effective_keepalive,
+        )
         (
             reader,
             writer,
@@ -2777,9 +2999,56 @@ class DeepalIntlClient:
             basic_info,
             secret_key,
             plan,
+            settings,
         ) = await self._open_s05_mqtt(
-            config, token, sda=sda, vehicle_id=vehicle_id
+            config,
+            token,
+            sda=sda,
+            vehicle_id=vehicle_id,
+            settings=settings,
+            exchange=self.last_mqtt_exchange,
         )
+        self.last_mqtt_exchange = replace(
+            self.last_mqtt_exchange,
+            qos=settings.qos,
+            keepalive=settings.keepalive,
+            effective_qos=settings.effective_qos,
+            effective_keepalive=settings.effective_keepalive,
+            server_keep_alive=settings.server_keep_alive,
+            maximum_qos=settings.maximum_qos,
+        )
+        logout = self._logout_context(
+            resolved, basic_info, secret_key, settings
+        )
+        partial: dict[str, Any] = {}
+        variants: dict[str, dict[str, Any]] = {}
+        source: Optional[str] = None
+
+        def make_result(**kwargs: Any) -> MqttExchangeResult:
+            return MqttExchangeResult(
+                qos=settings.qos,
+                keepalive=settings.keepalive,
+                connect_timeout=settings.connect_timeout,
+                server_keep_alive=settings.server_keep_alive,
+                maximum_qos=settings.maximum_qos,
+                effective_qos=settings.effective_qos,
+                effective_keepalive=settings.effective_keepalive,
+                **kwargs,
+            )
+
+        async def finish(result: MqttExchangeResult) -> MqttExchangeResult:
+            close = await self._close_s05_mqtt(
+                writer,
+                vehicle_id=vehicle_id,
+                logout=logout,
+                timeout=settings.connect_timeout,
+            )
+            return replace(
+                result,
+                logout_sent=close.logout_sent,
+                logout_error=close.logout_error,
+            )
+
         try:
             properties_topic = resolved.properties_publish
             device_did = resolved.device_did
@@ -2789,11 +3058,8 @@ class DeepalIntlClient:
             )
             sda_topic = topic_with_device(properties_topic, sda_did) or properties_topic
             if not properties_topic or not device_did or not secret_key:
-                return MqttExchangeResult(params={}, plan=plan)
+                return await finish(make_result(params={}, plan=plan))
 
-            partial: dict[str, Any] = {}
-            variants: dict[str, dict[str, Any]] = {}
-            source: Optional[str] = None
             model_code: Optional[str] = None
             probe_labels: dict[str, str] = {}
             if sda:
@@ -2876,6 +3142,7 @@ class DeepalIntlClient:
                     )
                     topic = properties_topic
                 probe_labels[req_id] = label
+                variants.setdefault(label, {})
                 probe_deadline = loop.time() + self.mqtt_sda_probe_grace
                 self._emit_mqtt(
                     "publish",
@@ -2887,7 +3154,14 @@ class DeepalIntlClient:
                     services=services,
                     request_id=req_id,
                 )
-                writer.write(build_publish_packet(topic, request))
+                writer.write(
+                    build_publish_packet(
+                        topic,
+                        request,
+                        qos=settings.effective_qos,
+                        packet_id=self._next_mqtt_packet_id(),
+                    )
+                )
 
             def advance_probe() -> bool:
                 """Publish the next condition variant; False when exhausted."""
@@ -2926,7 +3200,7 @@ class DeepalIntlClient:
                         reader,
                         writer,
                         max(0.05, wait),
-                        self.mqtt_keepalive,
+                        settings.effective_keepalive,
                     )
                 except asyncio.TimeoutError:
                     if advance_probe():
@@ -2973,22 +3247,26 @@ class DeepalIntlClient:
                     source = label
                 if topic.endswith("/properties/get/res") and len(params) > 10:
                     self._log_s05_discovery(params)
-                    return MqttExchangeResult(
-                        params=params,
-                        source=source,
-                        variants=attempted_variants(),
-                        plan=plan,
-                        model_code=model_code,
+                    return await finish(
+                        make_result(
+                            params=params,
+                            source=source,
+                            variants=attempted_variants(),
+                            plan=plan,
+                            model_code=model_code,
+                        )
                     )
                 partial.update(params)
                 if probe_index >= 0 and len(partial) > 30:
                     self._log_s05_discovery(partial)
-                    return MqttExchangeResult(
-                        params=partial,
-                        source=source,
-                        variants=attempted_variants(),
-                        plan=plan,
-                        model_code=model_code,
+                    return await finish(
+                        make_result(
+                            params=partial,
+                            source=source,
+                            variants=attempted_variants(),
+                            plan=plan,
+                            model_code=model_code,
+                        )
                     )
 
             self._log_s05_discovery(partial)
@@ -3000,15 +3278,33 @@ class DeepalIntlClient:
                 partial=partial,
                 variants=attempted_variants(),
             )
-            return MqttExchangeResult(
-                params=partial,
-                source=source,
-                variants=attempted_variants(),
-                plan=plan,
-                model_code=model_code,
+            return await finish(
+                make_result(
+                    params=partial,
+                    source=source,
+                    variants=attempted_variants(),
+                    plan=plan,
+                    model_code=model_code,
+                )
             )
-        finally:
-            await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
+        except BaseException:
+            close = await self._close_s05_mqtt(
+                writer,
+                vehicle_id=vehicle_id,
+                logout=logout,
+                timeout=settings.connect_timeout,
+            )
+            if self.last_mqtt_exchange is not None:
+                self.last_mqtt_exchange = replace(
+                    self.last_mqtt_exchange,
+                    params=partial,
+                    source=source,
+                    variants=variants,
+                    plan=plan,
+                    logout_sent=close.logout_sent,
+                    logout_error=close.logout_error,
+                )
+            raise
 
     async def s05_wait_for_report(
         self,
@@ -3031,8 +3327,17 @@ class DeepalIntlClient:
         closes concurrent sessions that share the account identity.
         """
         async with self._mqtt_lock:
-            config = await self.get_mqtt_config(vehicle_id)
-            token = await self.get_mqtt_token()
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+
+            async def open_session() -> tuple[Any, ...]:
+                """Bootstrap and open a session with fresh material each try."""
+                config = await self.get_mqtt_config(vehicle_id)
+                token = await self.get_mqtt_token()
+                return await self._open_s05_mqtt(
+                    config, token, vehicle_id=vehicle_id
+                )
+
             try:
                 (
                     reader,
@@ -3041,8 +3346,10 @@ class DeepalIntlClient:
                     basic_info,
                     secret_key,
                     _plan,
-                ) = await self._open_s05_mqtt(
-                    config, token, vehicle_id=vehicle_id
+                    settings,
+                ) = await asyncio.wait_for(
+                    self._retry_mqtt_auth(open_session),
+                    timeout=max(0.05, deadline - loop.time()),
                 )
             except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
                 self._emit_mqtt(
@@ -3055,9 +3362,12 @@ class DeepalIntlClient:
                 raise DeepalAPIError(
                     f"S05 MQTT report wait failed: {exc}"
                 ) from exc
+            logout = self._logout_context(
+                resolved, basic_info, secret_key, settings
+            )
             try:
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + timeout
+                if loop.time() >= deadline:
+                    return None
                 request_timeout = (
                     self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT
                 )
@@ -3074,6 +3384,7 @@ class DeepalIntlClient:
                             secret_key,
                             vehicle_id,
                             vin,
+                            settings,
                             wait,
                             require_timestamp=previous_timestamp is not None,
                         )
@@ -3118,7 +3429,12 @@ class DeepalIntlClient:
                         return None
                     await asyncio.sleep(min(interval, remaining))
             finally:
-                await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
+                await self._close_s05_mqtt(
+                    writer,
+                    vehicle_id=vehicle_id,
+                    logout=logout,
+                    timeout=settings.connect_timeout,
+                )
 
     async def _request_condition_on_session(
         self,
@@ -3129,6 +3445,7 @@ class DeepalIntlClient:
         secret_key: str,
         vehicle_id: str,
         vin: Optional[str],
+        settings: MqttBrokerSettings,
         wait: float,
         *,
         require_timestamp: bool,
@@ -3164,7 +3481,14 @@ class DeepalIntlClient:
             services=condition_request_services(),
             request_id=req_id,
         )
-        writer.write(build_publish_packet(properties_topic, request))
+        writer.write(
+            build_publish_packet(
+                properties_topic,
+                request,
+                qos=settings.effective_qos,
+                packet_id=self._next_mqtt_packet_id(),
+            )
+        )
         await writer.drain()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait
@@ -3176,7 +3500,7 @@ class DeepalIntlClient:
                     reader,
                     writer,
                     max(0.05, deadline - loop.time()),
-                    self.mqtt_keepalive,
+                    settings.effective_keepalive,
                 )
             except asyncio.TimeoutError:
                 self._emit_mqtt(
@@ -3275,15 +3599,23 @@ class DeepalIntlClient:
         """
         async with self._mqtt_lock:
             try:
-                await self._wake_vehicle_locked(vehicle_id)
+                await self._retry_mqtt_auth(
+                    lambda: self._wake_vehicle_locked(vehicle_id)
+                )
             except Exception:
                 self._mqtt_configs.pop(vehicle_id, None)
                 self._invalidate_mqtt_token()
                 raise
 
     async def _wake_vehicle_locked(self, vehicle_id: str) -> None:
+        self.last_mqtt_exchange = None
         config = await self.get_mqtt_config(vehicle_id)
         token = await self.get_mqtt_token()
+        # The wake must be queued for an offline vehicle, so it always asks
+        # for QoS 1 even when the cluster advertises QoS 0 for telemetry. The
+        # CONNACK maximum_qos still caps the value.
+        settings = replace(self._resolve_broker_settings(config), qos=1)
+        exchange = MqttExchangeResult(params={}, source="wake", qos=1)
         try:
             (
                 reader,
@@ -3292,8 +3624,13 @@ class DeepalIntlClient:
                 basic_info,
                 secret_key,
                 _plan,
+                settings,
             ) = await self._open_s05_mqtt(
-                config, token, vehicle_id=vehicle_id
+                config,
+                token,
+                vehicle_id=vehicle_id,
+                settings=settings,
+                exchange=exchange,
             )
         except (asyncio.TimeoutError, EOFError, OSError, ssl.SSLError) as exc:
             self._emit_mqtt(
@@ -3304,6 +3641,17 @@ class DeepalIntlClient:
                 error_type=type(exc).__name__,
             )
             raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
+
+        if settings.maximum_qos == 0:
+            logger.warning(
+                "Deepal MQTT broker caps QoS at 0 for %s; the wake cannot be "
+                "queued while the vehicle is offline",
+                vehicle_id,
+            )
+
+        logout = self._logout_context(
+            resolved, basic_info, secret_key, settings
+        )
 
         try:
             try:
@@ -3338,12 +3686,12 @@ class DeepalIntlClient:
                     build_publish_packet(
                         set_topic,
                         wake_payload,
-                        # QoS 1: the broker queues the wake for the vehicle
-                        # session when the car is deeply asleep and offline,
-                        # instead of dropping it like a QoS 0 message. The
-                        # packet identifier is distinct from the SUBSCRIBE one.
-                        qos=1,
-                        packet_id=WAKE_PACKET_ID,
+                        # At QoS 1 the broker queues the wake for the vehicle
+                        # session when the car is deeply asleep and offline
+                        # instead of dropping it. The packet id is unique per
+                        # session.
+                        qos=settings.effective_qos,
+                        packet_id=self._next_mqtt_packet_id(),
                     )
                 )
                 await writer.drain()
@@ -3363,7 +3711,7 @@ class DeepalIntlClient:
                             reader,
                             writer,
                             max(0.05, deadline - loop.time()),
-                            self.mqtt_keepalive,
+                            settings.effective_keepalive,
                         )
                     except asyncio.TimeoutError:
                         break
@@ -3457,7 +3805,18 @@ class DeepalIntlClient:
                 )
                 raise DeepalAPIError(f"S05 MQTT wake failed: {exc}") from exc
         finally:
-            await self._close_s05_mqtt(writer, vehicle_id=vehicle_id)
+            close = await self._close_s05_mqtt(
+                writer,
+                vehicle_id=vehicle_id,
+                logout=logout,
+                timeout=settings.connect_timeout,
+            )
+            if self.last_mqtt_exchange is not None:
+                self.last_mqtt_exchange = replace(
+                    self.last_mqtt_exchange,
+                    logout_sent=close.logout_sent,
+                    logout_error=close.logout_error,
+                )
 
     @staticmethod
     def _service_result_from_payload(

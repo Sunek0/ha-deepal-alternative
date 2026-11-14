@@ -31,6 +31,7 @@ from custom_components.deepal.deepal import (
     DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalIntlClient,
+    DeepalMqttAuthRejected,
     DeepalRateLimitError,
     Vehicle,
     VehicleCapabilities,
@@ -1770,6 +1771,15 @@ async def test_failed_mqtt_exchange_is_kept_for_diagnostics():
             source=None,
             variants={"sda-mqtt": {}, "sda-mqtt-sections": {}},
             plan=SdaConditionPlan(device_did="plan-did"),
+            qos=1,
+            keepalive=60.0,
+            connect_timeout=30.0,
+            server_keep_alive=45,
+            maximum_qos=0,
+            effective_qos=0,
+            effective_keepalive=45.0,
+            logout_sent=True,
+            logout_error=None,
         )
         raise DeepalAPIError("S05 MQTT telemetry did not return vehicle condition.")
 
@@ -1783,6 +1793,15 @@ async def test_failed_mqtt_exchange_is_kept_for_diagnostics():
     assert attempt is not None
     assert attempt["variants"] == {"sda-mqtt": {}, "sda-mqtt-sections": {}}
     assert attempt["plan"]["device_did"] == "plan-did"
+    assert attempt["qos"] == 1
+    assert attempt["keepalive"] == 60.0
+    assert attempt["connect_timeout"] == 30.0
+    assert attempt["server_keep_alive"] == 45
+    assert attempt["maximum_qos"] == 0
+    assert attempt["effective_qos"] == 0
+    assert attempt["effective_keepalive"] == 45.0
+    assert attempt["logout_sent"] is True
+    assert attempt["logout_error"] is None
 
 
 @pytest.mark.asyncio
@@ -2385,6 +2404,22 @@ async def test_mqtt_session_error_falls_back_to_rest():
     coordinator.vehicles = [_mqtt_vehicle()]
     coordinator._capabilities = {}
     client.mqtt_condition_errors = [DeepalAuthError("expired")]
+
+    data = await coordinator._async_update_data()
+
+    assert data["car-1"].condition_source == "rest"
+    assert client.refresh_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_mqtt_broker_auth_rejection_falls_back_to_rest():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition_errors = [
+        DeepalMqttAuthRejected("broker rejected", reason_code=0x87)
+    ]
 
     data = await coordinator._async_update_data()
 

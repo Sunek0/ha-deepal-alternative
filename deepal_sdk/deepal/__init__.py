@@ -20,6 +20,7 @@ from deepal.exceptions import (
     DeepalRateLimitError,
     DeepalCommandAuthError,
     DeepalCommandNotReady,
+    DeepalMqttAuthRejected,
     DeepalSessionInvalidated,
 )
 from deepal.models import (
@@ -62,6 +63,7 @@ __all__ = [
     "DeepalRateLimitError",
     "DeepalCommandAuthError",
     "DeepalCommandNotReady",
+    "DeepalMqttAuthRejected",
     "DeepalSessionInvalidated",
     "AuthToken",
     "CommandResult",

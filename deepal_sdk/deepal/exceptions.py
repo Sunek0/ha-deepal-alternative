@@ -23,6 +23,19 @@ class DeepalAPIError(DeepalError):
         self.code = code
 
 
+class DeepalMqttAuthRejected(DeepalAPIError):
+    """Raised when the MQTT broker rejects CONNECT for authentication reasons.
+
+    ``reason_code`` is the MQTT 5.0 CONNACK reason code that caused the
+    rejection, so callers can decide whether a fresh bootstrap is worth a
+    single retry without parsing the message.
+    """
+
+    def __init__(self, message: str, reason_code: int):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 class DeepalConnectionError(DeepalError):
     """Raised when a network or connection error occurs."""
     pass

@@ -66,24 +66,30 @@ await client.wake_vehicle(vehicle.car_id)
 condition = await client.s05_mqtt_condition(vehicle.car_id, vin=vehicle.vin)
 ```
 
-`wake_vehicle()` publishes the app's wake service over MQTT and returns once the gateway
-acknowledges it; the car then reports fresh data within a few seconds. The wait is bounded by
-`mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
+`wake_vehicle()` publishes the app's wake service over MQTT at **QoS 1** and returns once the
+gateway acknowledges it; the car then reports fresh data within a few seconds. The wake ignores the
+cluster's telemetry `qos` so the broker can queue it for a sleeping vehicle; only a CONNACK
+`maximum_qos` of 0 downgrades it. The wait is bounded by `mqtt_wake_timeout` (default
+`max(timeout, 20)` seconds).
 
 ## 5. Options that matter
 
 | Constructor option | Default | When to touch it |
 | --- | --- | --- |
-| `mqtt_keepalive` | `60` | Broker drops long idle waits; the SDK sends `PINGREQ` while waiting |
+| `mqtt_keepalive` | `None` (effective 50) | Explicit override; when left unset the cluster `heartTimeInterval` governs the session and the SDK sends `PINGREQ` while waiting |
 | `mqtt_clean_start` | `True` | MQTT 5.0 clean-start flag, like the app |
-| `mqtt_config_fallback` | `True` | Allow the CA `appGetCarConfFunc` fallback when `getConnConf` fails; the CA auth token has no cross-gateway fallback |
 | `mqtt_exchange_timeout` | `max(timeout, 20)` | Slow vehicles that need a longer read window |
 | `mqtt_token_ttl` | `60.0` | Reuse window of the account MQTT token across several vehicles |
-| `mqtt_tls_insecure` | `False` | **Diagnostics only**: disables certificate verification and logs a warning |
+| `mqtt_tls_insecure` | `False` | **Diagnostics only**: disables certificate verification and logs a warning. The TLS context is cached per client and rebuilt only when this changes |
 | `mqtt_client_id`, `mqtt_username` | `None` | Override the broker identity resolved from the connection config |
 
-Rate limits are never retried by the configuration fallback. A CA auth-token failure propagates
-(with its gateway code when present) so the coordinator can refresh the session and retry.
+The broker settings come from the connection config's `clusterInfos[0]`: `qos` (0/1),
+`timeOutInterval` (TCP/TLS connect bound) and `heartTimeInterval` (keepalive). A CONNACK
+`server_keep_alive`/`maximum_qos` overrides or caps them. An authentication rejection (`0x86`,
+`0x87` or `0x8C`) drops the cached token and configuration and retries the exchange once; other
+CONNACK failures are not retried. `getConnConf` has no fallback endpoint: a failure propagates with
+its gateway code, and the coordinator refreshes the session and retries. A completed exchange
+publishes a `logout` before `DISCONNECT`; a logout failure never prevents the socket from closing.
 
 ## 6. Reading the result
 
