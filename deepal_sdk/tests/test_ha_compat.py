@@ -1935,7 +1935,7 @@ def test_icons_are_translated() -> None:
     assert icons["number"]["charge_limit"]["default"] == "mdi:battery-heart"
     assert (
         icons["sensor"]["climate_target_temperature"]["default"]
-        == "mdi:snowflake-variant"
+        == "mdi:sun-snowflake-variant"
     )
     assert icons["sensor"]["tire_pressure_front_left"]["default"] == "mdi:tire"
     assert {

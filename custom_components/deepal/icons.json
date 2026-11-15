@@ -218,7 +218,7 @@
         "default": "mdi:battery-charging"
       },
       "climate_target_temperature": {
-        "default": "mdi:snowflake-variant"
+        "default": "mdi:sun-snowflake-variant"
       },
       "dc_charge_current": {
         "default": "mdi:current-dc"
