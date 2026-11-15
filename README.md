@@ -27,7 +27,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. Neither powertrain exposes an outside-temperature sensor. The charging schedule is available only on the S05 PHEV. |
+| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. The charging schedule is available only on the S05 PHEV. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
 | E07 | Only tested on SDA API. Telemetry through the REST API. |
 
