@@ -182,6 +182,17 @@ class DeepalCardBase extends HTMLElement {
         });
         return;
       }
+      case "temp-set": {
+        const id = entity("climate", "cabin");
+        if (!id) return;
+        const value = Number(target.dataset.temp);
+        if (!Number.isFinite(value)) return;
+        this._callService("climate", "set_temperature", {
+          entity_id: id,
+          temperature: value,
+        });
+        return;
+      }
       case "number-step": {
         const id = entity("number", target.dataset.key);
         if (!id) return;
@@ -195,6 +206,20 @@ class DeepalCardBase extends HTMLElement {
           max,
           Math.max(min, Number(state.state) + delta),
         );
+        this._callService("number", "set_value", { entity_id: id, value });
+        return;
+      }
+      case "seat-cycle": {
+        const id = entity("number", target.dataset.key);
+        if (!id) return;
+        const state = stateFor(hass, id);
+        const current = state ? Number(state.state) : 0;
+        const max = Number(state?.attributes?.max ?? 3) || 3;
+        const value = Number.isFinite(current)
+          ? current >= max
+            ? 0
+            : current + 1
+          : 1;
         this._callService("number", "set_value", { entity_id: id, value });
         return;
       }

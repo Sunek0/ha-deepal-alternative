@@ -62,20 +62,9 @@ DeepalCardBase.prototype._transitionStates = function (vehicle) {
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const climateId = entity("climate", "cabin");
   const climateState = climateId ? stateFor(hass, climateId) : null;
-  const seatOn = [
-    "seat_ventilation_front_left",
-    "seat_ventilation_front_right",
-    "seat_ventilation_rear_left",
-    "seat_ventilation_rear_right",
-  ].some((key) => {
-    const id = entity("number", key);
-    const state = id ? stateFor(hass, id) : null;
-    return state ? Number(state.state) > 0 : false;
-  });
   return {
     climate_on: Boolean(climateState && climateState.state !== "off"),
     charging_on: isOn(hass, entity("binary_sensor", "charging")),
-    seat_vent: seatOn,
   };
 };
 
@@ -113,9 +102,13 @@ DeepalCardBase.prototype._syncAnimations = function () {
 
   for (const [key, source] of Object.entries(animations)) {
     const video = this._animationVideo(vehicle, key, source);
-    const slot = this.shadowRoot.querySelector(
-      `.anim-slot[data-anim="${key}"]`,
-    );
+    const slots = [
+      ...this.shadowRoot.querySelectorAll(`.anim-slot[data-anim="${key}"]`),
+    ];
+    const slot =
+      slots.find(
+        (candidate) => this._modal && candidate.closest(".modal-body"),
+      ) || slots[0];
     if (slot && this._animationsEnabled()) {
       if (video.parentElement !== slot) slot.appendChild(video);
     } else if (video.parentElement !== host) {

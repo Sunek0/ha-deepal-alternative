@@ -1,4 +1,8 @@
 .venv/
+.token.json
+.device_id
+tools/phev-charge-probe/.token.json
+tools/phev-charge-probe/.device_id
 __pycache__/
 *.py[cod]
 *.egg-info/

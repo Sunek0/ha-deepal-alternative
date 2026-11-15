@@ -5,12 +5,12 @@
 
 const CARD_SECTIONS = [
   "actions",
-  "status",
   "climate",
   "charging",
   "driving",
   "energy",
   "info",
+  "seats",
   "diagnostics",
   "tires",
 ];
@@ -19,13 +19,14 @@ const CARD_BUTTONS = [
   "windows",
   "trunk",
   "climate",
+  "seats",
   "tires",
   "flash",
   "honk",
   "find",
 ];
 const CARD_HERO_ITEMS = ["name", "model", "plate", "range", "lock", "cloud", "updated"];
-const CARD_CONFIRM_ITEMS = ["unlock", "lock", "trunk", "windows", "climate", "flash", "honk", "find"];
+const CARD_CONFIRM_ITEMS = ["unlock", "lock", "trunk", "windows", "climate", "refresh", "flash", "honk", "find"];
 const CARD_INFO_ITEMS = {
   odometer: ["sensor", "odometer", "odometer", "odometer"],
   battery: ["sensor", "battery", "battery", "battery"],
@@ -47,8 +48,8 @@ const CARD_INFO_IDS = Object.keys(CARD_INFO_ITEMS);
 const CARD_DEFAULTS = {
   hero_style: "auto",
   hero_show: ["name", "model", "plate", "range", "lock", "cloud", "updated"],
-  order: ["actions", "status", "charging", "info", "climate", "tires", "driving", "energy", "diagnostics"],
-  hidden: ["status", "climate", "tires", "driving", "energy"],
+  order: ["actions", "charging", "info", "seats", "climate", "tires", "driving", "energy", "diagnostics"],
+  hidden: ["climate", "tires", "driving", "energy"],
   buttons: CARD_BUTTONS.slice(),
   buttons_hidden: [],
   button_layout: "grid",
@@ -57,11 +58,13 @@ const CARD_DEFAULTS = {
   button_labels: "both",
   confirm: ["unlock", "trunk", "windows"],
   info: ["odometer", "battery", "outside_temperature", "inside_temperature", "cabin_humidity", "fuel_level", "charge_status"],
+  info_order: CARD_INFO_IDS.slice(),
   info_custom: [],
   diag: null,
   diag_mode: "alerts",
   diag_custom: [],
   diag_ignore: [],
+  refresh_button: true,
   show_settings: true,
   language: "auto",
   toasts: true,
@@ -84,7 +87,8 @@ function cardFixOrder(values, all) {
 }
 
 function mergeCardConfig(yaml, local) {
-  const c = { ...cardClone(CARD_DEFAULTS), ...(yaml || {}), ...(local || {}) };
+  const raw = { ...(yaml || {}), ...(local || {}) };
+  const c = { ...cardClone(CARD_DEFAULTS), ...raw };
   if (c.hero_style === "carview") c.hero_style = "iso";
   c.hero_show = cardUniq((Array.isArray(c.hero_show) ? c.hero_show : []).filter((value) => CARD_HERO_ITEMS.includes(value)));
   c.order = cardFixOrder(c.order, CARD_SECTIONS);
@@ -93,9 +97,15 @@ function mergeCardConfig(yaml, local) {
   c.buttons_hidden = cardUniq((Array.isArray(c.buttons_hidden) ? c.buttons_hidden : []).filter((value) => CARD_BUTTONS.includes(value)));
   c.confirm = cardUniq((Array.isArray(c.confirm) ? c.confirm : []).filter((value) => CARD_CONFIRM_ITEMS.includes(value)));
   c.info = cardUniq((Array.isArray(c.info) ? c.info : []).filter((value) => CARD_INFO_IDS.includes(value)));
+  const infoOrderGiven = Object.prototype.hasOwnProperty.call(raw, "info_order");
+  c.info_order = cardFixOrder(
+    infoOrderGiven ? c.info_order : [...c.info, ...CARD_INFO_IDS],
+    CARD_INFO_IDS,
+  );
   c.info_custom = Array.isArray(c.info_custom) ? c.info_custom.filter((item) => item && item.entity) : [];
   c.diag_custom = Array.isArray(c.diag_custom) ? c.diag_custom.filter((item) => item && item.entity) : [];
   c.diag_ignore = Array.isArray(c.diag_ignore) ? c.diag_ignore : [];
+  c.refresh_button = c.refresh_button !== false;
   c.button_primary = Math.max(1, Math.min(6, Number(c.button_primary) || 4));
   c.image_scale = Number(c.image_scale) > 0 ? Number(c.image_scale) : 1;
   c.tire_unit = ["bar", "kPa", "psi"].includes(c.tire_unit) ? c.tire_unit : "bar";
@@ -118,6 +128,7 @@ const CARD_CONFIRM_TEXT = {
   trunk: ["confirm_trunk_title", "confirm_trunk_text"],
   windows: ["confirm_windows_title", "confirm_windows_text"],
   climate: ["confirm_climate_title", "confirm_climate_text"],
+  refresh: ["confirm_refresh_title", "confirm_refresh_text"],
   flash: ["confirm_flash_title", "confirm_flash_text"],
   honk: ["confirm_honk_title", "confirm_honk_text"],
   find: ["confirm_find_title", "confirm_find_text"],
@@ -134,10 +145,25 @@ class DeepalCard extends DeepalCardBase {
     this._settingsDirty = false;
     this._uiRestored = false;
     this._modal = null;
+    this._modalTab = null;
+    this._modalScroll = 0;
+    this._modalScrollReset = false;
+    this._refreshPending = false;
     this._confirm = null;
     this._moreOpen = false;
     this._toast = null;
     this._saveTimer = null;
+    this._onKeyDown = (event) => {
+      if (event.key === "Escape" && this._modal) this._closeModal();
+    };
+    this.shadowRoot.addEventListener("click", (event) => {
+      if (
+        event.target.classList &&
+        event.target.classList.contains("modal-sheet")
+      ) {
+        this._closeModal();
+      }
+    });
     this.shadowRoot.addEventListener("settings-change", (event) => this._patch(event.detail || {}));
     this.shadowRoot.addEventListener("settings-close", () => {
       this._settingsOpen = false;
@@ -146,6 +172,10 @@ class DeepalCard extends DeepalCardBase {
       this._render();
       this._commitSettings();
     });
+  }
+
+  connectedCallback() {
+    document.addEventListener("keydown", this._onKeyDown);
   }
 
   static getStubConfig(hass) {
@@ -185,6 +215,7 @@ class DeepalCard extends DeepalCardBase {
   }
 
   disconnectedCallback() {
+    document.removeEventListener("keydown", this._onKeyDown);
     super.disconnectedCallback();
     if (this._settingsDirty) this._commitSettings();
   }
@@ -342,6 +373,44 @@ class DeepalCard extends DeepalCardBase {
     this._config = mergeCardConfig(this._yaml, {});
   }
 
+  _requestRefresh() {
+    if (this._refreshPending) return;
+    const vehicle = this._vehicle;
+    if (!vehicle) return;
+    const id = entityFor(vehicle, "button", "refresh");
+    if (!id) return;
+    const def = {
+      id: "refresh",
+      confirm: "refresh",
+      execute: () => this._runRefresh(id),
+    };
+    if (this._needsConfirm(def)) {
+      this._confirm = def;
+      this._render();
+      return;
+    }
+    this._confirm = null;
+    this._runRefresh(id);
+  }
+
+  async _runRefresh(entityId) {
+    this._refreshPending = true;
+    this._render();
+    const ok = await this._callService("button", "press", {
+      entity_id: entityId,
+    });
+    this._refreshPending = false;
+    this._toast = ok
+      ? { type: "ok", text: this._t("refresh_done") }
+      : { type: "warn", text: this._error || this._t("command_failed") };
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      this._toast = null;
+      this._render();
+    }, 5000);
+    this._render();
+  }
+
   _heroStyle(vehicle) {
     const style = this._config.hero_style || "auto";
     if (style !== "auto") return style;
@@ -462,12 +531,24 @@ class DeepalCard extends DeepalCardBase {
         `<span><ha-icon icon="${PANEL_ICONS.fuel}"></ha-icon>${escapeHtml(fuelRange)}</span>`,
       );
     }
+    const refreshId = entityFor(vehicle, "button", "refresh");
+    const refresh =
+      this._config.refresh_button !== false && refreshId
+        ? `<button class="icon-button ${this._refreshPending ? "pending" : ""}"
+            data-action="refresh"
+            title="${escapeHtml(this._t("refresh_hint"))}"
+            aria-label="${escapeHtml(this._t("refresh_hint"))}"
+            ${this._refreshPending ? "disabled" : ""}>
+            <ha-icon icon="${PANEL_ICONS.refresh}"></ha-icon>
+          </button>`
+        : "";
     const meta = [
       show.has("cloud") && connected
         ? `<span class="hero-cloud ${connected.state === "on" ? "ok" : "bad"}" title="${escapeHtml(connected.state === "on" ? this._t("online") : this._t("offline"))}">
             <ha-icon icon="${connected.state === "on" ? PANEL_ICONS.cloud : PANEL_ICONS.cloud_off}"></ha-icon>
           </span>`
         : "",
+      refresh,
     ].join("");
     const chips = this._heroChips(vehicle, show);
     return `
@@ -491,6 +572,23 @@ class DeepalCard extends DeepalCardBase {
     return "";
   }
 
+  _seatsActive(vehicle) {
+    const hass = this._hass;
+    const active = [
+      "seat_heating_front_left",
+      "seat_heating_front_right",
+      "seat_ventilation_front_left",
+      "seat_ventilation_front_right",
+    ].some((key) => {
+      const state = stateFor(hass, entityFor(vehicle, "number", key));
+      return state ? Number(state.state) > 0 : false;
+    });
+    return (
+      active ||
+      isOn(hass, entityFor(vehicle, "switch", "steering_wheel_heating"))
+    );
+  }
+
   _actionDefs(vehicle) {
     const hass = this._hass;
     const entity = (domain, key) => entityFor(vehicle, domain, key);
@@ -499,7 +597,7 @@ class DeepalCard extends DeepalCardBase {
     if (locked !== null) {
       defs.push({
         id: "lock",
-        icon: locked ? PANEL_ICONS.unlock : PANEL_ICONS.lock,
+        icon: PANEL_ICONS.door_lock,
         label: locked ? this._t("unlock_doors") : this._t("lock_doors"),
         value: locked ? this._t("locked") : this._t("unlocked"),
         tone: locked ? "" : "warn",
@@ -521,7 +619,7 @@ class DeepalCard extends DeepalCardBase {
         execute: () => this._executeAction("cover-toggle", { key: id }),
       });
     };
-    coverDef("windows", PANEL_ICONS.window, this._t("open_windows"), this._t("close_windows"), "windows");
+    coverDef("windows", PANEL_ICONS.doors, this._t("open_windows"), this._t("close_windows"), "windows");
     coverDef("trunk", PANEL_ICONS.trunk, this._t("open_trunk"), this._t("close_trunk"), "trunk");
 
     const climateId = entity("climate", "cabin");
@@ -534,7 +632,30 @@ class DeepalCard extends DeepalCardBase {
         label: this._t("climate"),
         value: on ? this._t("on") : this._t("off"),
         tone: on ? "on" : "",
-        modal: "climate",
+        modal: "vehicle",
+        modalTab: "climate",
+      });
+    }
+
+    const seatKeys = [
+      "seat_heating_front_left",
+      "seat_heating_front_right",
+      "seat_ventilation_front_left",
+      "seat_ventilation_front_right",
+    ];
+    const hasSeatControl =
+      seatKeys.some((key) => entity("number", key)) ||
+      Boolean(entity("switch", "steering_wheel_heating"));
+    if (hasSeatControl) {
+      const active = this._seatsActive(vehicle);
+      defs.push({
+        id: "seats",
+        icon: PANEL_ICONS.seat,
+        label: this._t("seats"),
+        value: active ? this._t("on") : this._t("off"),
+        tone: active ? "on" : "",
+        modal: "vehicle",
+        modalTab: "seats",
       });
     }
 
@@ -553,7 +674,8 @@ class DeepalCard extends DeepalCardBase {
         label: this._t("tires"),
         value: tireValues[0].text,
         tone: tireValues.some((item) => item.warn) ? "warn" : "",
-        modal: "tires",
+        modal: "vehicle",
+        modalTab: "tyres",
       });
     }
 
@@ -588,8 +710,7 @@ class DeepalCard extends DeepalCardBase {
     const def = this._actionDefs(this._vehicle).find((item) => item.id === id);
     if (!def) return;
     if (def.modal) {
-      this._modal = def.modal;
-      this._render();
+      this._openVehicleDialog(def.modalTab || "climate");
       return;
     }
     if (def.static || !def.execute) return;
@@ -600,6 +721,50 @@ class DeepalCard extends DeepalCardBase {
     }
     this._confirm = null;
     def.execute();
+  }
+
+  _openVehicleDialog(tab) {
+    const vehicle = this._vehicle;
+    if (!vehicle) return;
+    const available = vehicleTabs(this, vehicle);
+    if (!available.length) return;
+    this._modal = "vehicle";
+    this._modalTab = available.includes(tab) ? tab : available[0];
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._confirm = null;
+    this._render();
+    this._playModalAnimation();
+  }
+
+  _setModalTab(tab) {
+    const vehicle = this._vehicle;
+    if (!vehicle || !this._modal) return;
+    if (!vehicleTabs(this, vehicle).includes(tab)) return;
+    if (this._modalTab === tab) return;
+    this._modalTab = tab;
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._render();
+    this._playModalAnimation();
+  }
+
+  _closeModal() {
+    if (!this._modal) return;
+    this._modal = null;
+    this._modalTab = null;
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._render();
+  }
+
+  _playModalAnimation() {
+    const vehicle = this._vehicle;
+    if (!vehicle || this._modal !== "vehicle") return;
+    const states = this._transitionStates(vehicle);
+    if (this._modalTab === "climate" && states.climate_on) {
+      this._playAnimation(vehicle, "climate_on");
+    }
   }
 
   _actionHtml(def) {
@@ -613,8 +778,13 @@ class DeepalCard extends DeepalCardBase {
     const attrs = def.static
       ? `class="action static ${def.tone || ""} size-${size}"`
       : `class="action ${def.tone || ""} size-${size}" data-action="card-action" data-id="${escapeHtml(def.id)}" title="${escapeHtml(def.label)}" aria-label="${escapeHtml(def.label)}"`;
+    const customIcon = PANEL_ICON_SVGS[def.icon];
     return `<${tag} ${attrs}>
-      <ha-icon icon="${def.icon}"></ha-icon>
+      ${
+        customIcon
+          ? `<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">${customIcon}</svg>`
+          : `<ha-icon icon="${def.icon}"></ha-icon>`
+      }
       ${showTitle ? `<span class="action-label">${escapeHtml(def.label)}</span>` : ""}
       ${showValue && def.value ? `<span class="action-value">${escapeHtml(def.value)}</span>` : ""}
     </${tag}>`;
@@ -657,42 +827,6 @@ class DeepalCard extends DeepalCardBase {
     return `<div class="metric ${cls}">
       <span class="label">${escapeHtml(label)}</span>
       <span class="value">${escapeHtml(value ?? "—")}</span>
-    </div>`;
-  }
-
-  _sectionStatus(vehicle) {
-    const hass = this._hass;
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const metrics = [];
-    const add = (labelKey, entityId, formatter = null) => {
-      if (!entityId) return;
-      const value = formatter ? formatter() : formatState(hass, entityId);
-      if (value === null) return;
-      metrics.push(this._metric(this._t(labelKey), value));
-    };
-    add("odometer", entity("sensor", "odometer"), () =>
-      formatIntegerState(hass, entity("sensor", "odometer")),
-    );
-    if (entity("sensor", "charge_status")) {
-      add("charge_status", entity("sensor", "charge_status"), () =>
-        chargeStatusText(hass, vehicle, (key) => this._t(key)),
-      );
-    } else {
-      add("vehicle_status", entity("sensor", "vehicle_status"));
-    }
-    add("battery", entity("sensor", "battery"), () =>
-      formatIntegerState(hass, entity("sensor", "battery")),
-    );
-    add("range", entity("sensor", "range"), () =>
-      formatIntegerState(hass, entity("sensor", "range")),
-    );
-    if (!metrics.length) return "";
-    return `<div class="section">
-      <div class="section-head">
-        <ha-icon icon="${PANEL_ICONS.car}"></ha-icon>
-        <span class="section-title">${escapeHtml(this._t("status"))}</span>
-      </div>
-      <div class="metrics">${metrics.join("")}</div>
     </div>`;
   }
 
@@ -749,32 +883,15 @@ class DeepalCard extends DeepalCardBase {
   }
 
   _sectionTires(vehicle) {
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const tire = (key, alarmKey, labelKey) => {
-      if (!entity("sensor", key)) return "";
-      const display = this._tireDisplay(vehicle, key, alarmKey);
-      if (!display) return "";
-      return `<div class="tile static ${display.warn ? "warn" : ""}">
-        <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
-        <span class="tile-body">
-          <span class="tile-label">${escapeHtml(this._t(labelKey))}</span>
-          <span class="tile-value">${escapeHtml(display.text)}</span>
-        </span>
-      </div>`;
-    };
-    const tires = [
-      tire("tire_front_left", "tire_alarm_front_left", "front_left"),
-      tire("tire_front_right", "tire_alarm_front_right", "front_right"),
-      tire("tire_rear_left", "tire_alarm_rear_left", "rear_left"),
-      tire("tire_rear_right", "tire_alarm_rear_right", "rear_right"),
-    ].filter(Boolean);
-    if (!tires.length) return "";
+    if (!VEHICLE_TIRE_KEYS.some((key) => entityFor(vehicle, "sensor", key))) {
+      return "";
+    }
     return `<div class="section">
       <div class="section-head">
         <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
         <span class="section-title">${escapeHtml(this._t("tires"))}</span>
       </div>
-      <div class="tiles">${tires.join("")}</div>
+      ${tyresTabHtml(this, vehicle)}
     </div>`;
   }
 
@@ -791,7 +908,8 @@ class DeepalCard extends DeepalCardBase {
       "trip_mileage",
       "mileage_yesterday",
     ]);
-    for (const id of this._config.info || []) {
+    for (const id of this._config.info_order || CARD_INFO_IDS) {
+      if (!(this._config.info || []).includes(id)) continue;
       const spec = CARD_INFO_ITEMS[id];
       if (!spec) continue;
       const [domain, key, labelKey, iconKey] = spec;
@@ -818,7 +936,7 @@ class DeepalCard extends DeepalCardBase {
     return `<div class="section">
       <div class="section-head">
         <ha-icon icon="${PANEL_ICONS.car}"></ha-icon>
-        <span class="section-title">${escapeHtml(this._t("info"))}</span>
+        <span class="section-title">${escapeHtml(this._t("status"))}</span>
       </div>
       <div class="info-grid">${tiles.join("")}</div>
     </div>`;
@@ -875,8 +993,6 @@ class DeepalCard extends DeepalCardBase {
     switch (key) {
       case "actions":
         return this._sectionActions(vehicle);
-      case "status":
-        return this._sectionStatus(vehicle);
       case "climate":
         return this._renderClimate(vehicle);
       case "charging":
@@ -887,6 +1003,8 @@ class DeepalCard extends DeepalCardBase {
         return this._sectionEnergy(vehicle);
       case "info":
         return this._sectionInfo(vehicle);
+      case "seats":
+        return this._sectionSeats(vehicle);
       case "diagnostics":
         return this._sectionDiagnostics(vehicle);
       case "tires":
@@ -905,6 +1023,19 @@ class DeepalCard extends DeepalCardBase {
       .join("");
   }
 
+  _sectionSeats(vehicle) {
+    if (!seatControlsAvailable(this, vehicle)) return "";
+    const body = seatControlsHtml(this, vehicle);
+    if (!body) return "";
+    return `<div class="section">
+      <div class="section-head">
+        <ha-icon icon="${PANEL_ICONS.seat}"></ha-icon>
+        <span class="section-title">${escapeHtml(this._t("seats"))}</span>
+      </div>
+      ${body}
+    </div>`;
+  }
+
   _seatControlHtml(vehicle, key, label) {
     const id = entityFor(vehicle, "number", key);
     if (!id) return "";
@@ -919,114 +1050,8 @@ class DeepalCard extends DeepalCardBase {
     </div>`;
   }
 
-  _climateModalHtml(vehicle) {
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const climateId = entity("climate", "cabin");
-    const climateState = stateFor(this._hass, climateId);
-    const on = Boolean(climateState && climateState.state !== "off");
-    const target = climateState?.attributes?.temperature;
-    const inside = formatState(this._hass, entity("sensor", "inside_temperature"));
-    const humidity = formatState(this._hass, entity("sensor", "cabin_humidity"));
-    const seats = [
-      ["seat_heating_front_left", `${this._t("seat_heating")} · ${this._t("front_left")}`],
-      ["seat_heating_front_right", `${this._t("seat_heating")} · ${this._t("front_right")}`],
-      ["seat_ventilation_front_left", `${this._t("seat_ventilation")} · ${this._t("front_left")}`],
-      ["seat_ventilation_front_right", `${this._t("seat_ventilation")} · ${this._t("front_right")}`],
-      ["seat_heating_rear_left", `${this._t("seat_heating")} · ${this._t("rear_left")}`],
-      ["seat_heating_rear_right", `${this._t("seat_heating")} · ${this._t("rear_right")}`],
-      ["seat_ventilation_rear_left", `${this._t("seat_ventilation")} · ${this._t("rear_left")}`],
-      ["seat_ventilation_rear_right", `${this._t("seat_ventilation")} · ${this._t("rear_right")}`],
-    ]
-      .map(([key, label]) => this._seatControlHtml(vehicle, key, label))
-      .filter(Boolean);
-    const steeringId = entity("switch", "steering_wheel_heating");
-    const steeringOn = isOn(this._hass, steeringId);
-    const steering = steeringId
-      ? `<button class="tile ${steeringOn ? "on" : ""}" data-action="toggle-switch" data-key="steering_wheel_heating">
-          <ha-icon icon="${PANEL_ICONS.steering}"></ha-icon>
-          <span class="tile-body">
-            <span class="tile-label">${escapeHtml(this._t("steering_wheel"))}</span>
-            <span class="tile-value">${escapeHtml(this._t(steeringOn ? "on" : "off"))}</span>
-          </span>
-        </button>`
-      : "";
-    const metrics = [
-      inside ? this._metric(this._t("inside_temperature"), inside) : "",
-      humidity ? this._metric(this._t("cabin_humidity"), humidity) : "",
-    ].filter(Boolean);
-    return `<div class="modal-columns">
-      <div class="modal-col">
-        <div class="modal-section">
-          <h4>${escapeHtml(this._t("climate"))}</h4>
-          ${metrics.length ? `<div class="metrics">${metrics.join("")}</div>` : ""}
-          <div class="center">
-            <div class="stepper large">
-              <button data-action="temp-step" data-delta="-0.5" aria-label="-">&minus;</button>
-              <span class="value">${escapeHtml(target != null ? `${target} °C` : "—")}</span>
-              <button data-action="temp-step" data-delta="0.5" aria-label="+">+</button>
-            </div>
-          </div>
-          <div class="segmented">
-            <button class="segment" aria-pressed="${on}" data-action="climate-mode" data-mode="heat_cool">
-              <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon><span>${escapeHtml(this._t("climate_on"))}</span>
-            </button>
-            <button class="segment" aria-pressed="${!on}" data-action="climate-mode" data-mode="off">
-              <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon><span>${escapeHtml(this._t("climate_off"))}</span>
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-col">
-        <div class="modal-section">
-          <h4>${escapeHtml(this._t("seats"))}</h4>
-          ${seats.length ? `<div class="steppers">${seats.join("")}</div>` : ""}
-          ${steering ? `<div class="tiles">${steering}</div>` : ""}
-        </div>
-      </div>
-    </div>`;
-  }
-
-  _tiresModalHtml(vehicle) {
-    const tires = [
-      ["tire_front_left", "tire_alarm_front_left", "front_left"],
-      ["tire_front_right", "tire_alarm_front_right", "front_right"],
-      ["tire_rear_left", "tire_alarm_rear_left", "rear_left"],
-      ["tire_rear_right", "tire_alarm_rear_right", "rear_right"],
-    ]
-      .map(([key, alarmKey, labelKey]) => {
-        const display = this._tireDisplay(vehicle, key, alarmKey);
-        if (!display) return "";
-        return `<div class="tire-card ${display.warn ? "warn" : ""}">
-          <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
-          <div>
-            <div class="tire-label">${escapeHtml(this._t(labelKey))}</div>
-            <div class="tire-value">${escapeHtml(display.text)}</div>
-          </div>
-        </div>`;
-      })
-      .filter(Boolean);
-    return tires.length
-      ? `<div class="tire-grid">${tires.join("")}</div>`
-      : `<div class="empty">${escapeHtml(this._t("unavailable"))}</div>`;
-  }
-
   _renderModal() {
-    if (!this._modal || !this._vehicle) return "";
-    const title = this._t(this._modal === "tires" ? "tires" : "climate");
-    const body = this._modal === "tires"
-      ? this._tiresModalHtml(this._vehicle)
-      : this._climateModalHtml(this._vehicle);
-    return `<div class="modal-sheet">
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
-        <div class="modal-head">
-          <h3>${escapeHtml(title)}</h3>
-          <button class="settings-close" data-action="close-modal" aria-label="${escapeHtml(this._t("close"))}">
-            <ha-icon icon="${PANEL_ICONS.close}"></ha-icon>
-          </button>
-        </div>
-        <div class="modal-body">${body}</div>
-      </div>
-    </div>`;
+    return vehicleModalHtml(this);
   }
 
   _renderConfirm() {
@@ -1075,7 +1100,21 @@ class DeepalCard extends DeepalCardBase {
       const body = previous.shadowRoot.querySelector(".settings-body");
       if (body) this._settingsScroll = body.scrollTop;
     }
+    const previousModalBody = this.shadowRoot.querySelector(".modal-body");
+    if (previousModalBody && !this._modalScrollReset) {
+      this._modalScroll = previousModalBody.scrollTop;
+    }
     super._render();
+    if (this._modalScrollReset) {
+      this._modalScroll = 0;
+      this._modalScrollReset = false;
+    }
+    const modalBody = this.shadowRoot.querySelector(".modal-body");
+    if (modalBody && this._modalScroll) {
+      requestAnimationFrame(() => {
+        modalBody.scrollTop = this._modalScroll;
+      });
+    }
     const settings = this.shadowRoot.querySelector("deepal-card-settings");
     if (settings) {
       settings.hass = this._hass;
@@ -1095,8 +1134,10 @@ class DeepalCard extends DeepalCardBase {
     return [
       super._renderKey(),
       this._modal || "",
+      this._modalTab || "",
       this._confirm ? this._confirm.id : "",
       this._moreOpen ? "more" : "",
+      this._refreshPending ? "refresh" : "",
       this._toast ? `${this._toast.type}:${this._toast.text}` : "",
     ].join("|");
   }
@@ -1108,13 +1149,23 @@ class DeepalCard extends DeepalCardBase {
       this._settingsTab = "hero";
       this._settingsScroll = 0;
       this._modal = null;
+      this._modalTab = null;
+      this._modalScroll = 0;
+      this._modalScrollReset = true;
       this._saveUiState();
       this._render();
       return true;
     }
     if (action === "close-modal") {
-      this._modal = null;
-      this._render();
+      this._closeModal();
+      return true;
+    }
+    if (action === "modal-tab") {
+      this._setModalTab(target.dataset.tab);
+      return true;
+    }
+    if (action === "refresh") {
+      this._requestRefresh();
       return true;
     }
     if (action === "card-action") {
@@ -1217,27 +1268,50 @@ class DeepalCardSettings extends HTMLElement {
     ).join("")}</select>`;
   }
 
-  _check(key, value, label) {
-    return `<label class="setting-row"><span>${escapeHtml(this._t(label))}</span><input type="checkbox" data-setting="${key}" ${value ? "checked" : ""}></label>`;
+  _check(key, value, label, hint = "") {
+    return `<label class="setting-row"><span>${escapeHtml(this._t(label))}${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</span><input type="checkbox" data-setting="${key}" ${value ? "checked" : ""}></label>`;
   }
 
   _arrayCheck(key, item, values, label) {
     return `<label class="setting-row"><span>${escapeHtml(this._t(label))}</span><input type="checkbox" data-array="${key}" data-value="${item}" ${(values || []).includes(item) ? "checked" : ""}></label>`;
   }
 
-  _orderList(key, values, all, labelOf, hiddenKey) {
+  _orderList(key, values, all, labelOf, hiddenKey, visibleKey = null) {
     const hidden = new Set((hiddenKey && this._config[hiddenKey]) || []);
-    return `<div class="settings-group">${(values || all).map((id, index) => {
-      const isHidden = hidden.has(id);
-      return `<div class="setting-row ${isHidden ? "off" : ""}">
+    const visible = new Set((visibleKey && this._config[visibleKey]) || []);
+    const list = values || all;
+    this._orderValues = this._orderValues || {};
+    this._orderValues[key] = list;
+    return `<div class="settings-group">${list.map((id, index) => {
+      const isVisible = visibleKey ? visible.has(id) : !hidden.has(id);
+      return `<div class="setting-row ${isVisible ? "" : "off"}">
         <span>${escapeHtml(this._t(labelOf(id)))}</span>
         <span class="move">
           <button data-order="${key}" data-id="${id}" data-dir="-1" ${index === 0 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_up"))}"><ha-icon icon="${PANEL_ICONS.up}"></ha-icon></button>
-          <button data-order="${key}" data-id="${id}" data-dir="1" ${index === (values || all).length - 1 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_down"))}"><ha-icon icon="${PANEL_ICONS.down}"></ha-icon></button>
-          ${hiddenKey ? `<input type="checkbox" data-hide="${hiddenKey}" data-value="${id}" ${isHidden ? "" : "checked"} aria-label="${escapeHtml(this._t("show"))}">` : ""}
+          <button data-order="${key}" data-id="${id}" data-dir="1" ${index === list.length - 1 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_down"))}"><ha-icon icon="${PANEL_ICONS.down}"></ha-icon></button>
+          ${
+            visibleKey
+              ? `<input type="checkbox" data-array="${visibleKey}" data-value="${id}" ${isVisible ? "checked" : ""} aria-label="${escapeHtml(this._t("show"))}">`
+              : hiddenKey
+                ? `<input type="checkbox" data-hide="${hiddenKey}" data-value="${id}" ${isVisible ? "checked" : ""} aria-label="${escapeHtml(this._t("show"))}">`
+                : ""
+          }
         </span>
       </div>`;
     }).join("")}</div>`;
+  }
+
+  _infoIds() {
+    const vehicles = discoverVehicles(this._hass || {});
+    const deviceId = this._config && this._config.device_id;
+    const vehicle =
+      vehicles.find((candidate) => candidate.deviceId === deviceId) ||
+      vehicles[0];
+    if (!vehicle) return CARD_INFO_IDS;
+    return CARD_INFO_IDS.filter((id) => {
+      const [domain, key] = CARD_INFO_ITEMS[id];
+      return Boolean(entityFor(vehicle, domain, key));
+    });
   }
 
   _tabHero() {
@@ -1250,6 +1324,7 @@ class DeepalCardSettings extends HTMLElement {
       <label class="setting-row"><span>${escapeHtml(this._t("image_scale"))}</span><input type="number" step="0.05" min="0.5" max="2" data-setting="image_scale" value="${escapeHtml(c.image_scale)}"></label>
       <label class="setting-row"><span>${escapeHtml(this._t("image_aspect"))}</span><input type="text" data-setting="image_aspect" value="${escapeHtml(c.image_aspect || "")}" placeholder="3 / 2"></label>
       <label class="setting-row"><span>${escapeHtml(this._t("card_padding"))}</span>${this._select("card_padding", c.card_padding, [["normal", "normal"], ["half", "half"], ["none", "none"]])}</label>
+      ${this._check("refresh_button", c.refresh_button !== false, "refresh", this._t("refresh_hint"))}
     </div>
     <div class="settings-group">
       <h4>${escapeHtml(this._t("show_on_hero"))}</h4>
@@ -1259,7 +1334,7 @@ class DeepalCardSettings extends HTMLElement {
 
   _tabSections() {
     return `<p class="settings-hint">${escapeHtml(this._t("sections_hint"))}</p>
-      ${this._orderList("order", this._config.order, CARD_SECTIONS, (id) => `section_${id}`, "hidden")}`;
+      ${this._orderList("order", this._config.order, CARD_SECTIONS, (id) => (id === "info" ? "status" : id === "seats" ? "seats" : `section_${id}`), "hidden")}`;
   }
 
   _tabActions() {
@@ -1281,9 +1356,13 @@ class DeepalCardSettings extends HTMLElement {
 
   _tabSensors() {
     const c = this._config;
+    const available = this._infoIds();
+    const order = (c.info_order || CARD_INFO_IDS).filter((id) =>
+      available.includes(id),
+    );
     return `<div class="settings-group">
-      <h4>${escapeHtml(this._t("info"))}</h4>
-      ${CARD_INFO_IDS.map((item) => this._arrayCheck("info", item, c.info, CARD_INFO_ITEMS[item][2])).join("")}
+      <h4>${escapeHtml(this._t("status"))}</h4>
+      ${this._orderList("info_order", order, available, (item) => CARD_INFO_ITEMS[item][2], null, "info")}
     </div>
     <div class="settings-group">
       <h4>${escapeHtml(this._t("diagnostics"))}</h4>
@@ -1351,7 +1430,9 @@ class DeepalCardSettings extends HTMLElement {
     const order = event.target.closest("[data-order]");
     if (order) {
       const key = order.dataset.order;
-      const list = [...(this._config[key] || [])];
+      const list = [
+        ...(this._orderValues?.[key] || this._config[key] || []),
+      ];
       const index = list.indexOf(order.dataset.id);
       const next = index + Number(order.dataset.dir);
       if (index < 0 || next < 0 || next >= list.length) return;

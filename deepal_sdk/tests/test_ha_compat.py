@@ -66,6 +66,7 @@ from custom_components.deepal.vehicle_model import (
     is_s05,
     is_s05_phev,
     supports_charge_limit,
+    supports_charge_schedule,
     supports_fuel,
 )
 from deepal.models import Vehicle, VehicleCondition
@@ -1434,6 +1435,28 @@ def test_is_s05_matches_name_and_code() -> None:
     assert is_s05(_model_vehicle("car-5")) is False
 
 
+def test_is_s05_matches_the_sdk_model_codes() -> None:
+    assert is_s05(_model_vehicle("car-1", model_code="SC6460AAAA7HEV")) is True
+    assert is_s05(_model_vehicle("car-2", model_code="SC6464AAKBEV")) is True
+    assert is_s05(_model_vehicle("car-3", model_code="SC6501ABABEV")) is False
+
+
+def test_charge_schedule_is_s05_phev_only() -> None:
+    bev = _model_vehicle(
+        "car-1", series_name="S05", model_code="SC6464AAKBEV"
+    )
+    phev = _model_vehicle(
+        "car-2", series_name="S05", model_code="SC6460AAAA7HEV"
+    )
+    s07 = _model_vehicle("car-3", series_name="S07", series_code="C673-EU")
+    unknown = _model_vehicle("car-4")
+
+    assert supports_charge_schedule(bev) is False
+    assert supports_charge_schedule(phev) is True
+    assert supports_charge_schedule(s07) is True
+    assert supports_charge_schedule(unknown) is True
+
+
 def test_build_sensors_skips_s05_unsupported_entities() -> None:
     coordinator = FakeCoordinator()
     coordinator.client = object.__new__(DeepalIntlClient)
@@ -1449,7 +1472,7 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     assert sensor.S05_UNSUPPORTED_SENSOR_KEYS.isdisjoint(s05_keys)
     assert sensor.S05_UNSUPPORTED_SENSOR_KEYS <= s07_keys
     assert "inside_temperature" in s05_keys
-    assert "outside_temperature" in s05_keys
+    assert "outside_temperature" not in s05_keys
     assert "outside_temperature" in s07_keys
     assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s05_keys)
     assert {"mileage_yesterday", "trip_mileage"} <= s07_keys
@@ -1599,6 +1622,52 @@ def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:
     assert binary_sensor.S05_UNSUPPORTED_BINARY_SENSOR_KEYS <= s07_keys
     assert "front_left_seat_heating" in s05_keys
     assert "front_left_seat_heating" in s07_keys
+
+
+def test_charge_schedule_entities_are_s05_phev_only() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    vehicles = (
+        (
+            _model_vehicle(
+                "car-1", series_name="S05", model_code="SC6464AAKBEV"
+            ),
+            False,
+        ),
+        (
+            _model_vehicle(
+                "car-2", series_name="S05", model_code="SC6460AAAA7HEV"
+            ),
+            True,
+        ),
+        (_model_vehicle("car-3", series_name="S07", series_code="C673-EU"), True),
+    )
+
+    for vehicle, expected in vehicles:
+        sensor_keys = {
+            entity.translation_key
+            for entity in sensor.build_sensors(coordinator, vehicle)
+        }
+        binary_keys = {
+            entity.translation_key
+            for entity in binary_sensor.build_binary_sensors(coordinator, vehicle)
+        }
+        switch_keys = {
+            entity.translation_key
+            for entity in switch.build_switches(coordinator, vehicle)
+        }
+        time_keys = {
+            entity.translation_key
+            for entity in time_platform.build_times(coordinator, vehicle)
+        }
+
+        assert ("charge_schedule_start" in sensor_keys) is expected
+        assert ("charge_schedule_end" in sensor_keys) is expected
+        assert ("charge_schedule_enabled" in binary_keys) is expected
+        assert ("charge_schedule" in switch_keys) is expected
+        assert ("charge_schedule_start" in time_keys) is expected
+        assert ("charge_schedule_end" in time_keys) is expected
+        assert "steering_wheel_heating" in switch_keys
 
 
 def _control_client(control_pin: str | None) -> DeepalIntlClient:
@@ -3220,6 +3289,63 @@ def test_phev_coolant_entity_is_removed_from_the_registry() -> None:
     )
 
     assert removed == ["binary_sensor.deepal_car-1_warning_coolant_temperature"]
+
+
+@pytest.mark.asyncio
+async def test_s05_bev_schedule_and_outside_temperature_entries_are_removed(
+    monkeypatch,
+) -> None:
+    coordinator = FakeCoordinator()
+    client = object.__new__(DeepalIntlClient)
+    client.private_key_pem = "test-private-key"
+    coordinator.client = client
+    bev = _model_vehicle("car-1", series_name="S05", model_code="SC6464AAKBEV")
+    coordinator.vehicles = [bev]
+    entry = SimpleNamespace(runtime_data=SimpleNamespace(coordinator=coordinator))
+
+    entries = {
+        ("sensor", "deepal_car-1_outside_temperature"): (
+            "sensor.deepal_car-1_outside_temperature"
+        ),
+        ("sensor", "deepal_car-1_charge_schedule_start"): (
+            "sensor.deepal_car-1_charge_schedule_start"
+        ),
+        ("sensor", "deepal_car-1_charge_schedule_end"): (
+            "sensor.deepal_car-1_charge_schedule_end"
+        ),
+        ("binary_sensor", "deepal_car-1_charge_schedule_enabled"): (
+            "binary_sensor.deepal_car-1_charge_schedule_enabled"
+        ),
+        ("switch", "deepal_car-1_charge_schedule"): (
+            "switch.deepal_car-1_charge_schedule"
+        ),
+        ("time", "deepal_car-1_charge_schedule_start"): (
+            "time.deepal_car-1_charge_schedule_start"
+        ),
+        ("time", "deepal_car-1_charge_schedule_end"): (
+            "time.deepal_car-1_charge_schedule_end"
+        ),
+    }
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            assert domain == "deepal"
+            return entries.get((platform, unique_id))
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    registry = _Registry()
+    monkeypatch.setattr(sensor.er, "async_get", lambda hass: registry)
+    added: list = []
+
+    await sensor.async_setup_entry(None, entry, added.extend)
+    await binary_sensor.async_setup_entry(None, entry, added.extend)
+    await switch.async_setup_entry(None, entry, added.extend)
+    await time_platform.async_setup_entry(None, entry, added.extend)
+
+    assert sorted(removed) == sorted(entries.values())
 
 
 def test_phev_charge_limit_registry_entries_are_removed() -> None:

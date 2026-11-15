@@ -45,9 +45,7 @@ def test_layout_parser_maps_panel_paths() -> None:
     assert ("s05", "status", "overlook/Ocar1.png") in by_profile_and_path
     assert ("s05", "climate", "ac/carAc.png") in by_profile_and_path
     assert ("s05", "charging", "battery/carBattery.png") in by_profile_and_path
-    assert not any(
-        asset.profile == "s05" and asset.category == "seats" for asset in assets
-    )
+    assert ("s05", "seats", "seat/carSeat.png") in by_profile_and_path
 
 
 def test_normalize_member_aliases_and_orientation() -> None:

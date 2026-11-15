@@ -189,17 +189,3 @@ function lockStateFor(hass, vehicle) {
   if (binary) return binary.state !== "on";
   return null;
 }
-
-/** Translated charge status, falling back to the charging and plug flags. */
-function chargeStatusText(hass, vehicle, t) {
-  const statusId = entityFor(vehicle, "sensor", "charge_status");
-  const status = stateFor(hass, statusId);
-  if (status) return formatState(hass, statusId);
-  if (isOn(hass, entityFor(vehicle, "binary_sensor", "charging"))) {
-    return t("charging");
-  }
-  if (isOn(hass, entityFor(vehicle, "binary_sensor", "charger_plugged"))) {
-    return t("plugged");
-  }
-  return t("not_plugged");
-}

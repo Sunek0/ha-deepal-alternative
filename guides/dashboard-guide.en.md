@@ -46,49 +46,60 @@ validated it, and falls back to the bundled profile art without showing another 
 The **Sections** tab controls the content and its order. The available sections are:
 
 - **Actions**: the control buttons.
-- **Status**: odometer, charge state, battery and range.
-- **Climate**: cabin climate, front and rear seats when the vehicle exposes them, steering wheel,
-  inside temperature and humidity. The **Climate** action opens the same controls in a dialog, so
-  this section is hidden by default to keep the card short.
+- **Climate**: cabin climate, a temperature wheel, on/off and cabin humidity. The **Climate** action
+  opens the climate tab of the vehicle dialog, so this section is hidden by default to keep the card
+  short.
 - **Charging**: cable, AC/DC current, remaining time, charge schedule, charge limit and sessions.
   It is shown only while the charger is connected and no longer repeats the car picture.
 - **Driving** and **Ambience**: only on models that report them, such as the S07.
 - **Energy**: the PHEV fuel and electric readings.
-- **Information**: built-in tiles (odometer, temperatures, humidity, fuel, charge state, speed,
-  gear, mileage) and your own entity tiles.
+- **Status**: the configurable metric block built from the built-in tiles (odometer, temperatures,
+  humidity, fuel, charge state, speed, gear, mileage) and your own entity tiles. The **Sensors** tab
+  lets you choose which tiles appear and their order. It replaces the former separate status and
+  information sections.
+- **Seats**: the interior top view with the seat heating, seat ventilation and steering-wheel
+  controls over the front seats. Models without interior artwork show the same controls as a list.
 - **Diagnostics**: active warnings, or all warnings when you choose that mode.
-- **Tyres**: the four pressures with their alarms. The **Tyres** action opens them in a dialog, so
-  this section is hidden by default.
+- **Tyres**: the four pressures with their alarms. The same rotated top view with the pressure text
+  beside each wheel is used in the **Tyres** section on the card; the **Tyres** action opens the
+  tyres tab of the vehicle dialog, so this section is hidden by default.
 
 Use the arrows to reorder a section and the switch to hide it. A section whose entities are missing
 hides itself; it never leaves an empty shell. The default card shows actions, the charging section
-while connected, and information (with the vehicle icon). Status is hidden by default because it
-duplicates information; enable it from **Sections** if you want it. The same tab enables Climate,
-Tyres, Driving or Energy inline instead of in the dialogs. Diagnostics appears only while a warning
-is active. Range and odometer are shown as whole numbers (no decimals).
+while connected, status (with the vehicle icon) and seats. The same tab enables Climate, Tyres,
+Driving or Energy inline instead of in the dialogs. Diagnostics appears only while a warning is
+active. Range and odometer are shown as whole numbers (no decimals).
 
 ## 4. Actions
 
 The **Actions** tab controls:
 
-- which buttons appear and in what order: lock, windows, trunk, climate, tyres, lights, horn and
-  lights-and-horn. Refresh is no longer part of the card; use the integration's refresh button
-  entity if you need to wake the car.
+- which buttons appear and in what order: lock, windows, trunk, climate, seats, tyres, lights,
+  horn and lights-and-horn. The hero can show a refresh button; turn it on or off in the **Vehicle**
+  settings.
 - the layout (`grid`, `scroll`, `split` or `fit`), the number of primary buttons, the size and the
   labels (title, status or both);
 - which actions ask for confirmation before sending the command: unlock, lock, trunk, windows,
-  climate, lights, horn and find.
+  climate, refresh, lights, horn and find.
 
-The **Climate** and **Tyres** buttons open modal dialogs. The climate dialog shows the climate
-controls on one side and the seat/steering controls on the other; the tyres dialog shows the four
-pressures and their alarms. The lock, windows and trunk controls only appear when the remote control
-PIN is configured in the integration options; the rest works without a PIN. Every command shows its
-result or a translated error on the card.
+The **Climate**, **Seats** and **Tyres** buttons open one vehicle dialog with three tabs. The
+climate tab shows the climate artwork with the airflow layer while the climate is on, plus the
+temperature wheel, power and humidity controls. The seats tab shows the interior top view cropped to the
+front seats, with a control over each seat function and the steering wheel; tap a control to cycle
+its level. Models without interior artwork show the same controls as a list. The same seats map and
+controls are available on the card itself from the **Seats** section. The tyres tab shows the
+vehicle top view rotated 90 degrees with each pressure and warning as text beside its wheel.
+The dialog only offers the tabs that have data, updates live and closes without sending anything.
+The lock, windows and trunk controls only appear when the remote control PIN is configured in the
+integration options; the rest works without a PIN. Every command shows its result or a translated
+error on the card.
 
-## 5. Information, diagnostics and appearance
+## 5. Status, diagnostics and appearance
 
-- **Sensors**: choose the built-in information tiles and the diagnostics mode (active warnings only,
-  or all warnings). Custom entities can be added to `info_custom` and `diag_custom` in YAML.
+- **Sensors**: choose and reorder the built-in status tiles and the diagnostics mode (active
+  warnings only, or all warnings). Only the sensors the vehicle exposes are offered. Custom entities
+  can be added to `info_custom` and `diag_custom` in YAML; they appear after the built-in status
+  tiles.
 - **Appearance**: language (automatic, or English, Spanish, German, French, Italian or Portuguese),
   on-screen messages and their position, and whether the **Settings** button is visible on the card.
 - **Card margins** keep the card aligned with the rest of your dashboard.

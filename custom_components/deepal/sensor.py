@@ -46,8 +46,15 @@ from .deepal.mqtt import (
     charge_is_active,
     charge_state,
 )
+from .entity import remove_entity_registry_entries
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05, is_s05_phev, supports_charge_limit, supports_fuel
+from .vehicle_model import (
+    is_s05,
+    is_s05_phev,
+    supports_charge_limit,
+    supports_charge_schedule,
+    supports_fuel,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,10 +85,9 @@ POWER_STATUS_OPTION_BY_VALUE = {0: "off", 2: "on"}
 
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
-# payload has no speed, gear, PM2.5, air quality, charge limit, parking brake
-# or vehicle status fields, so the entities would stay unknown forever. Outside
-# temperature is not filtered: it is created and stays unknown until a report
-# carries it.
+# payload has no speed, gear, PM2.5, air quality, charge limit, parking brake,
+# outside temperature or vehicle status fields, so the entities would stay
+# unknown forever.
 S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
     {
         "air_quality_level",
@@ -89,14 +95,11 @@ S05_UNSUPPORTED_SENSOR_KEYS = frozenset(
         "epb_status",
         "gear",
         "inside_pm25",
+        "outside_temperature",
         "speed",
         "vehicle_status",
     }
 )
-
-# The S05 PHEV never reports an outside temperature (no field in any MQTT report
-# or in the server condition), so the sensor would stay unknown forever.
-S05_PHEV_UNSUPPORTED_SENSOR_KEYS = frozenset({"outside_temperature"})
 
 # The S05 has no rear seat heating hardware (the app disables those controls).
 S05_UNSUPPORTED_SEAT_POSITIONS = ("rear_left", "rear_right")
@@ -110,6 +113,11 @@ FUEL_SENSOR_KEYS = frozenset(
     {"fuel_level", "fuel_range", "fuel_volume", "fuel_tank_capacity"}
 )
 
+# Charge-schedule sensors exist only on models with the schedule option.
+CHARGE_SCHEDULE_SENSOR_KEYS = frozenset(
+    {"charge_schedule_start", "charge_schedule_end"}
+)
+
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities.
 REMOVED_SENSOR_KEYS = frozenset({"steering_wheel_heater_level"})
@@ -117,10 +125,7 @@ REMOVED_SENSOR_KEYS = frozenset({"steering_wheel_heater_level"})
 
 def _remove_sensor_entities(registry: Any, vehicle: Any, keys: Any) -> None:
     """Remove the entity-registry entries of the given sensor keys."""
-    for key in keys:
-        unique_id = f"deepal_{vehicle.car_id}_{key}"
-        if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
-            registry.async_remove(entity_id)
+    remove_entity_registry_entries(registry, vehicle, "sensor", keys)
 
 
 def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
@@ -217,13 +222,12 @@ def build_sensors(
         capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
         fuel = supports_fuel(vehicle, capabilities)
         charge_limit = supports_charge_limit(vehicle, capabilities)
+        schedule = supports_charge_schedule(vehicle)
 
         def supported(description: DeepalSensorDescription) -> bool:
-            if description.key in FUEL_SENSOR_KEYS and not fuel:
+            if description.key in CHARGE_SCHEDULE_SENSOR_KEYS and not schedule:
                 return False
-            if description.key in S05_PHEV_UNSUPPORTED_SENSOR_KEYS and is_s05_phev(
-                vehicle
-            ):
+            if description.key in FUEL_SENSOR_KEYS and not fuel:
                 return False
             if not s05:
                 return True
@@ -259,10 +263,13 @@ async def async_setup_entry(
 
     for vehicle in coordinator.vehicles:
         _remove_retired_entities(registry, vehicle)
-        if is_s05_phev(vehicle):
-            _remove_sensor_entities(
-                registry, vehicle, {"charge_limit"} | S05_PHEV_UNSUPPORTED_SENSOR_KEYS
-            )
+        if is_s05(vehicle):
+            removed = {"outside_temperature"}
+            if is_s05_phev(vehicle):
+                removed.add("charge_limit")
+            _remove_sensor_entities(registry, vehicle, removed)
+        if not supports_charge_schedule(vehicle):
+            _remove_sensor_entities(registry, vehicle, CHARGE_SCHEDULE_SENSOR_KEYS)
         entities.extend(build_sensors(coordinator, vehicle))
 
     async_add_entities(entities)

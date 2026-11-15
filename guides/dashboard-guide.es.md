@@ -46,25 +46,28 @@ y cae al arte empaquetado del perfil sin enseñar el coche de otro modelo.
 La pestaña **Secciones** controla el contenido y su orden. Las secciones disponibles son:
 
 - **Acciones**: los botones de control.
-- **Estado**: odómetro, estado de carga, batería y autonomía.
-- **Clima**: climatización, asientos delanteros y traseros cuando el coche los expone, volante,
-  temperatura interior y humedad. La acción **Clima** abre estos controles en un diálogo, así que la
-  sección viene oculta por defecto para que la tarjeta no crezca.
+- **Clima**: climatización, rueda de temperatura, encendido/apagado y humedad interior. La acción
+  **Clima** abre la pestaña de clima del diálogo del vehículo, así que la sección viene oculta por
+  defecto para que la tarjeta no crezca.
 - **Carga**: cable, corriente AC/DC, tiempo restante, programación, límite y sesiones. Solo se
   muestra mientras el cargador está conectado y ya no repite la imagen del coche.
 - **Conducción** y **Ambiente**: solo en modelos que los reportan, como el S07.
 - **Energía**: lecturas eléctricas y de combustible del PHEV.
-- **Información**: fichas integradas (odómetro, temperaturas, humedad, combustible, estado de carga,
-  velocidad, marcha, kilómetros) y tus propias entidades.
+- **Estado**: el bloque configurable de métricas con las fichas integradas (odómetro, temperaturas,
+  humedad, combustible, estado de carga, velocidad, marcha, kilómetros) y tus propias entidades. La
+  pestaña **Sensores** permite elegir qué fichas aparecen y su orden. Sustituye a las antiguas
+  secciones separadas de estado e información.
+- **Asientos**: el interior en planta con los controles de calefacción, ventilación y volante sobre
+  las plazas delanteras. En modelos sin arte interior se muestran los mismos controles en una lista.
 - **Diagnóstico**: avisos activos, o todos los avisos si eliges ese modo.
-- **Neumáticos**: las cuatro presiones con sus alarmas. La acción **Neumáticos** las abre en un
-  diálogo, así que la sección viene oculta por defecto.
+- **Neumáticos**: las cuatro presiones con sus alarmas. En la tarjeta, la sección **Neumáticos** usa
+  el mismo diseño girado con el texto de cada presión junto a su rueda; la acción **Neumáticos** abre
+  la pestaña de neumáticos del diálogo del vehículo, así que la sección viene oculta por defecto.
 
 Usa las flechas para reordenar una sección y el interruptor para ocultarla. Una sección cuyas
 entidades no existan se oculta sola; nunca deja un hueco vacío. La tarjeta muestra por defecto
-acciones, la sección de carga mientras el cable está conectado e información (con el icono del
-coche). Estado queda oculto por defecto porque duplica información; actívalo desde **Secciones** si
-lo quieres. En esa misma pestaña puedes activar Clima, Neumáticos, Conducción o Energía dentro de la
+acciones, la sección de carga mientras el cable está conectado, estado (con el icono del coche) y
+asientos. En esa misma pestaña puedes activar Clima, Neumáticos, Conducción o Energía dentro de la
 tarjeta en vez de en los diálogos. El diagnóstico solo aparece mientras hay un aviso activo. La
 autonomía y el kilometraje se muestran sin decimales.
 
@@ -72,24 +75,32 @@ autonomía y el kilometraje se muestran sin decimales.
 
 La pestaña **Acciones** controla:
 
-- qué botones aparecen y en qué orden: cierre, ventanillas, maletero, clima, neumáticos, luces,
-  claxon y luces+claxon. Actualizar ya no forma parte de la tarjeta; usa la entidad de botón de
-  actualización de la integración si necesitas despertar el coche.
+- qué botones aparecen y en qué orden: cierre, ventanillas, maletero, clima, asientos, neumáticos,
+  luces, claxon y luces+claxon. El hero puede mostrar un botón de actualización; actívalo o
+  desactívalo en los ajustes de **Vehículo**.
 - la disposición (`grid`, `scroll`, `split` o `fit`), el número de botones principales, el tamaño y
   las etiquetas (título, estado o ambos);
 - qué acciones piden confirmación antes de enviar la orden: desbloquear, bloquear, maletero,
-  ventanillas, clima, luces, claxon, localizar y actualizar.
+  ventanillas, clima, actualizar, luces, claxon y localizar.
 
-Los botones **Clima** y **Neumáticos** abren diálogos modales. El de clima muestra la climatización
-en un lado y los controles de asientos/volante en el otro; el de neumáticos muestra las cuatro
-presiones y sus alarmas. Los controles de cierre, ventanillas y maletero solo aparecen si guardaste
-el PIN de control remoto en las opciones de la integración; el resto funciona sin PIN. Cada comando
-muestra su resultado o un error traducido en la propia tarjeta.
+Los botones **Clima**, **Asientos** y **Neumáticos** abren un único diálogo del vehículo con tres
+pestañas. La de clima muestra el arte del climatizador con la capa de aire mientras está encendido,
+además de la rueda de temperatura, el encendido/apagado y la humedad. La de asientos muestra el interior en
+planta recortado a las plazas delanteras, con un control sobre cada función y el volante; toca un
+control para cambiar su nivel. En modelos sin arte interior, la pestaña muestra los mismos controles
+en una lista. El mismo mapa y los mismos controles están disponibles en la tarjeta desde la sección
+**Asientos**. La de neumáticos muestra el coche en planta girado 90° con la presión y el aviso de
+cada rueda como texto junto a ella. El diálogo solo ofrece las pestañas con datos, se actualiza en
+vivo y se cierra sin enviar nada. Los controles de cierre, ventanillas y maletero solo aparecen si
+guardaste el PIN de control remoto en las opciones de la integración; el resto funciona sin PIN.
+Cada comando muestra su resultado o un error traducido en la propia tarjeta.
 
-## 5. Información, diagnóstico y apariencia
+## 5. Estado, diagnóstico y apariencia
 
-- **Sensores**: elige las fichas de información integradas y el modo de diagnóstico (solo avisos
-  activos o todos). Las entidades propias se pueden añadir a `info_custom` y `diag_custom` en YAML.
+- **Sensores**: elige y ordena las fichas de estado integradas, y el modo de diagnóstico (solo
+  avisos activos o todos). Solo se ofrecen los sensores que expone el coche. Las entidades propias se
+  pueden añadir a `info_custom` y `diag_custom` en YAML; aparecen después de las fichas integradas de
+  estado.
 - **Apariencia**: idioma (automático, inglés, español, alemán, francés, italiano o portugués),
   mensajes en pantalla y su posición, y si el botón **Ajustes** se ve en la tarjeta.
 - **Márgenes de la tarjeta** mantienen la tarjeta alineada con el resto del dashboard.

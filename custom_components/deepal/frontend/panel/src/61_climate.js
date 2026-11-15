@@ -1,8 +1,7 @@
 // Climate view, built from the shared design system: cabin climate (target
-// temperature, on/off and inside temperature), seat heating and ventilation
-// for the positions the vehicle exposes, steering wheel heating and the
-// ambient readings when available. Every control hides itself when the
-// vehicle does not expose its entity.
+// temperature and on/off) and the cabin humidity when available. Seat and
+// steering-wheel controls live in the seats section. Every control hides
+// itself when the vehicle does not expose its entity.
 
 DeepalCardBase.prototype._renderClimate = function (vehicle) {
   const hass = this._hass;
@@ -17,8 +16,6 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
 
   let climateSection = "";
   if (climateId) {
-    const target = climateState?.attributes?.temperature;
-    const inside = formatState(hass, entity("sensor", "inside_temperature"));
     const humidity = formatState(hass, entity("sensor", "cabin_humidity"));
     const layout = layoutFor(vehicle)?.climate;
     const stageHtml = layout
@@ -35,13 +32,17 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
           <span class="section-title">${escapeHtml(t("climate"))}</span>
         </div>
         ${stageHtml}
-        <div class="center">
-          <div class="stepper large">
-            <button data-action="temp-step" data-delta="-0.5" aria-label="-">&minus;</button>
-            <span class="value">${escapeHtml(target != null ? `${target} °C` : "—")}</span>
-            <button data-action="temp-step" data-delta="0.5" aria-label="+">+</button>
-          </div>
-        </div>
+        ${
+          humidity
+            ? `<div class="metrics climate-metrics">
+                <div class="metric">
+                  <span class="label">${escapeHtml(t("cabin_humidity"))}</span>
+                  <span class="value">${escapeHtml(humidity)}</span>
+                </div>
+              </div>`
+            : ""
+        }
+        ${climateWheelHtml(this, vehicle)}
         <div class="segmented">
           <button class="segment" aria-pressed="${climateOn}" data-action="climate-mode" data-mode="heat_cool">
             <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon>
@@ -52,118 +53,46 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
             <span>${escapeHtml(t("climate_off"))}</span>
           </button>
         </div>
-        ${
-          inside || humidity
-            ? `<div class="metrics">
-                ${
-                  inside
-                    ? `<div class="metric">
-                        <span class="label">${escapeHtml(t("inside_temperature"))}</span>
-                        <span class="value">${escapeHtml(inside)}</span>
-                      </div>`
-                    : ""
-                }
-                ${
-                  humidity
-                    ? `<div class="metric">
-                        <span class="label">${escapeHtml(t("cabin_humidity"))}</span>
-                        <span class="value">${escapeHtml(humidity)}</span>
-                      </div>`
-                    : ""
-                }
-              </div>`
-            : ""
-        }
       </div>`;
   }
 
-  // --- Seats (front always, rear when exposed) and steering wheel ---------
-
-  const seatControl = (key, label) => {
-    const id = entity("number", key);
-    if (!id) return "";
-    const state = stateFor(hass, id);
-    return `
-      <div class="control">
-        <span class="label">${escapeHtml(label)}</span>
-        <div class="stepper">
-          <button data-action="number-step" data-key="${key}" data-delta="-1" aria-label="-">&minus;</button>
-          <span class="value">${escapeHtml(state ? state.state : "—")}</span>
-          <button data-action="number-step" data-key="${key}" data-delta="1" aria-label="+">+</button>
-        </div>
-      </div>`;
-  };
-  const seatControls = [
-    seatControl(
-      "seat_heating_front_left",
-      `${t("seat_heating")} · ${t("front_left")}`,
-    ),
-    seatControl(
-      "seat_heating_front_right",
-      `${t("seat_heating")} · ${t("front_right")}`,
-    ),
-    seatControl(
-      "seat_ventilation_front_left",
-      `${t("seat_ventilation")} · ${t("front_left")}`,
-    ),
-    seatControl(
-      "seat_ventilation_front_right",
-      `${t("seat_ventilation")} · ${t("front_right")}`,
-    ),
-    seatControl(
-      "seat_heating_rear_left",
-      `${t("seat_heating")} · ${t("rear_left")}`,
-    ),
-    seatControl(
-      "seat_heating_rear_right",
-      `${t("seat_heating")} · ${t("rear_right")}`,
-    ),
-    seatControl(
-      "seat_ventilation_rear_left",
-      `${t("seat_ventilation")} · ${t("rear_left")}`,
-    ),
-    seatControl(
-      "seat_ventilation_rear_right",
-      `${t("seat_ventilation")} · ${t("rear_right")}`,
-    ),
-  ].join("");
-
-  const steeringId = entity("switch", "steering_wheel_heating");
-  const steeringOn = steeringId ? isOn(hass, steeringId) : false;
-  const steeringTile = steeringId
-    ? `<button class="tile ${steeringOn ? "on" : ""}" data-action="toggle-switch" data-key="steering_wheel_heating">
-        <ha-icon icon="${PANEL_ICONS.steering}"></ha-icon>
-        <span class="tile-body">
-          <span class="tile-label">${escapeHtml(t("steering_wheel"))}</span>
-          <span class="tile-value">${escapeHtml(steeringOn ? t("on") : t("off"))}</span>
-        </span>
-      </button>`
-    : "";
-
-  const seatsLayout = layoutFor(vehicle)?.seats;
-  const seatsStage = seatsLayout
-    ? `<div class="stage stage-seats">
-        <img src="${assetUrl(seatsLayout.base, vehicle)}" alt="">
-        <span class="anim-slot" data-anim="seat_vent"></span>
-      </div>`
-    : "";
-
-  const seatsSection =
-    seatControls || steeringTile
-      ? `<div class="section">
-          <div class="section-head">
-            <ha-icon icon="${PANEL_ICONS.seat_heating}"></ha-icon>
-            <span class="section-title">${escapeHtml(t("seats"))}</span>
-          </div>
-          ${seatsStage}
-          ${seatControls ? `<div class="steppers">${seatControls}</div>` : ""}
-          ${steeringTile ? `<div class="tiles">${steeringTile}</div>` : ""}
-        </div>`
-      : "";
-
-  // --- Ambience readings live inside the climate section (humidity next to
-  // the inside temperature); no separate section.
-
-  if (!climateSection && !seatsSection) return "";
-  return `${climateSection}${seatsSection}`;
+  return climateSection;
 };
+
+function climateWheelHtml(card, vehicle) {
+  const climateId = entityFor(vehicle, "climate", "cabin");
+  const state = stateFor(card._hass, climateId);
+  if (!state) return "";
+  const attributes = state.attributes || {};
+  const current = Number(attributes.temperature);
+  if (!Number.isFinite(current)) return "";
+  const step =
+    Number(attributes.target_temp_step ?? attributes.step ?? 0.5) || 0.5;
+  const min = Number(attributes.min_temp ?? 16);
+  const max = Number(attributes.max_temp ?? 32);
+  const values = [
+    current - step * 2,
+    current - step,
+    current,
+    current + step,
+    current + step * 2,
+  ];
+  const cells = values.map((value, index) => {
+    const rounded = Math.round(value * 10) / 10;
+    if (index === 2) {
+      return `<div class="temp-wheel-current" aria-live="polite"><span class="value">${rounded.toFixed(
+        1,
+      )}<small>°C</small></span></div>`;
+    }
+    if (value < min - 0.001 || value > max + 0.001) {
+      return `<span class="temp-wheel-slot" aria-hidden="true"></span>`;
+    }
+    const distance = index === 1 || index === 3 ? "near" : "far";
+    return `<button class="temp-wheel-step ${distance}" data-action="temp-set" data-temp="${rounded}" aria-label="${escapeHtml(
+      rounded.toFixed(1),
+    )} °C">${rounded.toFixed(1)}</button>`;
+  });
+  return `<div class="temp-wheel" role="group" aria-label="${escapeHtml(
+    card._t("target_temperature"),
+  )}">${cells.join("")}</div>`;
+}

@@ -195,6 +195,18 @@ const PANEL_CSS = `
   gap: var(--dp-space-sm);
 }
 
+.climate-metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dp-space-sm);
+}
+
+.climate-metrics .metric {
+  flex: none;
+  width: min(100%, 220px);
+}
+
 .metric {
   display: flex;
   flex-direction: column;
@@ -245,6 +257,70 @@ const PANEL_CSS = `
 .stepper.large button { width: var(--dp-touch); height: var(--dp-touch); }
 .stepper.large .value { font-size: 28px; min-width: 84px; }
 
+/* --- Temperature wheel ------------------------------------------------ */
+
+.temp-wheel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.temp-wheel-step,
+.temp-wheel-slot {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.temp-wheel-step {
+  border: 0;
+  background: transparent;
+  color: var(--dp-text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.temp-wheel-step.near { opacity: 0.82; }
+.temp-wheel-step.far { opacity: 0.55; }
+.temp-wheel-step:hover {
+  background: var(--dp-surface-2);
+  color: var(--dp-text);
+}
+
+.temp-wheel-current {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--dp-accent);
+  color: var(--dp-on-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.temp-wheel-current .value {
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.temp-wheel-current small {
+  margin-left: 1px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.temp-wheel-slot { display: block; }
+
 .control {
   display: flex;
   flex-direction: column;
@@ -293,12 +369,37 @@ const PANEL_CSS = `
   transform: translateY(-50%) rotate(-90deg);
 }
 .stage-compact { aspect-ratio: 3 / 2; }
-.stage-climate { aspect-ratio: 1125 / 642; }
+.stage-climate {
+  aspect-ratio: 1125 / 642;
+  background: radial-gradient(ellipse at 50% 42%, #20242c 0%, #07080b 78%);
+}
+.stage-climate .air { animation: dp-air 3.2s ease-in-out infinite; }
+@keyframes dp-air {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-climate .air { animation: none; }
+}
 .stage-charging { aspect-ratio: 3 / 2; }
 .stage-seats {
   aspect-ratio: 3 / 4;
   max-width: 460px;
   margin: 0 auto;
+}
+/* Front-seat crop used by the vehicle dialog. The image is larger than the
+   stage and offset so the front seats and the steering wheel fill it. */
+.stage-seat-map {
+  container-type: inline-size;
+  background: radial-gradient(ellipse at 50% 45%, #2e3642 0%, #0b0d12 80%);
+}
+.stage-seat-map .seats-base {
+  inset: auto;
+  max-width: none;
+  height: auto;
+  width: var(--seat-img-width);
+  left: var(--seat-img-left);
+  top: var(--seat-img-top);
 }
 
 /* --- Animation layer --------------------------------------------------- */
@@ -344,6 +445,54 @@ const PANEL_CSS = `
 .stage .open-door-outline {
   opacity: 0.92;
 }
+
+/* --- Seat hotspots ------------------------------------------------------ */
+
+.seat-spot {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: clamp(32px, 9.8cqw, 62px);
+  height: clamp(32px, 9.8cqw, 62px);
+  padding: 0;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(10, 11, 15, 0.68);
+  color: #fff;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: transform 0.12s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.seat-spot.hot { --seat-color: #fb923c; }
+.seat-spot.cool { --seat-color: #38bdf8; }
+.seat-spot.steer { --seat-color: var(--dp-accent); }
+
+.seat-spot ha-icon { --mdc-icon-size: clamp(17px, 4.4cqw, 28px); color: rgba(255, 255, 255, 0.82); }
+.seat-spot.on {
+  border-color: color-mix(in srgb, var(--seat-color) 72%, transparent);
+  background: color-mix(in srgb, var(--seat-color) 22%, rgba(10, 11, 15, 0.78));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--seat-color) 35%, transparent);
+}
+.seat-spot.on ha-icon { color: var(--seat-color); }
+.seat-spot:active { transform: translate(-50%, -50%) scale(0.94); }
+
+.seat-level { display: flex; gap: 3px; }
+.seat-level i {
+  width: clamp(7px, 1.6cqw, 10px);
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.seat-level i.on { background: var(--seat-color); }
+.seat-spot.steer .seat-level { display: none; }
 
 .vehicle-photo {
   display: block;
@@ -521,11 +670,28 @@ const PANEL_CSS = `
 }
 
 .hero-actions .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 36px;
   height: 36px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 50%;
   background: rgba(0, 0, 0, 0.38);
   color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.14s ease, background 0.2s ease;
 }
+
+.hero-actions .icon-button ha-icon { --mdc-icon-size: 20px; }
+.hero-actions .icon-button:active { transform: scale(0.92); }
+
+.hero-actions .icon-button[disabled] { opacity: 0.75; cursor: default; }
+.hero-actions .icon-button.pending ha-icon { animation: dp-spin 1s linear infinite; }
+@keyframes dp-spin { to { transform: rotate(360deg); } }
 
 .hero-actions .hero-cloud {
   display: inline-flex;
@@ -660,6 +826,7 @@ const PANEL_CSS = `
 
 .action:hover { filter: brightness(1.07); }
 .action ha-icon { --mdc-icon-size: 24px; }
+.action .action-icon { width: 24px; height: 24px; flex: none; color: currentColor; }
 .action.on { background: var(--dp-accent); color: var(--dp-on-text); }
 .action.warn { background: var(--dp-warn); color: var(--dp-on-text); }
 .action:disabled { opacity: 0.45; cursor: default; }
@@ -668,8 +835,10 @@ const PANEL_CSS = `
 .action.on .action-value, .action.warn .action-value { color: var(--dp-on-text); }
 .action.size-s { min-height: 60px; }
 .action.size-s ha-icon { --mdc-icon-size: 20px; }
+.action.size-s .action-icon { width: 20px; height: 20px; }
 .action.size-l { min-height: 92px; }
 .action.size-l ha-icon { --mdc-icon-size: 30px; }
+.action.size-l .action-icon { width: 30px; height: 30px; }
 
 .actions-more-toggle {
   display: flex;
@@ -723,11 +892,13 @@ deepal-card-settings { display: block; width: 100%; }
   inset: 0;
   z-index: 20;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   padding: var(--dp-space-md);
   background: rgba(0, 0, 0, 0.58);
 }
+
+.settings-sheet > deepal-card-settings { width: min(680px, 100%); }
 
 .settings-panel {
   display: flex;
@@ -735,6 +906,7 @@ deepal-card-settings { display: block; width: 100%; }
   width: min(680px, 100%);
   max-height: 88vh;
   overflow: hidden;
+  box-sizing: border-box;
   border: 1px solid var(--dp-line);
   border-radius: var(--dp-radius);
   background: var(--dp-surface);
@@ -964,7 +1136,25 @@ deepal-card-settings { display: block; width: 100%; }
   font-size: 17px;
 }
 
+.modal-tabs {
+  flex: none;
+  margin: var(--dp-space-md) var(--dp-space-lg) 0;
+  background: var(--dp-surface-2);
+}
+
+.modal-tabs .segment { min-width: 0; }
+.modal-tabs .segment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dp-space-md);
   padding: var(--dp-space-md) var(--dp-space-lg) var(--dp-space-xl);
   overflow-y: auto;
 }
@@ -999,36 +1189,95 @@ deepal-card-settings { display: block; width: 100%; }
   letter-spacing: 0.02em;
 }
 
-.tire-grid {
+.tire-stage-overlay {
+  position: relative;
+  width: 100%;
+}
+
+.tire-stage-overlay .stage {
+  width: 100%;
+  background: radial-gradient(ellipse at 50% 50%, #20242c 0%, #07080b 82%);
+}
+
+.tire-annotations {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.tire-annotation {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  line-height: 1.15;
+}
+
+.tire-annotation .tire-label,
+.tire-annotation .tire-value {
+  color: #fff;
+  text-shadow:
+    0 1px 6px rgba(0, 0, 0, 0.92),
+    0 0 2px rgba(0, 0, 0, 0.92);
+}
+
+.tire-annotation .tire-label {
+  font-size: clamp(10px, 1.6vw, 13px);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.tire-annotation .tire-value {
+  font-size: clamp(13px, 2.2vw, 18px);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tire-annotation .tire-value small {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.tire-annotation.warn .tire-label,
+.tire-annotation.warn .tire-value {
+  color: var(--dp-warn);
+}
+
+.tire-text-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--dp-space-sm);
-}
-
-.tire-card {
-  display: flex;
-  align-items: center;
   gap: var(--dp-space-md);
-  min-height: 72px;
-  padding: var(--dp-space-md);
-  border: 1px solid var(--dp-line);
-  border-radius: var(--dp-radius-sm);
-  background: var(--dp-surface-2);
+  text-align: center;
 }
 
-.tire-card ha-icon {
-  --mdc-icon-size: 28px;
+.tire-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.tire-text .tire-label {
+  font-size: 13px;
   color: var(--dp-text-2);
 }
 
-.tire-card.warn {
-  border-color: var(--dp-warn);
-  background: color-mix(in srgb, var(--dp-warn) 16%, var(--dp-surface-2));
+.tire-text .tire-value {
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.tire-card.warn ha-icon { color: var(--dp-warn); }
-.tire-label { font-size: 12px; color: var(--dp-text-2); }
-.tire-value { font-size: 18px; font-weight: 700; }
+.tire-text .tire-value small {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--dp-text-2);
+}
+
+.tire-text.warn .tire-label,
+.tire-text.warn .tire-value {
+  color: var(--dp-warn);
+}
 
 /* --- Editor ------------------------------------------------------------ */
 
@@ -1069,6 +1318,20 @@ deepal-card-settings { display: block; width: 100%; }
   .hero-range .big { font-size: 30px; }
   deepal-card-settings { display: block; width: 100%; }
 
+  .modal-sheet { align-items: flex-end; padding: 0; }
+  .modal-panel {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--dp-radius) var(--dp-radius) 0 0;
+    border-bottom: 0;
+  }
+  .modal-head { padding-top: max(var(--dp-space-md), env(safe-area-inset-top, 0px)); }
+  .modal-tabs { margin-inline: var(--dp-space-md); }
+  .modal-tabs .segment { gap: 4px; padding: 6px 4px; font-size: 12px; }
+  .modal-tabs .segment ha-icon { --mdc-icon-size: 16px; }
+  .modal-body { padding-bottom: calc(var(--dp-space-xl) + env(safe-area-inset-bottom, 0px)); }
+  .modal-columns { grid-template-columns: minmax(0, 1fr); }
+
 .settings-sheet { padding: 0; align-items: stretch; }
   .settings-panel { width: 100%; max-height: 100vh; border-radius: 0; }
   .settings-body { padding-bottom: 48px; }
@@ -1090,9 +1353,10 @@ const PANEL_ICONS = {
   horn: "mdi:bullhorn",
   flash_and_honk: "mdi:car-light-alert",
   window: "mdi:window-closed-variant",
-  trunk: "mdi:car-back",
+  trunk: "deepal:car-trunk",
   hood: "mdi:car",
   doors: "mdi:car-door",
+  door_lock: "mdi:car-door-lock",
   climate: "mdi:air-conditioner",
   charging: "mdi:battery-charging",
   battery: "mdi:car-battery",
@@ -1102,6 +1366,7 @@ const PANEL_ICONS = {
   range: "mdi:map-marker-distance",
   seat_heating: "mdi:car-seat-heater",
   seat_ventilation: "mdi:car-seat-cooler",
+  seat: "mdi:car-seat",
   steering: "mdi:steering",
   cloud: "mdi:cloud-check",
   cloud_off: "mdi:cloud-off-outline",
@@ -1131,4 +1396,18 @@ const PANEL_ICONS = {
   battery_level: "mdi:battery",
   lock_state: "mdi:lock-check",
   power: "mdi:power",
+};
+
+// Custom line icons that the bundled MDI set does not provide.
+// Trunk: Atlas Icons "Open Car Trunk" (MIT).
+const PANEL_ICON_SVGS = {
+  "deepal:car-trunk": `<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.89 7.28H8.15a1.92 1.92 0 0 0-1.53.77L4.33 11.11l-2.87 1V17.8H4.33a1.91 1.91 0 1 1 3.82 0h6.7a1.91 1.91 0 0 1 3.82 0H22.5V13l-4.78-1.91-2.3-3.06a1.92 1.92 0 0 0-1.53-.75Z"/>
+    <circle cx="16.76" cy="17.8" r="1.91"/>
+    <circle cx="6.24" cy="17.8" r="1.91"/>
+    <line x1="20.1" y1="12.07" x2="7.2" y2="12.07"/>
+    <line x1="20.59" y1="14.93" x2="22.5" y2="14.93"/>
+    <line x1="11.98" y1="12.07" x2="11.98" y2="9.2"/>
+    <polyline points="0.5 7.28 2.41 7.28 4.33 11.11"/>
+  </g>`,
 };

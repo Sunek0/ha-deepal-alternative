@@ -297,8 +297,8 @@ def test_bundle_has_the_configurable_hero_and_sections() -> None:
     for marker in [
         "_renderHero",
         "_sectionActions",
-        "_sectionStatus",
         "_sectionInfo",
+        "_sectionSeats",
         "_sectionDiagnostics",
         "hero_style",
         "hero_show",
@@ -314,6 +314,179 @@ def test_bundle_has_no_panel_selector_or_tabs() -> None:
     assert "data-action=\"select-vehicle\"" not in source
     assert "role=\"tablist\"" not in source
     assert "PANEL_TABS" not in source
+
+
+def test_bundle_has_the_vehicle_dialog_tabs() -> None:
+    """One dialog offers climate, seats and tyres, in that order."""
+    dialog = (SRC / "65_modal.js").read_text(encoding="utf-8")
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert 'VEHICLE_MODAL_TABS = ["climate", "seats", "tyres"]' in dialog
+    assert 'data-action="modal-tab"' in dialog
+    assert 'role="tablist"' in dialog
+    assert "stage-seat-map" in dialog
+    assert "layout.layers.climate_on" in dialog
+    assert "rotate: true" in dialog
+    assert 'modalTab: "climate"' in card
+    assert 'modalTab: "tyres"' in card
+
+
+def test_bundle_has_the_seats_action_and_s05_seat_asset() -> None:
+    """The seats action uses the S05 interior image and its crop."""
+    constants = (SRC / "10_constants.js").read_text(encoding="utf-8")
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert '"seats"' in card
+    assert 'id: "seats"' in card
+    assert 'modalTab: "seats"' in card
+    assert "s05/asientos/carSeat.png" in constants
+    assert "crop: { x: 190, y: 300, w: 745, h: 560 }" in constants
+    assert (ASSETS / "s05" / "asientos" / "carSeat.png").is_file()
+
+
+def test_bundle_has_the_hero_refresh_and_information_order() -> None:
+    """The refresh setting, the action and the info order are wired."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+    texts = json.loads(
+        (SRC.parent / "texts" / "en.json").read_text(encoding="utf-8")
+    )
+
+    assert "refresh_button: true" in card
+    assert "_requestRefresh" in card
+    assert "_runRefresh" in card
+    assert 'data-action="refresh"' in card
+    assert 'refresh: ["confirm_refresh_title", "confirm_refresh_text"]' in card
+    assert "info_order: CARD_INFO_IDS.slice()" in card
+    assert 'this._orderList("info_order"' in card
+    assert "for (const id of this._config.info_order" in card
+    assert "refresh_done" in texts
+
+
+def test_main_screen_consolidates_status_and_seats() -> None:
+    """The information block is the status block and seats live on the card."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert '"status"' not in card.split("const CARD_SECTIONS")[1].split("];")[0]
+    assert '"seats"' in card.split("const CARD_SECTIONS")[1].split("];")[0]
+    assert '"status"' not in card.split("order:")[1].split("]")[0]
+    assert '"seats"' in card.split("order:")[1].split("]")[0]
+    assert "_sectionStatus" not in card
+    assert "_sectionSeats" in card
+    assert "seatControlsAvailable(this, vehicle)" in card
+    assert "seatControlsHtml(this, vehicle)" in card
+    assert 'this._t("status")' in card
+
+
+def test_tires_use_text_over_the_wheels_and_climate_drops_inside_temperature() -> None:
+    """Tyres are text annotations over the wheels; climate keeps humidity only."""
+    dialog = (SRC / "65_modal.js").read_text(encoding="utf-8")
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+    climate = (SRC / "61_climate.js").read_text(encoding="utf-8")
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+
+    assert "tire-annotation" in dialog
+    assert "tire-annotations" in dialog
+    assert "tire-tile" not in dialog
+    assert "tire-layout" not in dialog
+    assert "tire-text-grid" in dialog
+    assert "tyresTabHtml(this, vehicle)" in card
+    assert ".tire-annotation" in styles
+    assert "inside_temperature" not in dialog
+    assert "inside_temperature" not in climate
+    assert "cabin_humidity" in dialog
+    assert "cabin_humidity" in climate
+
+
+def test_sensor_settings_filter_and_labels() -> None:
+    """The sensor settings hide missing entities and use the new labels."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+    texts = json.loads(
+        (SRC.parent / "texts" / "es.json").read_text(encoding="utf-8")
+    )
+
+    assert "_infoIds()" in card
+    assert "available = this._infoIds()" in card
+    assert "c.info_order || CARD_INFO_IDS" in card
+    assert texts["outside_temperature"] == "Temperatura exterior"
+    assert texts["inside_temperature"] == "Temperatura interior"
+    assert texts["trip_mileage"] == "Último trayecto"
+    assert texts["mileage_yesterday"] == "Trayecto de ayer"
+
+
+def test_seat_buttons_and_tire_text_sizes() -> None:
+    """The seat hotspots grow 15% and the tire readings grow one point."""
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+
+    assert "width: clamp(32px, 9.8cqw, 62px)" in styles
+    assert "height: clamp(32px, 9.8cqw, 62px)" in styles
+    assert "font-size: clamp(10px, 1.6vw, 13px)" in styles
+    assert "font-size: clamp(13px, 2.2vw, 18px)" in styles
+
+
+def test_control_icons_and_spanish_odometer_label() -> None:
+    """The controls use the car-door icons and the odometer reads Kilometraje."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+    texts = json.loads(
+        (SRC.parent / "texts" / "es.json").read_text(encoding="utf-8")
+    )
+
+    assert 'door_lock: "mdi:car-door-lock"' in styles
+    assert 'trunk: "deepal:car-trunk"' in styles
+    assert 'PANEL_ICON_SVGS = {' in styles
+    assert "M13.89 7.28" in styles
+    assert "PANEL_ICONS.door_lock" in card
+    assert "PANEL_ICONS.doors" in card
+    assert "PANEL_ICON_SVGS[def.icon]" in card
+    assert texts["odometer"] == "Kilometraje"
+
+
+def test_climate_temperature_wheel_in_card_and_dialog() -> None:
+    """Both climate surfaces use the shared temperature wheel."""
+    climate = (SRC / "61_climate.js").read_text(encoding="utf-8")
+    dialog = (SRC / "65_modal.js").read_text(encoding="utf-8")
+    card = (SRC / "50_card.js").read_text(encoding="utf-8")
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+
+    assert "function climateWheelHtml" in climate
+    assert "climateWheelHtml(this, vehicle)" in climate
+    assert "climateWheelHtml(card, vehicle)" in dialog
+    assert 'data-action="temp-set"' in climate
+    assert 'case "temp-set"' in card
+    assert ".temp-wheel" in styles
+    assert ".temp-wheel-current" in styles
+
+
+def test_merge_card_config_defaults_and_info_order_migration() -> None:
+    """Defaults and the old visible-info order survive normalization."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    constants = (SRC / "10_constants.js").read_text(encoding="utf-8")
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+    head = card[: card.index("class DeepalCard extends")]
+    script = f"""
+const vm = require("vm");
+const sandbox = {{}};
+vm.createContext(sandbox);
+vm.runInContext({json.dumps(constants + "\n" + head)} + "\\n;globalThis.__merge = mergeCardConfig;", sandbox);
+const defaults = sandbox.__merge({{}}, {{}});
+if (defaults.refresh_button !== true) process.exit(1);
+if (!defaults.buttons.includes("seats")) process.exit(1);
+if (defaults.info_order.length !== 14) process.exit(1);
+const old = sandbox.__merge({{ info: ["battery", "odometer"] }}, {{}});
+if (old.info.join(",") !== "battery,odometer") process.exit(2);
+if (old.info_order[0] !== "battery" || old.info_order[1] !== "odometer") process.exit(3);
+const explicit = sandbox.__merge({{ info_order: ["range", "battery"] }}, {{}});
+if (explicit.info_order[0] !== "range" || explicit.info_order[1] !== "battery") process.exit(4);
+const off = sandbox.__merge({{}}, {{ refresh_button: false }});
+if (off.refresh_button !== false) process.exit(5);
+"""
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 # --- Profile layouts and assets ------------------------------------------

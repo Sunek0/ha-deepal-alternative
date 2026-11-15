@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit; run scripts/build_panel.py after changing src/ or texts/.
-const PANEL_VERSION = "1.7.0";
+const PANEL_VERSION = "1.8.0-b2";
 
 // ---- 10_constants.js ----
 // Constants shared by the card modules. The build script prepends the
@@ -115,7 +115,17 @@ const PANEL_MODEL_LAYOUTS = {
         charging: "s05/bateria/chargingLineOn.png",
       },
     },
-    seats: null,
+    seats: {
+      base: "s05/asientos/carSeat.png",
+      crop: { x: 190, y: 300, w: 745, h: 560 },
+      spots: [
+        { key: "seat_heating_front_left", icon: "seat_heating", x: 32, y: 57.5 },
+        { key: "seat_ventilation_front_left", icon: "seat_ventilation", x: 20.5, y: 57.5 },
+        { key: "steering_wheel_heating", icon: "steering", x: 26, y: 31 },
+        { key: "seat_ventilation_front_right", icon: "seat_ventilation", x: 66, y: 57.5 },
+        { key: "seat_heating_front_right", icon: "seat_heating", x: 77.5, y: 57.5 },
+      ],
+    },
     hero: null,
     animations: {},
   },
@@ -157,11 +167,20 @@ const PANEL_MODEL_LAYOUTS = {
         charging: "s07/bateria/chargingLineOn.png",
       },
     },
-    seats: { base: "s07/asientos/carSeat.png" },
+    seats: {
+      base: "s07/asientos/carSeat.png",
+      crop: { x: 190, y: 300, w: 745, h: 560 },
+      spots: [
+        { key: "seat_heating_front_left", icon: "seat_heating", x: 32, y: 58 },
+        { key: "seat_ventilation_front_left", icon: "seat_ventilation", x: 20.5, y: 58 },
+        { key: "steering_wheel_heating", icon: "steering", x: 27, y: 31 },
+        { key: "seat_ventilation_front_right", icon: "seat_ventilation", x: 66, y: 58 },
+        { key: "seat_heating_front_right", icon: "seat_heating", x: 77.5, y: 58 },
+      ],
+    },
     hero: "s07/side/carDefault.png",
     animations: {
       climate_on: "s07/anim/anim_air_start_left.webm",
-      seat_vent: "s07/anim/anim_seat_wind_left.webm",
       charging_on: "s07/anim/anim_battery_capacity.webm",
     },
   },
@@ -391,7 +410,7 @@ const PANEL_TEXTS = {
     "image_style": "Fahrzeugbild",
     "info": "Informationen",
     "inside_pm25": "PM2,5",
-    "inside_temperature": "Innen",
+    "inside_temperature": "Innentemperatur",
     "isometric": "Isometrisch",
     "key_battery_low": "Schlüsselbatterie",
     "language": "Sprache",
@@ -401,7 +420,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Türen verriegeln",
     "locked": "Verriegelt",
     "low_beam": "Abblendlicht",
-    "mileage_yesterday": "Gestern",
+    "mileage_yesterday": "Fahrt von gestern",
     "model": "Modell",
     "more": "Mehr",
     "move_down": "Nach unten",
@@ -419,7 +438,7 @@ const PANEL_TEXTS = {
     "open": "Offen",
     "open_trunk": "Kofferraum öffnen",
     "open_windows": "Fenster öffnen",
-    "outside_temperature": "Außen",
+    "outside_temperature": "Außentemperatur",
     "photo": "Fotos",
     "planta": "Draufsicht",
     "plate": "Kennzeichen",
@@ -429,6 +448,7 @@ const PANEL_TEXTS = {
     "rear_left": "Hinten links",
     "rear_right": "Hinten rechts",
     "refresh": "Aktualisieren",
+    "refresh_done": "Daten aktualisiert",
     "refresh_hint": "Neue Daten vom Fahrzeug anfordern",
     "remaining_time": "Restzeit",
     "seat_heating": "Heizung",
@@ -476,7 +496,7 @@ const PANEL_TEXTS = {
     "toast_position": "Position der Meldungen",
     "toasts": "Bildschirmmeldungen",
     "top": "Oben",
-    "trip_mileage": "Fahrt",
+    "trip_mileage": "Letzte Fahrt",
     "trunk": "Kofferraum",
     "unavailable": "Nicht verfügbar",
     "unknown": "Unbekannt",
@@ -595,7 +615,7 @@ const PANEL_TEXTS = {
     "image_style": "Vehicle image",
     "info": "Information",
     "inside_pm25": "PM2.5",
-    "inside_temperature": "Inside",
+    "inside_temperature": "Inside temperature",
     "isometric": "Isometric",
     "key_battery_low": "Key fob battery",
     "language": "Language",
@@ -605,7 +625,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Lock doors",
     "locked": "Locked",
     "low_beam": "Low beam",
-    "mileage_yesterday": "Yesterday",
+    "mileage_yesterday": "Yesterday's trip",
     "model": "Model",
     "more": "More",
     "move_down": "Move down",
@@ -623,7 +643,7 @@ const PANEL_TEXTS = {
     "open": "Open",
     "open_trunk": "Open trunk",
     "open_windows": "Open windows",
-    "outside_temperature": "Outside",
+    "outside_temperature": "Outside temperature",
     "photo": "Photos",
     "planta": "Plant",
     "plate": "Plate",
@@ -633,6 +653,7 @@ const PANEL_TEXTS = {
     "rear_left": "Rear left",
     "rear_right": "Rear right",
     "refresh": "Refresh",
+    "refresh_done": "Data refreshed",
     "refresh_hint": "Request fresh data from the vehicle",
     "remaining_time": "Time left",
     "seat_heating": "Heating",
@@ -680,7 +701,7 @@ const PANEL_TEXTS = {
     "toast_position": "Message position",
     "toasts": "On-screen messages",
     "top": "Top",
-    "trip_mileage": "Trip",
+    "trip_mileage": "Last trip",
     "trunk": "Trunk",
     "unavailable": "Unavailable",
     "unknown": "Unknown",
@@ -799,7 +820,7 @@ const PANEL_TEXTS = {
     "image_style": "Imagen del coche",
     "info": "Información",
     "inside_pm25": "PM2.5",
-    "inside_temperature": "Interior",
+    "inside_temperature": "Temperatura interior",
     "isometric": "Isométrico",
     "key_battery_low": "Pila de la llave",
     "language": "Idioma",
@@ -809,7 +830,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Cerrar puertas",
     "locked": "Cerrado",
     "low_beam": "Cortas",
-    "mileage_yesterday": "Ayer",
+    "mileage_yesterday": "Trayecto de ayer",
     "model": "Modelo",
     "more": "Más",
     "move_down": "Bajar",
@@ -819,7 +840,7 @@ const PANEL_TEXTS = {
     "none": "Sin márgenes",
     "normal": "Normal",
     "not_plugged": "Cable desconectado",
-    "odometer": "Kilómetros",
+    "odometer": "Kilometraje",
     "off": "Apagado",
     "offline": "Sin conexión",
     "on": "Encendido",
@@ -827,7 +848,7 @@ const PANEL_TEXTS = {
     "open": "Abrir",
     "open_trunk": "Abrir maletero",
     "open_windows": "Bajar ventanillas",
-    "outside_temperature": "Exterior",
+    "outside_temperature": "Temperatura exterior",
     "photo": "Fotos",
     "planta": "Planta",
     "plate": "Matrícula",
@@ -837,6 +858,7 @@ const PANEL_TEXTS = {
     "rear_left": "Tras. izq.",
     "rear_right": "Tras. der.",
     "refresh": "Actualizar",
+    "refresh_done": "Datos actualizados",
     "refresh_hint": "Pide datos nuevos al coche",
     "remaining_time": "Tiempo restante",
     "seat_heating": "Calefacción",
@@ -884,7 +906,7 @@ const PANEL_TEXTS = {
     "toast_position": "Posición de los mensajes",
     "toasts": "Mensajes en pantalla",
     "top": "Arriba",
-    "trip_mileage": "Trayecto",
+    "trip_mileage": "Último trayecto",
     "trunk": "Maletero",
     "unavailable": "No disponible",
     "unknown": "Desconocido",
@@ -1003,7 +1025,7 @@ const PANEL_TEXTS = {
     "image_style": "Image du véhicule",
     "info": "Informations",
     "inside_pm25": "PM2,5",
-    "inside_temperature": "Intérieur",
+    "inside_temperature": "Température intérieure",
     "isometric": "Isométrique",
     "key_battery_low": "Pile de la clé",
     "language": "Langue",
@@ -1013,7 +1035,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Verrouiller les portes",
     "locked": "Verrouillé",
     "low_beam": "Feux de croisement",
-    "mileage_yesterday": "Hier",
+    "mileage_yesterday": "Trajet d'hier",
     "model": "Modèle",
     "more": "Plus",
     "move_down": "Descendre",
@@ -1031,7 +1053,7 @@ const PANEL_TEXTS = {
     "open": "Ouvert",
     "open_trunk": "Ouvrir le coffre",
     "open_windows": "Ouvrir les vitres",
-    "outside_temperature": "Extérieur",
+    "outside_temperature": "Température extérieure",
     "photo": "Photos",
     "planta": "Vue du dessus",
     "plate": "Plaque",
@@ -1041,6 +1063,7 @@ const PANEL_TEXTS = {
     "rear_left": "Arrière gauche",
     "rear_right": "Arrière droit",
     "refresh": "Actualiser",
+    "refresh_done": "Données actualisées",
     "refresh_hint": "Demander des données récentes au véhicule",
     "remaining_time": "Temps restant",
     "seat_heating": "Chauffage",
@@ -1088,7 +1111,7 @@ const PANEL_TEXTS = {
     "toast_position": "Position des messages",
     "toasts": "Messages à l'écran",
     "top": "Haut",
-    "trip_mileage": "Trajet",
+    "trip_mileage": "Dernier trajet",
     "trunk": "Coffre",
     "unavailable": "Indisponible",
     "unknown": "Inconnu",
@@ -1207,7 +1230,7 @@ const PANEL_TEXTS = {
     "image_style": "Immagine del veicolo",
     "info": "Informazioni",
     "inside_pm25": "PM2,5",
-    "inside_temperature": "Interno",
+    "inside_temperature": "Temperatura interna",
     "isometric": "Isometrico",
     "key_battery_low": "Batteria della chiave",
     "language": "Lingua",
@@ -1217,7 +1240,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Blocca le porte",
     "locked": "Bloccato",
     "low_beam": "Anabbaglianti",
-    "mileage_yesterday": "Ieri",
+    "mileage_yesterday": "Viaggio di ieri",
     "model": "Modello",
     "more": "Altro",
     "move_down": "Sposta giù",
@@ -1235,7 +1258,7 @@ const PANEL_TEXTS = {
     "open": "Aperto",
     "open_trunk": "Apri bagagliaio",
     "open_windows": "Apri finestrini",
-    "outside_temperature": "Esterno",
+    "outside_temperature": "Temperatura esterna",
     "photo": "Foto",
     "planta": "Vista dall'alto",
     "plate": "Targa",
@@ -1245,6 +1268,7 @@ const PANEL_TEXTS = {
     "rear_left": "Posteriore sinistro",
     "rear_right": "Posteriore destro",
     "refresh": "Aggiorna",
+    "refresh_done": "Dati aggiornati",
     "refresh_hint": "Richiedi dati aggiornati al veicolo",
     "remaining_time": "Tempo rimanente",
     "seat_heating": "Riscaldamento",
@@ -1292,7 +1316,7 @@ const PANEL_TEXTS = {
     "toast_position": "Posizione dei messaggi",
     "toasts": "Messaggi sullo schermo",
     "top": "In alto",
-    "trip_mileage": "Viaggio",
+    "trip_mileage": "Ultimo viaggio",
     "trunk": "Bagagliaio",
     "unavailable": "Non disponibile",
     "unknown": "Sconosciuto",
@@ -1411,7 +1435,7 @@ const PANEL_TEXTS = {
     "image_style": "Imagem do veículo",
     "info": "Informações",
     "inside_pm25": "PM2,5",
-    "inside_temperature": "Interior",
+    "inside_temperature": "Temperatura interior",
     "isometric": "Isométrico",
     "key_battery_low": "Bateria da chave",
     "language": "Idioma",
@@ -1421,7 +1445,7 @@ const PANEL_TEXTS = {
     "lock_doors": "Trancar portas",
     "locked": "Trancado",
     "low_beam": "Médios",
-    "mileage_yesterday": "Ontem",
+    "mileage_yesterday": "Viagem de ontem",
     "model": "Modelo",
     "more": "Mais",
     "move_down": "Mover para baixo",
@@ -1439,7 +1463,7 @@ const PANEL_TEXTS = {
     "open": "Aberto",
     "open_trunk": "Abrir bagageira",
     "open_windows": "Abrir janelas",
-    "outside_temperature": "Exterior",
+    "outside_temperature": "Temperatura exterior",
     "photo": "Fotos",
     "planta": "Vista de cima",
     "plate": "Matrícula",
@@ -1449,6 +1473,7 @@ const PANEL_TEXTS = {
     "rear_left": "Traseiro esquerdo",
     "rear_right": "Traseiro direito",
     "refresh": "Atualizar",
+    "refresh_done": "Dados atualizados",
     "refresh_hint": "Pedir dados novos ao veículo",
     "remaining_time": "Tempo restante",
     "seat_heating": "Aquecimento",
@@ -1496,7 +1521,7 @@ const PANEL_TEXTS = {
     "toast_position": "Posição das mensagens",
     "toasts": "Mensagens no ecrã",
     "top": "Em cima",
-    "trip_mileage": "Viagem",
+    "trip_mileage": "Última viagem",
     "trunk": "Bagageira",
     "unavailable": "Indisponível",
     "unknown": "Desconhecido",
@@ -1720,6 +1745,18 @@ const PANEL_CSS = `
   gap: var(--dp-space-sm);
 }
 
+.climate-metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dp-space-sm);
+}
+
+.climate-metrics .metric {
+  flex: none;
+  width: min(100%, 220px);
+}
+
 .metric {
   display: flex;
   flex-direction: column;
@@ -1770,6 +1807,70 @@ const PANEL_CSS = `
 .stepper.large button { width: var(--dp-touch); height: var(--dp-touch); }
 .stepper.large .value { font-size: 28px; min-width: 84px; }
 
+/* --- Temperature wheel ------------------------------------------------ */
+
+.temp-wheel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.temp-wheel-step,
+.temp-wheel-slot {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.temp-wheel-step {
+  border: 0;
+  background: transparent;
+  color: var(--dp-text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.temp-wheel-step.near { opacity: 0.82; }
+.temp-wheel-step.far { opacity: 0.55; }
+.temp-wheel-step:hover {
+  background: var(--dp-surface-2);
+  color: var(--dp-text);
+}
+
+.temp-wheel-current {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--dp-accent);
+  color: var(--dp-on-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.temp-wheel-current .value {
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.temp-wheel-current small {
+  margin-left: 1px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.temp-wheel-slot { display: block; }
+
 .control {
   display: flex;
   flex-direction: column;
@@ -1818,12 +1919,37 @@ const PANEL_CSS = `
   transform: translateY(-50%) rotate(-90deg);
 }
 .stage-compact { aspect-ratio: 3 / 2; }
-.stage-climate { aspect-ratio: 1125 / 642; }
+.stage-climate {
+  aspect-ratio: 1125 / 642;
+  background: radial-gradient(ellipse at 50% 42%, #20242c 0%, #07080b 78%);
+}
+.stage-climate .air { animation: dp-air 3.2s ease-in-out infinite; }
+@keyframes dp-air {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-climate .air { animation: none; }
+}
 .stage-charging { aspect-ratio: 3 / 2; }
 .stage-seats {
   aspect-ratio: 3 / 4;
   max-width: 460px;
   margin: 0 auto;
+}
+/* Front-seat crop used by the vehicle dialog. The image is larger than the
+   stage and offset so the front seats and the steering wheel fill it. */
+.stage-seat-map {
+  container-type: inline-size;
+  background: radial-gradient(ellipse at 50% 45%, #2e3642 0%, #0b0d12 80%);
+}
+.stage-seat-map .seats-base {
+  inset: auto;
+  max-width: none;
+  height: auto;
+  width: var(--seat-img-width);
+  left: var(--seat-img-left);
+  top: var(--seat-img-top);
 }
 
 /* --- Animation layer --------------------------------------------------- */
@@ -1869,6 +1995,54 @@ const PANEL_CSS = `
 .stage .open-door-outline {
   opacity: 0.92;
 }
+
+/* --- Seat hotspots ------------------------------------------------------ */
+
+.seat-spot {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: clamp(32px, 9.8cqw, 62px);
+  height: clamp(32px, 9.8cqw, 62px);
+  padding: 0;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(10, 11, 15, 0.68);
+  color: #fff;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition: transform 0.12s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.seat-spot.hot { --seat-color: #fb923c; }
+.seat-spot.cool { --seat-color: #38bdf8; }
+.seat-spot.steer { --seat-color: var(--dp-accent); }
+
+.seat-spot ha-icon { --mdc-icon-size: clamp(17px, 4.4cqw, 28px); color: rgba(255, 255, 255, 0.82); }
+.seat-spot.on {
+  border-color: color-mix(in srgb, var(--seat-color) 72%, transparent);
+  background: color-mix(in srgb, var(--seat-color) 22%, rgba(10, 11, 15, 0.78));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--seat-color) 35%, transparent);
+}
+.seat-spot.on ha-icon { color: var(--seat-color); }
+.seat-spot:active { transform: translate(-50%, -50%) scale(0.94); }
+
+.seat-level { display: flex; gap: 3px; }
+.seat-level i {
+  width: clamp(7px, 1.6cqw, 10px);
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.seat-level i.on { background: var(--seat-color); }
+.seat-spot.steer .seat-level { display: none; }
 
 .vehicle-photo {
   display: block;
@@ -2046,11 +2220,28 @@ const PANEL_CSS = `
 }
 
 .hero-actions .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 36px;
   height: 36px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 50%;
   background: rgba(0, 0, 0, 0.38);
   color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.14s ease, background 0.2s ease;
 }
+
+.hero-actions .icon-button ha-icon { --mdc-icon-size: 20px; }
+.hero-actions .icon-button:active { transform: scale(0.92); }
+
+.hero-actions .icon-button[disabled] { opacity: 0.75; cursor: default; }
+.hero-actions .icon-button.pending ha-icon { animation: dp-spin 1s linear infinite; }
+@keyframes dp-spin { to { transform: rotate(360deg); } }
 
 .hero-actions .hero-cloud {
   display: inline-flex;
@@ -2185,6 +2376,7 @@ const PANEL_CSS = `
 
 .action:hover { filter: brightness(1.07); }
 .action ha-icon { --mdc-icon-size: 24px; }
+.action .action-icon { width: 24px; height: 24px; flex: none; color: currentColor; }
 .action.on { background: var(--dp-accent); color: var(--dp-on-text); }
 .action.warn { background: var(--dp-warn); color: var(--dp-on-text); }
 .action:disabled { opacity: 0.45; cursor: default; }
@@ -2193,8 +2385,10 @@ const PANEL_CSS = `
 .action.on .action-value, .action.warn .action-value { color: var(--dp-on-text); }
 .action.size-s { min-height: 60px; }
 .action.size-s ha-icon { --mdc-icon-size: 20px; }
+.action.size-s .action-icon { width: 20px; height: 20px; }
 .action.size-l { min-height: 92px; }
 .action.size-l ha-icon { --mdc-icon-size: 30px; }
+.action.size-l .action-icon { width: 30px; height: 30px; }
 
 .actions-more-toggle {
   display: flex;
@@ -2248,11 +2442,13 @@ deepal-card-settings { display: block; width: 100%; }
   inset: 0;
   z-index: 20;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   padding: var(--dp-space-md);
   background: rgba(0, 0, 0, 0.58);
 }
+
+.settings-sheet > deepal-card-settings { width: min(680px, 100%); }
 
 .settings-panel {
   display: flex;
@@ -2260,6 +2456,7 @@ deepal-card-settings { display: block; width: 100%; }
   width: min(680px, 100%);
   max-height: 88vh;
   overflow: hidden;
+  box-sizing: border-box;
   border: 1px solid var(--dp-line);
   border-radius: var(--dp-radius);
   background: var(--dp-surface);
@@ -2489,7 +2686,25 @@ deepal-card-settings { display: block; width: 100%; }
   font-size: 17px;
 }
 
+.modal-tabs {
+  flex: none;
+  margin: var(--dp-space-md) var(--dp-space-lg) 0;
+  background: var(--dp-surface-2);
+}
+
+.modal-tabs .segment { min-width: 0; }
+.modal-tabs .segment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dp-space-md);
   padding: var(--dp-space-md) var(--dp-space-lg) var(--dp-space-xl);
   overflow-y: auto;
 }
@@ -2524,36 +2739,95 @@ deepal-card-settings { display: block; width: 100%; }
   letter-spacing: 0.02em;
 }
 
-.tire-grid {
+.tire-stage-overlay {
+  position: relative;
+  width: 100%;
+}
+
+.tire-stage-overlay .stage {
+  width: 100%;
+  background: radial-gradient(ellipse at 50% 50%, #20242c 0%, #07080b 82%);
+}
+
+.tire-annotations {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.tire-annotation {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  line-height: 1.15;
+}
+
+.tire-annotation .tire-label,
+.tire-annotation .tire-value {
+  color: #fff;
+  text-shadow:
+    0 1px 6px rgba(0, 0, 0, 0.92),
+    0 0 2px rgba(0, 0, 0, 0.92);
+}
+
+.tire-annotation .tire-label {
+  font-size: clamp(10px, 1.6vw, 13px);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.tire-annotation .tire-value {
+  font-size: clamp(13px, 2.2vw, 18px);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tire-annotation .tire-value small {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.tire-annotation.warn .tire-label,
+.tire-annotation.warn .tire-value {
+  color: var(--dp-warn);
+}
+
+.tire-text-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--dp-space-sm);
-}
-
-.tire-card {
-  display: flex;
-  align-items: center;
   gap: var(--dp-space-md);
-  min-height: 72px;
-  padding: var(--dp-space-md);
-  border: 1px solid var(--dp-line);
-  border-radius: var(--dp-radius-sm);
-  background: var(--dp-surface-2);
+  text-align: center;
 }
 
-.tire-card ha-icon {
-  --mdc-icon-size: 28px;
+.tire-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.tire-text .tire-label {
+  font-size: 13px;
   color: var(--dp-text-2);
 }
 
-.tire-card.warn {
-  border-color: var(--dp-warn);
-  background: color-mix(in srgb, var(--dp-warn) 16%, var(--dp-surface-2));
+.tire-text .tire-value {
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.tire-card.warn ha-icon { color: var(--dp-warn); }
-.tire-label { font-size: 12px; color: var(--dp-text-2); }
-.tire-value { font-size: 18px; font-weight: 700; }
+.tire-text .tire-value small {
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--dp-text-2);
+}
+
+.tire-text.warn .tire-label,
+.tire-text.warn .tire-value {
+  color: var(--dp-warn);
+}
 
 /* --- Editor ------------------------------------------------------------ */
 
@@ -2594,6 +2868,20 @@ deepal-card-settings { display: block; width: 100%; }
   .hero-range .big { font-size: 30px; }
   deepal-card-settings { display: block; width: 100%; }
 
+  .modal-sheet { align-items: flex-end; padding: 0; }
+  .modal-panel {
+    width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--dp-radius) var(--dp-radius) 0 0;
+    border-bottom: 0;
+  }
+  .modal-head { padding-top: max(var(--dp-space-md), env(safe-area-inset-top, 0px)); }
+  .modal-tabs { margin-inline: var(--dp-space-md); }
+  .modal-tabs .segment { gap: 4px; padding: 6px 4px; font-size: 12px; }
+  .modal-tabs .segment ha-icon { --mdc-icon-size: 16px; }
+  .modal-body { padding-bottom: calc(var(--dp-space-xl) + env(safe-area-inset-bottom, 0px)); }
+  .modal-columns { grid-template-columns: minmax(0, 1fr); }
+
 .settings-sheet { padding: 0; align-items: stretch; }
   .settings-panel { width: 100%; max-height: 100vh; border-radius: 0; }
   .settings-body { padding-bottom: 48px; }
@@ -2615,9 +2903,10 @@ const PANEL_ICONS = {
   horn: "mdi:bullhorn",
   flash_and_honk: "mdi:car-light-alert",
   window: "mdi:window-closed-variant",
-  trunk: "mdi:car-back",
+  trunk: "deepal:car-trunk",
   hood: "mdi:car",
   doors: "mdi:car-door",
+  door_lock: "mdi:car-door-lock",
   climate: "mdi:air-conditioner",
   charging: "mdi:battery-charging",
   battery: "mdi:car-battery",
@@ -2627,6 +2916,7 @@ const PANEL_ICONS = {
   range: "mdi:map-marker-distance",
   seat_heating: "mdi:car-seat-heater",
   seat_ventilation: "mdi:car-seat-cooler",
+  seat: "mdi:car-seat",
   steering: "mdi:steering",
   cloud: "mdi:cloud-check",
   cloud_off: "mdi:cloud-off-outline",
@@ -2656,6 +2946,20 @@ const PANEL_ICONS = {
   battery_level: "mdi:battery",
   lock_state: "mdi:lock-check",
   power: "mdi:power",
+};
+
+// Custom line icons that the bundled MDI set does not provide.
+// Trunk: Atlas Icons "Open Car Trunk" (MIT).
+const PANEL_ICON_SVGS = {
+  "deepal:car-trunk": `<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M13.89 7.28H8.15a1.92 1.92 0 0 0-1.53.77L4.33 11.11l-2.87 1V17.8H4.33a1.91 1.91 0 1 1 3.82 0h6.7a1.91 1.91 0 0 1 3.82 0H22.5V13l-4.78-1.91-2.3-3.06a1.92 1.92 0 0 0-1.53-.75Z"/>
+    <circle cx="16.76" cy="17.8" r="1.91"/>
+    <circle cx="6.24" cy="17.8" r="1.91"/>
+    <line x1="20.1" y1="12.07" x2="7.2" y2="12.07"/>
+    <line x1="20.59" y1="14.93" x2="22.5" y2="14.93"/>
+    <line x1="11.98" y1="12.07" x2="11.98" y2="9.2"/>
+    <polyline points="0.5 7.28 2.41 7.28 4.33 11.11"/>
+  </g>`,
 };
 
 // ---- 40_helpers.js ----
@@ -3137,20 +3441,6 @@ function lockStateFor(hass, vehicle) {
   return null;
 }
 
-/** Translated charge status, falling back to the charging and plug flags. */
-function chargeStatusText(hass, vehicle, t) {
-  const statusId = entityFor(vehicle, "sensor", "charge_status");
-  const status = stateFor(hass, statusId);
-  if (status) return formatState(hass, statusId);
-  if (isOn(hass, entityFor(vehicle, "binary_sensor", "charging"))) {
-    return t("charging");
-  }
-  if (isOn(hass, entityFor(vehicle, "binary_sensor", "charger_plugged"))) {
-    return t("plugged");
-  }
-  return t("not_plugged");
-}
-
 // ---- 50_card.js ----
 // Shared card base: vehicle discovery, service dispatch, state guards and
 // render-key handling. The single dashboard card (70_card.js) provides the
@@ -3336,6 +3626,17 @@ class DeepalCardBase extends HTMLElement {
         });
         return;
       }
+      case "temp-set": {
+        const id = entity("climate", "cabin");
+        if (!id) return;
+        const value = Number(target.dataset.temp);
+        if (!Number.isFinite(value)) return;
+        this._callService("climate", "set_temperature", {
+          entity_id: id,
+          temperature: value,
+        });
+        return;
+      }
       case "number-step": {
         const id = entity("number", target.dataset.key);
         if (!id) return;
@@ -3349,6 +3650,20 @@ class DeepalCardBase extends HTMLElement {
           max,
           Math.max(min, Number(state.state) + delta),
         );
+        this._callService("number", "set_value", { entity_id: id, value });
+        return;
+      }
+      case "seat-cycle": {
+        const id = entity("number", target.dataset.key);
+        if (!id) return;
+        const state = stateFor(hass, id);
+        const current = state ? Number(state.state) : 0;
+        const max = Number(state?.attributes?.max ?? 3) || 3;
+        const value = Number.isFinite(current)
+          ? current >= max
+            ? 0
+            : current + 1
+          : 1;
         this._callService("number", "set_value", { entity_id: id, value });
         return;
       }
@@ -3515,20 +3830,9 @@ DeepalCardBase.prototype._transitionStates = function (vehicle) {
   const entity = (domain, key) => entityFor(vehicle, domain, key);
   const climateId = entity("climate", "cabin");
   const climateState = climateId ? stateFor(hass, climateId) : null;
-  const seatOn = [
-    "seat_ventilation_front_left",
-    "seat_ventilation_front_right",
-    "seat_ventilation_rear_left",
-    "seat_ventilation_rear_right",
-  ].some((key) => {
-    const id = entity("number", key);
-    const state = id ? stateFor(hass, id) : null;
-    return state ? Number(state.state) > 0 : false;
-  });
   return {
     climate_on: Boolean(climateState && climateState.state !== "off"),
     charging_on: isOn(hass, entity("binary_sensor", "charging")),
-    seat_vent: seatOn,
   };
 };
 
@@ -3566,9 +3870,13 @@ DeepalCardBase.prototype._syncAnimations = function () {
 
   for (const [key, source] of Object.entries(animations)) {
     const video = this._animationVideo(vehicle, key, source);
-    const slot = this.shadowRoot.querySelector(
-      `.anim-slot[data-anim="${key}"]`,
-    );
+    const slots = [
+      ...this.shadowRoot.querySelectorAll(`.anim-slot[data-anim="${key}"]`),
+    ];
+    const slot =
+      slots.find(
+        (candidate) => this._modal && candidate.closest(".modal-body"),
+      ) || slots[0];
     if (slot && this._animationsEnabled()) {
       if (video.parentElement !== slot) slot.appendChild(video);
     } else if (video.parentElement !== host) {
@@ -3651,10 +3959,9 @@ DeepalCardBase.prototype._startAnimationProbe = function (source) {
 
 // ---- 61_climate.js ----
 // Climate view, built from the shared design system: cabin climate (target
-// temperature, on/off and inside temperature), seat heating and ventilation
-// for the positions the vehicle exposes, steering wheel heating and the
-// ambient readings when available. Every control hides itself when the
-// vehicle does not expose its entity.
+// temperature and on/off) and the cabin humidity when available. Seat and
+// steering-wheel controls live in the seats section. Every control hides
+// itself when the vehicle does not expose its entity.
 
 DeepalCardBase.prototype._renderClimate = function (vehicle) {
   const hass = this._hass;
@@ -3669,8 +3976,6 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
 
   let climateSection = "";
   if (climateId) {
-    const target = climateState?.attributes?.temperature;
-    const inside = formatState(hass, entity("sensor", "inside_temperature"));
     const humidity = formatState(hass, entity("sensor", "cabin_humidity"));
     const layout = layoutFor(vehicle)?.climate;
     const stageHtml = layout
@@ -3687,13 +3992,17 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
           <span class="section-title">${escapeHtml(t("climate"))}</span>
         </div>
         ${stageHtml}
-        <div class="center">
-          <div class="stepper large">
-            <button data-action="temp-step" data-delta="-0.5" aria-label="-">&minus;</button>
-            <span class="value">${escapeHtml(target != null ? `${target} °C` : "—")}</span>
-            <button data-action="temp-step" data-delta="0.5" aria-label="+">+</button>
-          </div>
-        </div>
+        ${
+          humidity
+            ? `<div class="metrics climate-metrics">
+                <div class="metric">
+                  <span class="label">${escapeHtml(t("cabin_humidity"))}</span>
+                  <span class="value">${escapeHtml(humidity)}</span>
+                </div>
+              </div>`
+            : ""
+        }
+        ${climateWheelHtml(this, vehicle)}
         <div class="segmented">
           <button class="segment" aria-pressed="${climateOn}" data-action="climate-mode" data-mode="heat_cool">
             <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon>
@@ -3704,121 +4013,49 @@ DeepalCardBase.prototype._renderClimate = function (vehicle) {
             <span>${escapeHtml(t("climate_off"))}</span>
           </button>
         </div>
-        ${
-          inside || humidity
-            ? `<div class="metrics">
-                ${
-                  inside
-                    ? `<div class="metric">
-                        <span class="label">${escapeHtml(t("inside_temperature"))}</span>
-                        <span class="value">${escapeHtml(inside)}</span>
-                      </div>`
-                    : ""
-                }
-                ${
-                  humidity
-                    ? `<div class="metric">
-                        <span class="label">${escapeHtml(t("cabin_humidity"))}</span>
-                        <span class="value">${escapeHtml(humidity)}</span>
-                      </div>`
-                    : ""
-                }
-              </div>`
-            : ""
-        }
       </div>`;
   }
 
-  // --- Seats (front always, rear when exposed) and steering wheel ---------
-
-  const seatControl = (key, label) => {
-    const id = entity("number", key);
-    if (!id) return "";
-    const state = stateFor(hass, id);
-    return `
-      <div class="control">
-        <span class="label">${escapeHtml(label)}</span>
-        <div class="stepper">
-          <button data-action="number-step" data-key="${key}" data-delta="-1" aria-label="-">&minus;</button>
-          <span class="value">${escapeHtml(state ? state.state : "—")}</span>
-          <button data-action="number-step" data-key="${key}" data-delta="1" aria-label="+">+</button>
-        </div>
-      </div>`;
-  };
-  const seatControls = [
-    seatControl(
-      "seat_heating_front_left",
-      `${t("seat_heating")} · ${t("front_left")}`,
-    ),
-    seatControl(
-      "seat_heating_front_right",
-      `${t("seat_heating")} · ${t("front_right")}`,
-    ),
-    seatControl(
-      "seat_ventilation_front_left",
-      `${t("seat_ventilation")} · ${t("front_left")}`,
-    ),
-    seatControl(
-      "seat_ventilation_front_right",
-      `${t("seat_ventilation")} · ${t("front_right")}`,
-    ),
-    seatControl(
-      "seat_heating_rear_left",
-      `${t("seat_heating")} · ${t("rear_left")}`,
-    ),
-    seatControl(
-      "seat_heating_rear_right",
-      `${t("seat_heating")} · ${t("rear_right")}`,
-    ),
-    seatControl(
-      "seat_ventilation_rear_left",
-      `${t("seat_ventilation")} · ${t("rear_left")}`,
-    ),
-    seatControl(
-      "seat_ventilation_rear_right",
-      `${t("seat_ventilation")} · ${t("rear_right")}`,
-    ),
-  ].join("");
-
-  const steeringId = entity("switch", "steering_wheel_heating");
-  const steeringOn = steeringId ? isOn(hass, steeringId) : false;
-  const steeringTile = steeringId
-    ? `<button class="tile ${steeringOn ? "on" : ""}" data-action="toggle-switch" data-key="steering_wheel_heating">
-        <ha-icon icon="${PANEL_ICONS.steering}"></ha-icon>
-        <span class="tile-body">
-          <span class="tile-label">${escapeHtml(t("steering_wheel"))}</span>
-          <span class="tile-value">${escapeHtml(steeringOn ? t("on") : t("off"))}</span>
-        </span>
-      </button>`
-    : "";
-
-  const seatsLayout = layoutFor(vehicle)?.seats;
-  const seatsStage = seatsLayout
-    ? `<div class="stage stage-seats">
-        <img src="${assetUrl(seatsLayout.base, vehicle)}" alt="">
-        <span class="anim-slot" data-anim="seat_vent"></span>
-      </div>`
-    : "";
-
-  const seatsSection =
-    seatControls || steeringTile
-      ? `<div class="section">
-          <div class="section-head">
-            <ha-icon icon="${PANEL_ICONS.seat_heating}"></ha-icon>
-            <span class="section-title">${escapeHtml(t("seats"))}</span>
-          </div>
-          ${seatsStage}
-          ${seatControls ? `<div class="steppers">${seatControls}</div>` : ""}
-          ${steeringTile ? `<div class="tiles">${steeringTile}</div>` : ""}
-        </div>`
-      : "";
-
-  // --- Ambience readings live inside the climate section (humidity next to
-  // the inside temperature); no separate section.
-
-  if (!climateSection && !seatsSection) return "";
-  return `${climateSection}${seatsSection}`;
+  return climateSection;
 };
+
+function climateWheelHtml(card, vehicle) {
+  const climateId = entityFor(vehicle, "climate", "cabin");
+  const state = stateFor(card._hass, climateId);
+  if (!state) return "";
+  const attributes = state.attributes || {};
+  const current = Number(attributes.temperature);
+  if (!Number.isFinite(current)) return "";
+  const step =
+    Number(attributes.target_temp_step ?? attributes.step ?? 0.5) || 0.5;
+  const min = Number(attributes.min_temp ?? 16);
+  const max = Number(attributes.max_temp ?? 32);
+  const values = [
+    current - step * 2,
+    current - step,
+    current,
+    current + step,
+    current + step * 2,
+  ];
+  const cells = values.map((value, index) => {
+    const rounded = Math.round(value * 10) / 10;
+    if (index === 2) {
+      return `<div class="temp-wheel-current" aria-live="polite"><span class="value">${rounded.toFixed(
+        1,
+      )}<small>°C</small></span></div>`;
+    }
+    if (value < min - 0.001 || value > max + 0.001) {
+      return `<span class="temp-wheel-slot" aria-hidden="true"></span>`;
+    }
+    const distance = index === 1 || index === 3 ? "near" : "far";
+    return `<button class="temp-wheel-step ${distance}" data-action="temp-set" data-temp="${rounded}" aria-label="${escapeHtml(
+      rounded.toFixed(1),
+    )} °C">${rounded.toFixed(1)}</button>`;
+  });
+  return `<div class="temp-wheel" role="group" aria-label="${escapeHtml(
+    card._t("target_temperature"),
+  )}">${cells.join("")}</div>`;
+}
 
 // ---- 62_charging.js ----
 // Charging view, built from the shared design system: battery and session
@@ -4046,6 +4283,365 @@ DeepalCardBase.prototype._renderDriving = function (vehicle) {
   return `${driving}${ambience}`;
 };
 
+// ---- 65_modal.js ----
+// The vehicle dialog: one sheet with the climate, seats and tyres tabs. The
+// card opens it from the climate, seats and tyres actions; the tab order is
+// fixed and only tabs whose data or artwork exists are offered.
+
+const VEHICLE_MODAL_TABS = ["climate", "seats", "tyres"];
+const VEHICLE_SEAT_KEYS = [
+  "seat_heating_front_left",
+  "seat_ventilation_front_left",
+  "seat_heating_front_right",
+  "seat_ventilation_front_right",
+];
+const VEHICLE_TIRE_KEYS = [
+  "tire_front_left",
+  "tire_front_right",
+  "tire_rear_left",
+  "tire_rear_right",
+];
+const VEHICLE_TAB_ICONS = {
+  climate: "climate",
+  seats: "seat",
+  tyres: "tire",
+};
+const VEHICLE_TAB_LABELS = {
+  climate: "climate",
+  seats: "seats",
+  tyres: "tires",
+};
+
+function seatControlsAvailable(card, vehicle) {
+  return (
+    VEHICLE_SEAT_KEYS.some((key) => entityFor(vehicle, "number", key)) ||
+    Boolean(entityFor(vehicle, "switch", "steering_wheel_heating"))
+  );
+}
+
+function vehicleTabAvailable(card, vehicle, tab) {
+  const entity = (domain, key) => entityFor(vehicle, domain, key);
+  if (tab === "climate") return Boolean(entity("climate", "cabin"));
+  if (tab === "seats") return seatControlsAvailable(card, vehicle);
+  if (tab === "tyres") {
+    return VEHICLE_TIRE_KEYS.some((key) => entity("sensor", key));
+  }
+  return false;
+}
+
+function vehicleTabs(card, vehicle) {
+  return VEHICLE_MODAL_TABS.filter((tab) =>
+    vehicleTabAvailable(card, vehicle, tab),
+  );
+}
+
+function vehicleTabsHtml(card, vehicle, active) {
+  return `<div class="segmented modal-tabs" role="tablist">${vehicleTabs(
+    card,
+    vehicle,
+  )
+    .map(
+      (tab) => `<button class="segment" role="tab" aria-selected="${
+        tab === active
+      }" data-action="modal-tab" data-tab="${tab}">
+        <ha-icon icon="${PANEL_ICONS[VEHICLE_TAB_ICONS[tab]]}"></ha-icon>
+        <span>${escapeHtml(card._t(VEHICLE_TAB_LABELS[tab]))}</span>
+      </button>`,
+    )
+    .join("")}</div>`;
+}
+
+function climateStageHtml(card, vehicle) {
+  const layout = layoutFor(vehicle)?.climate;
+  if (!layout) return "";
+  const climateId = entityFor(vehicle, "climate", "cabin");
+  const climateState = stateFor(card._hass, climateId);
+  const on = Boolean(climateState && climateState.state !== "off");
+  const air = layout.layers && layout.layers.climate_on;
+  return `<div class="stage stage-climate">
+    <img src="${assetUrl(layout.base, vehicle)}" alt="">
+    ${on && air ? `<img class="air" src="${assetUrl(air, vehicle)}" alt="">` : ""}
+    <span class="anim-slot" data-anim="climate_on"></span>
+  </div>`;
+}
+
+function climateTabHtml(card, vehicle) {
+  const hass = card._hass;
+  const entity = (domain, key) => entityFor(vehicle, domain, key);
+  const climateId = entity("climate", "cabin");
+  const climateState = stateFor(hass, climateId);
+  const on = Boolean(climateState && climateState.state !== "off");
+  const humidity = formatState(hass, entity("sensor", "cabin_humidity"));
+  const metrics = [
+    humidity ? card._metric(card._t("cabin_humidity"), humidity) : "",
+  ].filter(Boolean);
+  return `${climateStageHtml(card, vehicle)}
+    <div class="modal-section">
+      ${
+        metrics.length
+          ? `<div class="metrics climate-metrics">${metrics.join("")}</div>`
+          : ""
+      }
+      ${climateWheelHtml(card, vehicle)}
+      <div class="segmented">
+        <button class="segment" aria-pressed="${on}" data-action="climate-mode" data-mode="heat_cool">
+          <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon>
+          <span>${escapeHtml(card._t("climate_on"))}</span>
+        </button>
+        <button class="segment" aria-pressed="${!on}" data-action="climate-mode" data-mode="off">
+          <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon>
+          <span>${escapeHtml(card._t("climate_off"))}</span>
+        </button>
+      </div>
+    </div>`;
+}
+
+function seatLevel(card, vehicle, key) {
+  const id = entityFor(vehicle, "number", key);
+  if (!id) return 0;
+  const state = stateFor(card._hass, id);
+  const value = state ? Number(state.state) : 0;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(3, Math.round(value)));
+}
+
+function seatSpotHtml(card, vehicle, spot) {
+  const steering = spot.key === "steering_wheel_heating";
+  const entityId = steering
+    ? entityFor(vehicle, "switch", "steering_wheel_heating")
+    : entityFor(vehicle, "number", spot.key);
+  if (!entityId) return "";
+  const level = steering
+    ? isOn(card._hass, entityId)
+      ? 1
+      : 0
+    : seatLevel(card, vehicle, spot.key);
+  const active = level > 0;
+  const position = spot.key.includes("front_left")
+    ? "front_left"
+    : spot.key.includes("front_right")
+      ? "front_right"
+      : "";
+  const label = steering
+    ? card._t("steering_wheel")
+    : `${card._t(
+        spot.key.includes("heating") ? "seat_heating" : "seat_ventilation",
+      )} · ${card._t(position)}`;
+  const bars = steering
+    ? ""
+    : `<span class="seat-level" aria-hidden="true">${[1, 2, 3]
+        .map((index) => `<i class="${index <= level ? "on" : ""}"></i>`)
+        .join("")}</span>`;
+  const className = steering
+    ? "steer"
+    : spot.key.includes("heating")
+      ? "hot"
+      : "cool";
+  return `<button class="seat-spot ${className} ${active ? "on" : ""}"
+    style="left:${spot.x}%;top:${spot.y}%"
+    data-action="${steering ? "toggle-switch" : "seat-cycle"}"
+    data-key="${escapeHtml(spot.key)}"
+    aria-label="${escapeHtml(label)}"
+    aria-pressed="${active}"
+    title="${escapeHtml(label)}">
+    <ha-icon icon="${PANEL_ICONS[spot.icon]}"></ha-icon>
+    ${bars}
+  </button>`;
+}
+
+function seatFallbackBodyHtml(card, vehicle) {
+  const controls = [
+    ["seat_heating_front_left", `${card._t("seat_heating")} · ${card._t("front_left")}`],
+    ["seat_heating_front_right", `${card._t("seat_heating")} · ${card._t("front_right")}`],
+    ["seat_ventilation_front_left", `${card._t("seat_ventilation")} · ${card._t("front_left")}`],
+    ["seat_ventilation_front_right", `${card._t("seat_ventilation")} · ${card._t("front_right")}`],
+  ]
+    .map(([key, label]) => card._seatControlHtml(vehicle, key, label))
+    .filter(Boolean);
+  const steeringId = entityFor(vehicle, "switch", "steering_wheel_heating");
+  const steeringOn = isOn(card._hass, steeringId);
+  const steering = steeringId
+    ? `<button class="tile ${steeringOn ? "on" : ""}" data-action="toggle-switch" data-key="steering_wheel_heating">
+        <ha-icon icon="${PANEL_ICONS.steering}"></ha-icon>
+        <span class="tile-body">
+          <span class="tile-label">${escapeHtml(card._t("steering_wheel"))}</span>
+          <span class="tile-value">${escapeHtml(
+            card._t(steeringOn ? "on" : "off"),
+          )}</span>
+        </span>
+      </button>`
+    : "";
+  return `${
+    controls.length ? `<div class="steppers">${controls.join("")}</div>` : ""
+  }${steering ? `<div class="tiles">${steering}</div>` : ""}`;
+}
+
+function seatMapLayout(vehicle) {
+  const layout = layoutFor(vehicle)?.seats;
+  if (
+    !layout ||
+    !layout.base ||
+    !layout.crop ||
+    !Array.isArray(layout.spots) ||
+    !layout.spots.length
+  ) {
+    return null;
+  }
+  return layout;
+}
+
+function seatMapStageHtml(card, vehicle, layout) {
+  const crop = layout.crop;
+  const width = (1125 / crop.w) * 100;
+  const left = (-crop.x / crop.w) * 100;
+  const top = (-crop.y / crop.h) * 100;
+  const spots = (layout.spots || [])
+    .map((spot) => seatSpotHtml(card, vehicle, spot))
+    .join("");
+  return `<div class="stage stage-seat-map"
+    style="aspect-ratio:${crop.w} / ${crop.h};--seat-img-width:${width.toFixed(
+      3,
+    )}%;--seat-img-left:${left.toFixed(3)}%;--seat-img-top:${top.toFixed(3)}%">
+    <img class="seats-base" src="${assetUrl(layout.base, vehicle)}" alt="">
+    ${spots}
+  </div>`;
+}
+
+function seatControlsHtml(card, vehicle) {
+  const layout = seatMapLayout(vehicle);
+  if (layout) return seatMapStageHtml(card, vehicle, layout);
+  return seatFallbackBodyHtml(card, vehicle);
+}
+
+function seatsTabHtml(card, vehicle) {
+  const layout = seatMapLayout(vehicle);
+  if (layout) return seatMapStageHtml(card, vehicle, layout);
+  return `<div class="modal-section">
+    <h4>${escapeHtml(card._t("seats"))}</h4>
+    ${seatFallbackBodyHtml(card, vehicle)}
+  </div>`;
+}
+
+function tireReading(card, vehicle, key, alarmKey, labelKey) {
+  const display = card._tireDisplay(vehicle, key, alarmKey);
+  if (!display) return null;
+  const parts = String(display.text).split(" ");
+  return {
+    label: card._t(labelKey),
+    value: parts.shift(),
+    unit: parts.join(" "),
+    warn: display.warn,
+  };
+}
+
+function tireReadingHtml(reading) {
+  return `<span class="tire-label">${escapeHtml(reading.label)}</span>
+    <span class="tire-value">${escapeHtml(reading.value)}${
+      reading.unit ? ` <small>${escapeHtml(reading.unit)}</small>` : ""
+    }</span>`;
+}
+
+function tireAnnotationHtml(reading, x, y) {
+  if (!reading) return "";
+  return `<div class="tire-annotation ${reading.warn ? "warn" : ""}" style="left:${x}%;top:${y}%">
+    ${tireReadingHtml(reading)}
+  </div>`;
+}
+
+function tireTextHtml(reading) {
+  if (!reading) return "";
+  return `<div class="tire-text ${reading.warn ? "warn" : ""}">${tireReadingHtml(reading)}</div>`;
+}
+
+function tyresTabHtml(card, vehicle) {
+  const readings = {
+    frontLeft: tireReading(
+      card,
+      vehicle,
+      "tire_front_left",
+      "tire_alarm_front_left",
+      "front_left",
+    ),
+    frontRight: tireReading(
+      card,
+      vehicle,
+      "tire_front_right",
+      "tire_alarm_front_right",
+      "front_right",
+    ),
+    rearLeft: tireReading(
+      card,
+      vehicle,
+      "tire_rear_left",
+      "tire_alarm_rear_left",
+      "rear_left",
+    ),
+    rearRight: tireReading(
+      card,
+      vehicle,
+      "tire_rear_right",
+      "tire_alarm_rear_right",
+      "rear_right",
+    ),
+  };
+  const topView = layoutFor(vehicle)?.status
+    ? vehicleStageHtml(card._hass, vehicle, { rotate: true })
+    : "";
+  if (!topView) {
+    const tiles = [
+      readings.frontLeft,
+      readings.frontRight,
+      readings.rearLeft,
+      readings.rearRight,
+    ]
+      .map(tireTextHtml)
+      .filter(Boolean);
+    return `<div class="tire-text-grid">${
+      tiles.length
+        ? tiles.join("")
+        : `<div class="empty">${escapeHtml(card._t("unavailable"))}</div>`
+    }</div>`;
+  }
+  return `<div class="tire-stage-overlay">
+    ${topView}
+    <div class="tire-annotations">
+      ${tireAnnotationHtml(readings.frontRight, 28, 17)}
+      ${tireAnnotationHtml(readings.rearRight, 73, 17)}
+      ${tireAnnotationHtml(readings.frontLeft, 28, 83)}
+      ${tireAnnotationHtml(readings.rearLeft, 73, 83)}
+    </div>
+  </div>`;
+}
+
+function vehicleTabHtml(card, vehicle, tab) {
+  if (tab === "seats") return seatsTabHtml(card, vehicle);
+  if (tab === "tyres") return tyresTabHtml(card, vehicle);
+  return climateTabHtml(card, vehicle);
+}
+
+function vehicleModalHtml(card) {
+  if (card._modal !== "vehicle" || !card._vehicle) return "";
+  const vehicle = card._vehicle;
+  const tabs = vehicleTabs(card, vehicle);
+  if (!tabs.length) return "";
+  const active = tabs.includes(card._modalTab) ? card._modalTab : tabs[0];
+  const title = card._t("vehicle");
+  return `<div class="modal-sheet">
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+      <div class="modal-head">
+        <h3>${escapeHtml(title)}</h3>
+        <button class="settings-close" data-action="close-modal" aria-label="${escapeHtml(card._t("close"))}">
+          <ha-icon icon="${PANEL_ICONS.close}"></ha-icon>
+        </button>
+      </div>
+      ${vehicleTabsHtml(card, vehicle, active)}
+      <div class="modal-body" role="tabpanel" id="vehicle-pane-${active}">
+        ${vehicleTabHtml(card, vehicle, active)}
+      </div>
+    </div>
+  </div>`;
+}
+
 // ---- 70_card.js ----
 // The single Deepal dashboard card: a configurable hero, configurable
 // sections, an action layout, a visual editor and in-card settings. It uses
@@ -4054,12 +4650,12 @@ DeepalCardBase.prototype._renderDriving = function (vehicle) {
 
 const CARD_SECTIONS = [
   "actions",
-  "status",
   "climate",
   "charging",
   "driving",
   "energy",
   "info",
+  "seats",
   "diagnostics",
   "tires",
 ];
@@ -4068,13 +4664,14 @@ const CARD_BUTTONS = [
   "windows",
   "trunk",
   "climate",
+  "seats",
   "tires",
   "flash",
   "honk",
   "find",
 ];
 const CARD_HERO_ITEMS = ["name", "model", "plate", "range", "lock", "cloud", "updated"];
-const CARD_CONFIRM_ITEMS = ["unlock", "lock", "trunk", "windows", "climate", "flash", "honk", "find"];
+const CARD_CONFIRM_ITEMS = ["unlock", "lock", "trunk", "windows", "climate", "refresh", "flash", "honk", "find"];
 const CARD_INFO_ITEMS = {
   odometer: ["sensor", "odometer", "odometer", "odometer"],
   battery: ["sensor", "battery", "battery", "battery"],
@@ -4096,8 +4693,8 @@ const CARD_INFO_IDS = Object.keys(CARD_INFO_ITEMS);
 const CARD_DEFAULTS = {
   hero_style: "auto",
   hero_show: ["name", "model", "plate", "range", "lock", "cloud", "updated"],
-  order: ["actions", "status", "charging", "info", "climate", "tires", "driving", "energy", "diagnostics"],
-  hidden: ["status", "climate", "tires", "driving", "energy"],
+  order: ["actions", "charging", "info", "seats", "climate", "tires", "driving", "energy", "diagnostics"],
+  hidden: ["climate", "tires", "driving", "energy"],
   buttons: CARD_BUTTONS.slice(),
   buttons_hidden: [],
   button_layout: "grid",
@@ -4106,11 +4703,13 @@ const CARD_DEFAULTS = {
   button_labels: "both",
   confirm: ["unlock", "trunk", "windows"],
   info: ["odometer", "battery", "outside_temperature", "inside_temperature", "cabin_humidity", "fuel_level", "charge_status"],
+  info_order: CARD_INFO_IDS.slice(),
   info_custom: [],
   diag: null,
   diag_mode: "alerts",
   diag_custom: [],
   diag_ignore: [],
+  refresh_button: true,
   show_settings: true,
   language: "auto",
   toasts: true,
@@ -4133,7 +4732,8 @@ function cardFixOrder(values, all) {
 }
 
 function mergeCardConfig(yaml, local) {
-  const c = { ...cardClone(CARD_DEFAULTS), ...(yaml || {}), ...(local || {}) };
+  const raw = { ...(yaml || {}), ...(local || {}) };
+  const c = { ...cardClone(CARD_DEFAULTS), ...raw };
   if (c.hero_style === "carview") c.hero_style = "iso";
   c.hero_show = cardUniq((Array.isArray(c.hero_show) ? c.hero_show : []).filter((value) => CARD_HERO_ITEMS.includes(value)));
   c.order = cardFixOrder(c.order, CARD_SECTIONS);
@@ -4142,9 +4742,15 @@ function mergeCardConfig(yaml, local) {
   c.buttons_hidden = cardUniq((Array.isArray(c.buttons_hidden) ? c.buttons_hidden : []).filter((value) => CARD_BUTTONS.includes(value)));
   c.confirm = cardUniq((Array.isArray(c.confirm) ? c.confirm : []).filter((value) => CARD_CONFIRM_ITEMS.includes(value)));
   c.info = cardUniq((Array.isArray(c.info) ? c.info : []).filter((value) => CARD_INFO_IDS.includes(value)));
+  const infoOrderGiven = Object.prototype.hasOwnProperty.call(raw, "info_order");
+  c.info_order = cardFixOrder(
+    infoOrderGiven ? c.info_order : [...c.info, ...CARD_INFO_IDS],
+    CARD_INFO_IDS,
+  );
   c.info_custom = Array.isArray(c.info_custom) ? c.info_custom.filter((item) => item && item.entity) : [];
   c.diag_custom = Array.isArray(c.diag_custom) ? c.diag_custom.filter((item) => item && item.entity) : [];
   c.diag_ignore = Array.isArray(c.diag_ignore) ? c.diag_ignore : [];
+  c.refresh_button = c.refresh_button !== false;
   c.button_primary = Math.max(1, Math.min(6, Number(c.button_primary) || 4));
   c.image_scale = Number(c.image_scale) > 0 ? Number(c.image_scale) : 1;
   c.tire_unit = ["bar", "kPa", "psi"].includes(c.tire_unit) ? c.tire_unit : "bar";
@@ -4167,6 +4773,7 @@ const CARD_CONFIRM_TEXT = {
   trunk: ["confirm_trunk_title", "confirm_trunk_text"],
   windows: ["confirm_windows_title", "confirm_windows_text"],
   climate: ["confirm_climate_title", "confirm_climate_text"],
+  refresh: ["confirm_refresh_title", "confirm_refresh_text"],
   flash: ["confirm_flash_title", "confirm_flash_text"],
   honk: ["confirm_honk_title", "confirm_honk_text"],
   find: ["confirm_find_title", "confirm_find_text"],
@@ -4183,10 +4790,25 @@ class DeepalCard extends DeepalCardBase {
     this._settingsDirty = false;
     this._uiRestored = false;
     this._modal = null;
+    this._modalTab = null;
+    this._modalScroll = 0;
+    this._modalScrollReset = false;
+    this._refreshPending = false;
     this._confirm = null;
     this._moreOpen = false;
     this._toast = null;
     this._saveTimer = null;
+    this._onKeyDown = (event) => {
+      if (event.key === "Escape" && this._modal) this._closeModal();
+    };
+    this.shadowRoot.addEventListener("click", (event) => {
+      if (
+        event.target.classList &&
+        event.target.classList.contains("modal-sheet")
+      ) {
+        this._closeModal();
+      }
+    });
     this.shadowRoot.addEventListener("settings-change", (event) => this._patch(event.detail || {}));
     this.shadowRoot.addEventListener("settings-close", () => {
       this._settingsOpen = false;
@@ -4195,6 +4817,10 @@ class DeepalCard extends DeepalCardBase {
       this._render();
       this._commitSettings();
     });
+  }
+
+  connectedCallback() {
+    document.addEventListener("keydown", this._onKeyDown);
   }
 
   static getStubConfig(hass) {
@@ -4234,6 +4860,7 @@ class DeepalCard extends DeepalCardBase {
   }
 
   disconnectedCallback() {
+    document.removeEventListener("keydown", this._onKeyDown);
     super.disconnectedCallback();
     if (this._settingsDirty) this._commitSettings();
   }
@@ -4391,6 +5018,44 @@ class DeepalCard extends DeepalCardBase {
     this._config = mergeCardConfig(this._yaml, {});
   }
 
+  _requestRefresh() {
+    if (this._refreshPending) return;
+    const vehicle = this._vehicle;
+    if (!vehicle) return;
+    const id = entityFor(vehicle, "button", "refresh");
+    if (!id) return;
+    const def = {
+      id: "refresh",
+      confirm: "refresh",
+      execute: () => this._runRefresh(id),
+    };
+    if (this._needsConfirm(def)) {
+      this._confirm = def;
+      this._render();
+      return;
+    }
+    this._confirm = null;
+    this._runRefresh(id);
+  }
+
+  async _runRefresh(entityId) {
+    this._refreshPending = true;
+    this._render();
+    const ok = await this._callService("button", "press", {
+      entity_id: entityId,
+    });
+    this._refreshPending = false;
+    this._toast = ok
+      ? { type: "ok", text: this._t("refresh_done") }
+      : { type: "warn", text: this._error || this._t("command_failed") };
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      this._toast = null;
+      this._render();
+    }, 5000);
+    this._render();
+  }
+
   _heroStyle(vehicle) {
     const style = this._config.hero_style || "auto";
     if (style !== "auto") return style;
@@ -4511,12 +5176,24 @@ class DeepalCard extends DeepalCardBase {
         `<span><ha-icon icon="${PANEL_ICONS.fuel}"></ha-icon>${escapeHtml(fuelRange)}</span>`,
       );
     }
+    const refreshId = entityFor(vehicle, "button", "refresh");
+    const refresh =
+      this._config.refresh_button !== false && refreshId
+        ? `<button class="icon-button ${this._refreshPending ? "pending" : ""}"
+            data-action="refresh"
+            title="${escapeHtml(this._t("refresh_hint"))}"
+            aria-label="${escapeHtml(this._t("refresh_hint"))}"
+            ${this._refreshPending ? "disabled" : ""}>
+            <ha-icon icon="${PANEL_ICONS.refresh}"></ha-icon>
+          </button>`
+        : "";
     const meta = [
       show.has("cloud") && connected
         ? `<span class="hero-cloud ${connected.state === "on" ? "ok" : "bad"}" title="${escapeHtml(connected.state === "on" ? this._t("online") : this._t("offline"))}">
             <ha-icon icon="${connected.state === "on" ? PANEL_ICONS.cloud : PANEL_ICONS.cloud_off}"></ha-icon>
           </span>`
         : "",
+      refresh,
     ].join("");
     const chips = this._heroChips(vehicle, show);
     return `
@@ -4540,6 +5217,23 @@ class DeepalCard extends DeepalCardBase {
     return "";
   }
 
+  _seatsActive(vehicle) {
+    const hass = this._hass;
+    const active = [
+      "seat_heating_front_left",
+      "seat_heating_front_right",
+      "seat_ventilation_front_left",
+      "seat_ventilation_front_right",
+    ].some((key) => {
+      const state = stateFor(hass, entityFor(vehicle, "number", key));
+      return state ? Number(state.state) > 0 : false;
+    });
+    return (
+      active ||
+      isOn(hass, entityFor(vehicle, "switch", "steering_wheel_heating"))
+    );
+  }
+
   _actionDefs(vehicle) {
     const hass = this._hass;
     const entity = (domain, key) => entityFor(vehicle, domain, key);
@@ -4548,7 +5242,7 @@ class DeepalCard extends DeepalCardBase {
     if (locked !== null) {
       defs.push({
         id: "lock",
-        icon: locked ? PANEL_ICONS.unlock : PANEL_ICONS.lock,
+        icon: PANEL_ICONS.door_lock,
         label: locked ? this._t("unlock_doors") : this._t("lock_doors"),
         value: locked ? this._t("locked") : this._t("unlocked"),
         tone: locked ? "" : "warn",
@@ -4570,7 +5264,7 @@ class DeepalCard extends DeepalCardBase {
         execute: () => this._executeAction("cover-toggle", { key: id }),
       });
     };
-    coverDef("windows", PANEL_ICONS.window, this._t("open_windows"), this._t("close_windows"), "windows");
+    coverDef("windows", PANEL_ICONS.doors, this._t("open_windows"), this._t("close_windows"), "windows");
     coverDef("trunk", PANEL_ICONS.trunk, this._t("open_trunk"), this._t("close_trunk"), "trunk");
 
     const climateId = entity("climate", "cabin");
@@ -4583,7 +5277,30 @@ class DeepalCard extends DeepalCardBase {
         label: this._t("climate"),
         value: on ? this._t("on") : this._t("off"),
         tone: on ? "on" : "",
-        modal: "climate",
+        modal: "vehicle",
+        modalTab: "climate",
+      });
+    }
+
+    const seatKeys = [
+      "seat_heating_front_left",
+      "seat_heating_front_right",
+      "seat_ventilation_front_left",
+      "seat_ventilation_front_right",
+    ];
+    const hasSeatControl =
+      seatKeys.some((key) => entity("number", key)) ||
+      Boolean(entity("switch", "steering_wheel_heating"));
+    if (hasSeatControl) {
+      const active = this._seatsActive(vehicle);
+      defs.push({
+        id: "seats",
+        icon: PANEL_ICONS.seat,
+        label: this._t("seats"),
+        value: active ? this._t("on") : this._t("off"),
+        tone: active ? "on" : "",
+        modal: "vehicle",
+        modalTab: "seats",
       });
     }
 
@@ -4602,7 +5319,8 @@ class DeepalCard extends DeepalCardBase {
         label: this._t("tires"),
         value: tireValues[0].text,
         tone: tireValues.some((item) => item.warn) ? "warn" : "",
-        modal: "tires",
+        modal: "vehicle",
+        modalTab: "tyres",
       });
     }
 
@@ -4637,8 +5355,7 @@ class DeepalCard extends DeepalCardBase {
     const def = this._actionDefs(this._vehicle).find((item) => item.id === id);
     if (!def) return;
     if (def.modal) {
-      this._modal = def.modal;
-      this._render();
+      this._openVehicleDialog(def.modalTab || "climate");
       return;
     }
     if (def.static || !def.execute) return;
@@ -4649,6 +5366,50 @@ class DeepalCard extends DeepalCardBase {
     }
     this._confirm = null;
     def.execute();
+  }
+
+  _openVehicleDialog(tab) {
+    const vehicle = this._vehicle;
+    if (!vehicle) return;
+    const available = vehicleTabs(this, vehicle);
+    if (!available.length) return;
+    this._modal = "vehicle";
+    this._modalTab = available.includes(tab) ? tab : available[0];
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._confirm = null;
+    this._render();
+    this._playModalAnimation();
+  }
+
+  _setModalTab(tab) {
+    const vehicle = this._vehicle;
+    if (!vehicle || !this._modal) return;
+    if (!vehicleTabs(this, vehicle).includes(tab)) return;
+    if (this._modalTab === tab) return;
+    this._modalTab = tab;
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._render();
+    this._playModalAnimation();
+  }
+
+  _closeModal() {
+    if (!this._modal) return;
+    this._modal = null;
+    this._modalTab = null;
+    this._modalScroll = 0;
+    this._modalScrollReset = true;
+    this._render();
+  }
+
+  _playModalAnimation() {
+    const vehicle = this._vehicle;
+    if (!vehicle || this._modal !== "vehicle") return;
+    const states = this._transitionStates(vehicle);
+    if (this._modalTab === "climate" && states.climate_on) {
+      this._playAnimation(vehicle, "climate_on");
+    }
   }
 
   _actionHtml(def) {
@@ -4662,8 +5423,13 @@ class DeepalCard extends DeepalCardBase {
     const attrs = def.static
       ? `class="action static ${def.tone || ""} size-${size}"`
       : `class="action ${def.tone || ""} size-${size}" data-action="card-action" data-id="${escapeHtml(def.id)}" title="${escapeHtml(def.label)}" aria-label="${escapeHtml(def.label)}"`;
+    const customIcon = PANEL_ICON_SVGS[def.icon];
     return `<${tag} ${attrs}>
-      <ha-icon icon="${def.icon}"></ha-icon>
+      ${
+        customIcon
+          ? `<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">${customIcon}</svg>`
+          : `<ha-icon icon="${def.icon}"></ha-icon>`
+      }
       ${showTitle ? `<span class="action-label">${escapeHtml(def.label)}</span>` : ""}
       ${showValue && def.value ? `<span class="action-value">${escapeHtml(def.value)}</span>` : ""}
     </${tag}>`;
@@ -4706,42 +5472,6 @@ class DeepalCard extends DeepalCardBase {
     return `<div class="metric ${cls}">
       <span class="label">${escapeHtml(label)}</span>
       <span class="value">${escapeHtml(value ?? "—")}</span>
-    </div>`;
-  }
-
-  _sectionStatus(vehicle) {
-    const hass = this._hass;
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const metrics = [];
-    const add = (labelKey, entityId, formatter = null) => {
-      if (!entityId) return;
-      const value = formatter ? formatter() : formatState(hass, entityId);
-      if (value === null) return;
-      metrics.push(this._metric(this._t(labelKey), value));
-    };
-    add("odometer", entity("sensor", "odometer"), () =>
-      formatIntegerState(hass, entity("sensor", "odometer")),
-    );
-    if (entity("sensor", "charge_status")) {
-      add("charge_status", entity("sensor", "charge_status"), () =>
-        chargeStatusText(hass, vehicle, (key) => this._t(key)),
-      );
-    } else {
-      add("vehicle_status", entity("sensor", "vehicle_status"));
-    }
-    add("battery", entity("sensor", "battery"), () =>
-      formatIntegerState(hass, entity("sensor", "battery")),
-    );
-    add("range", entity("sensor", "range"), () =>
-      formatIntegerState(hass, entity("sensor", "range")),
-    );
-    if (!metrics.length) return "";
-    return `<div class="section">
-      <div class="section-head">
-        <ha-icon icon="${PANEL_ICONS.car}"></ha-icon>
-        <span class="section-title">${escapeHtml(this._t("status"))}</span>
-      </div>
-      <div class="metrics">${metrics.join("")}</div>
     </div>`;
   }
 
@@ -4798,32 +5528,15 @@ class DeepalCard extends DeepalCardBase {
   }
 
   _sectionTires(vehicle) {
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const tire = (key, alarmKey, labelKey) => {
-      if (!entity("sensor", key)) return "";
-      const display = this._tireDisplay(vehicle, key, alarmKey);
-      if (!display) return "";
-      return `<div class="tile static ${display.warn ? "warn" : ""}">
-        <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
-        <span class="tile-body">
-          <span class="tile-label">${escapeHtml(this._t(labelKey))}</span>
-          <span class="tile-value">${escapeHtml(display.text)}</span>
-        </span>
-      </div>`;
-    };
-    const tires = [
-      tire("tire_front_left", "tire_alarm_front_left", "front_left"),
-      tire("tire_front_right", "tire_alarm_front_right", "front_right"),
-      tire("tire_rear_left", "tire_alarm_rear_left", "rear_left"),
-      tire("tire_rear_right", "tire_alarm_rear_right", "rear_right"),
-    ].filter(Boolean);
-    if (!tires.length) return "";
+    if (!VEHICLE_TIRE_KEYS.some((key) => entityFor(vehicle, "sensor", key))) {
+      return "";
+    }
     return `<div class="section">
       <div class="section-head">
         <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
         <span class="section-title">${escapeHtml(this._t("tires"))}</span>
       </div>
-      <div class="tiles">${tires.join("")}</div>
+      ${tyresTabHtml(this, vehicle)}
     </div>`;
   }
 
@@ -4840,7 +5553,8 @@ class DeepalCard extends DeepalCardBase {
       "trip_mileage",
       "mileage_yesterday",
     ]);
-    for (const id of this._config.info || []) {
+    for (const id of this._config.info_order || CARD_INFO_IDS) {
+      if (!(this._config.info || []).includes(id)) continue;
       const spec = CARD_INFO_ITEMS[id];
       if (!spec) continue;
       const [domain, key, labelKey, iconKey] = spec;
@@ -4867,7 +5581,7 @@ class DeepalCard extends DeepalCardBase {
     return `<div class="section">
       <div class="section-head">
         <ha-icon icon="${PANEL_ICONS.car}"></ha-icon>
-        <span class="section-title">${escapeHtml(this._t("info"))}</span>
+        <span class="section-title">${escapeHtml(this._t("status"))}</span>
       </div>
       <div class="info-grid">${tiles.join("")}</div>
     </div>`;
@@ -4924,8 +5638,6 @@ class DeepalCard extends DeepalCardBase {
     switch (key) {
       case "actions":
         return this._sectionActions(vehicle);
-      case "status":
-        return this._sectionStatus(vehicle);
       case "climate":
         return this._renderClimate(vehicle);
       case "charging":
@@ -4936,6 +5648,8 @@ class DeepalCard extends DeepalCardBase {
         return this._sectionEnergy(vehicle);
       case "info":
         return this._sectionInfo(vehicle);
+      case "seats":
+        return this._sectionSeats(vehicle);
       case "diagnostics":
         return this._sectionDiagnostics(vehicle);
       case "tires":
@@ -4954,6 +5668,19 @@ class DeepalCard extends DeepalCardBase {
       .join("");
   }
 
+  _sectionSeats(vehicle) {
+    if (!seatControlsAvailable(this, vehicle)) return "";
+    const body = seatControlsHtml(this, vehicle);
+    if (!body) return "";
+    return `<div class="section">
+      <div class="section-head">
+        <ha-icon icon="${PANEL_ICONS.seat}"></ha-icon>
+        <span class="section-title">${escapeHtml(this._t("seats"))}</span>
+      </div>
+      ${body}
+    </div>`;
+  }
+
   _seatControlHtml(vehicle, key, label) {
     const id = entityFor(vehicle, "number", key);
     if (!id) return "";
@@ -4968,114 +5695,8 @@ class DeepalCard extends DeepalCardBase {
     </div>`;
   }
 
-  _climateModalHtml(vehicle) {
-    const entity = (domain, key) => entityFor(vehicle, domain, key);
-    const climateId = entity("climate", "cabin");
-    const climateState = stateFor(this._hass, climateId);
-    const on = Boolean(climateState && climateState.state !== "off");
-    const target = climateState?.attributes?.temperature;
-    const inside = formatState(this._hass, entity("sensor", "inside_temperature"));
-    const humidity = formatState(this._hass, entity("sensor", "cabin_humidity"));
-    const seats = [
-      ["seat_heating_front_left", `${this._t("seat_heating")} · ${this._t("front_left")}`],
-      ["seat_heating_front_right", `${this._t("seat_heating")} · ${this._t("front_right")}`],
-      ["seat_ventilation_front_left", `${this._t("seat_ventilation")} · ${this._t("front_left")}`],
-      ["seat_ventilation_front_right", `${this._t("seat_ventilation")} · ${this._t("front_right")}`],
-      ["seat_heating_rear_left", `${this._t("seat_heating")} · ${this._t("rear_left")}`],
-      ["seat_heating_rear_right", `${this._t("seat_heating")} · ${this._t("rear_right")}`],
-      ["seat_ventilation_rear_left", `${this._t("seat_ventilation")} · ${this._t("rear_left")}`],
-      ["seat_ventilation_rear_right", `${this._t("seat_ventilation")} · ${this._t("rear_right")}`],
-    ]
-      .map(([key, label]) => this._seatControlHtml(vehicle, key, label))
-      .filter(Boolean);
-    const steeringId = entity("switch", "steering_wheel_heating");
-    const steeringOn = isOn(this._hass, steeringId);
-    const steering = steeringId
-      ? `<button class="tile ${steeringOn ? "on" : ""}" data-action="toggle-switch" data-key="steering_wheel_heating">
-          <ha-icon icon="${PANEL_ICONS.steering}"></ha-icon>
-          <span class="tile-body">
-            <span class="tile-label">${escapeHtml(this._t("steering_wheel"))}</span>
-            <span class="tile-value">${escapeHtml(this._t(steeringOn ? "on" : "off"))}</span>
-          </span>
-        </button>`
-      : "";
-    const metrics = [
-      inside ? this._metric(this._t("inside_temperature"), inside) : "",
-      humidity ? this._metric(this._t("cabin_humidity"), humidity) : "",
-    ].filter(Boolean);
-    return `<div class="modal-columns">
-      <div class="modal-col">
-        <div class="modal-section">
-          <h4>${escapeHtml(this._t("climate"))}</h4>
-          ${metrics.length ? `<div class="metrics">${metrics.join("")}</div>` : ""}
-          <div class="center">
-            <div class="stepper large">
-              <button data-action="temp-step" data-delta="-0.5" aria-label="-">&minus;</button>
-              <span class="value">${escapeHtml(target != null ? `${target} °C` : "—")}</span>
-              <button data-action="temp-step" data-delta="0.5" aria-label="+">+</button>
-            </div>
-          </div>
-          <div class="segmented">
-            <button class="segment" aria-pressed="${on}" data-action="climate-mode" data-mode="heat_cool">
-              <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon><span>${escapeHtml(this._t("climate_on"))}</span>
-            </button>
-            <button class="segment" aria-pressed="${!on}" data-action="climate-mode" data-mode="off">
-              <ha-icon icon="${PANEL_ICONS.climate}"></ha-icon><span>${escapeHtml(this._t("climate_off"))}</span>
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-col">
-        <div class="modal-section">
-          <h4>${escapeHtml(this._t("seats"))}</h4>
-          ${seats.length ? `<div class="steppers">${seats.join("")}</div>` : ""}
-          ${steering ? `<div class="tiles">${steering}</div>` : ""}
-        </div>
-      </div>
-    </div>`;
-  }
-
-  _tiresModalHtml(vehicle) {
-    const tires = [
-      ["tire_front_left", "tire_alarm_front_left", "front_left"],
-      ["tire_front_right", "tire_alarm_front_right", "front_right"],
-      ["tire_rear_left", "tire_alarm_rear_left", "rear_left"],
-      ["tire_rear_right", "tire_alarm_rear_right", "rear_right"],
-    ]
-      .map(([key, alarmKey, labelKey]) => {
-        const display = this._tireDisplay(vehicle, key, alarmKey);
-        if (!display) return "";
-        return `<div class="tire-card ${display.warn ? "warn" : ""}">
-          <ha-icon icon="${PANEL_ICONS.tire}"></ha-icon>
-          <div>
-            <div class="tire-label">${escapeHtml(this._t(labelKey))}</div>
-            <div class="tire-value">${escapeHtml(display.text)}</div>
-          </div>
-        </div>`;
-      })
-      .filter(Boolean);
-    return tires.length
-      ? `<div class="tire-grid">${tires.join("")}</div>`
-      : `<div class="empty">${escapeHtml(this._t("unavailable"))}</div>`;
-  }
-
   _renderModal() {
-    if (!this._modal || !this._vehicle) return "";
-    const title = this._t(this._modal === "tires" ? "tires" : "climate");
-    const body = this._modal === "tires"
-      ? this._tiresModalHtml(this._vehicle)
-      : this._climateModalHtml(this._vehicle);
-    return `<div class="modal-sheet">
-      <div class="modal-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
-        <div class="modal-head">
-          <h3>${escapeHtml(title)}</h3>
-          <button class="settings-close" data-action="close-modal" aria-label="${escapeHtml(this._t("close"))}">
-            <ha-icon icon="${PANEL_ICONS.close}"></ha-icon>
-          </button>
-        </div>
-        <div class="modal-body">${body}</div>
-      </div>
-    </div>`;
+    return vehicleModalHtml(this);
   }
 
   _renderConfirm() {
@@ -5124,7 +5745,21 @@ class DeepalCard extends DeepalCardBase {
       const body = previous.shadowRoot.querySelector(".settings-body");
       if (body) this._settingsScroll = body.scrollTop;
     }
+    const previousModalBody = this.shadowRoot.querySelector(".modal-body");
+    if (previousModalBody && !this._modalScrollReset) {
+      this._modalScroll = previousModalBody.scrollTop;
+    }
     super._render();
+    if (this._modalScrollReset) {
+      this._modalScroll = 0;
+      this._modalScrollReset = false;
+    }
+    const modalBody = this.shadowRoot.querySelector(".modal-body");
+    if (modalBody && this._modalScroll) {
+      requestAnimationFrame(() => {
+        modalBody.scrollTop = this._modalScroll;
+      });
+    }
     const settings = this.shadowRoot.querySelector("deepal-card-settings");
     if (settings) {
       settings.hass = this._hass;
@@ -5144,8 +5779,10 @@ class DeepalCard extends DeepalCardBase {
     return [
       super._renderKey(),
       this._modal || "",
+      this._modalTab || "",
       this._confirm ? this._confirm.id : "",
       this._moreOpen ? "more" : "",
+      this._refreshPending ? "refresh" : "",
       this._toast ? `${this._toast.type}:${this._toast.text}` : "",
     ].join("|");
   }
@@ -5157,13 +5794,23 @@ class DeepalCard extends DeepalCardBase {
       this._settingsTab = "hero";
       this._settingsScroll = 0;
       this._modal = null;
+      this._modalTab = null;
+      this._modalScroll = 0;
+      this._modalScrollReset = true;
       this._saveUiState();
       this._render();
       return true;
     }
     if (action === "close-modal") {
-      this._modal = null;
-      this._render();
+      this._closeModal();
+      return true;
+    }
+    if (action === "modal-tab") {
+      this._setModalTab(target.dataset.tab);
+      return true;
+    }
+    if (action === "refresh") {
+      this._requestRefresh();
       return true;
     }
     if (action === "card-action") {
@@ -5266,27 +5913,50 @@ class DeepalCardSettings extends HTMLElement {
     ).join("")}</select>`;
   }
 
-  _check(key, value, label) {
-    return `<label class="setting-row"><span>${escapeHtml(this._t(label))}</span><input type="checkbox" data-setting="${key}" ${value ? "checked" : ""}></label>`;
+  _check(key, value, label, hint = "") {
+    return `<label class="setting-row"><span>${escapeHtml(this._t(label))}${hint ? `<small>${escapeHtml(hint)}</small>` : ""}</span><input type="checkbox" data-setting="${key}" ${value ? "checked" : ""}></label>`;
   }
 
   _arrayCheck(key, item, values, label) {
     return `<label class="setting-row"><span>${escapeHtml(this._t(label))}</span><input type="checkbox" data-array="${key}" data-value="${item}" ${(values || []).includes(item) ? "checked" : ""}></label>`;
   }
 
-  _orderList(key, values, all, labelOf, hiddenKey) {
+  _orderList(key, values, all, labelOf, hiddenKey, visibleKey = null) {
     const hidden = new Set((hiddenKey && this._config[hiddenKey]) || []);
-    return `<div class="settings-group">${(values || all).map((id, index) => {
-      const isHidden = hidden.has(id);
-      return `<div class="setting-row ${isHidden ? "off" : ""}">
+    const visible = new Set((visibleKey && this._config[visibleKey]) || []);
+    const list = values || all;
+    this._orderValues = this._orderValues || {};
+    this._orderValues[key] = list;
+    return `<div class="settings-group">${list.map((id, index) => {
+      const isVisible = visibleKey ? visible.has(id) : !hidden.has(id);
+      return `<div class="setting-row ${isVisible ? "" : "off"}">
         <span>${escapeHtml(this._t(labelOf(id)))}</span>
         <span class="move">
           <button data-order="${key}" data-id="${id}" data-dir="-1" ${index === 0 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_up"))}"><ha-icon icon="${PANEL_ICONS.up}"></ha-icon></button>
-          <button data-order="${key}" data-id="${id}" data-dir="1" ${index === (values || all).length - 1 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_down"))}"><ha-icon icon="${PANEL_ICONS.down}"></ha-icon></button>
-          ${hiddenKey ? `<input type="checkbox" data-hide="${hiddenKey}" data-value="${id}" ${isHidden ? "" : "checked"} aria-label="${escapeHtml(this._t("show"))}">` : ""}
+          <button data-order="${key}" data-id="${id}" data-dir="1" ${index === list.length - 1 ? "disabled" : ""} aria-label="${escapeHtml(this._t("move_down"))}"><ha-icon icon="${PANEL_ICONS.down}"></ha-icon></button>
+          ${
+            visibleKey
+              ? `<input type="checkbox" data-array="${visibleKey}" data-value="${id}" ${isVisible ? "checked" : ""} aria-label="${escapeHtml(this._t("show"))}">`
+              : hiddenKey
+                ? `<input type="checkbox" data-hide="${hiddenKey}" data-value="${id}" ${isVisible ? "checked" : ""} aria-label="${escapeHtml(this._t("show"))}">`
+                : ""
+          }
         </span>
       </div>`;
     }).join("")}</div>`;
+  }
+
+  _infoIds() {
+    const vehicles = discoverVehicles(this._hass || {});
+    const deviceId = this._config && this._config.device_id;
+    const vehicle =
+      vehicles.find((candidate) => candidate.deviceId === deviceId) ||
+      vehicles[0];
+    if (!vehicle) return CARD_INFO_IDS;
+    return CARD_INFO_IDS.filter((id) => {
+      const [domain, key] = CARD_INFO_ITEMS[id];
+      return Boolean(entityFor(vehicle, domain, key));
+    });
   }
 
   _tabHero() {
@@ -5299,6 +5969,7 @@ class DeepalCardSettings extends HTMLElement {
       <label class="setting-row"><span>${escapeHtml(this._t("image_scale"))}</span><input type="number" step="0.05" min="0.5" max="2" data-setting="image_scale" value="${escapeHtml(c.image_scale)}"></label>
       <label class="setting-row"><span>${escapeHtml(this._t("image_aspect"))}</span><input type="text" data-setting="image_aspect" value="${escapeHtml(c.image_aspect || "")}" placeholder="3 / 2"></label>
       <label class="setting-row"><span>${escapeHtml(this._t("card_padding"))}</span>${this._select("card_padding", c.card_padding, [["normal", "normal"], ["half", "half"], ["none", "none"]])}</label>
+      ${this._check("refresh_button", c.refresh_button !== false, "refresh", this._t("refresh_hint"))}
     </div>
     <div class="settings-group">
       <h4>${escapeHtml(this._t("show_on_hero"))}</h4>
@@ -5308,7 +5979,7 @@ class DeepalCardSettings extends HTMLElement {
 
   _tabSections() {
     return `<p class="settings-hint">${escapeHtml(this._t("sections_hint"))}</p>
-      ${this._orderList("order", this._config.order, CARD_SECTIONS, (id) => `section_${id}`, "hidden")}`;
+      ${this._orderList("order", this._config.order, CARD_SECTIONS, (id) => (id === "info" ? "status" : id === "seats" ? "seats" : `section_${id}`), "hidden")}`;
   }
 
   _tabActions() {
@@ -5330,9 +6001,13 @@ class DeepalCardSettings extends HTMLElement {
 
   _tabSensors() {
     const c = this._config;
+    const available = this._infoIds();
+    const order = (c.info_order || CARD_INFO_IDS).filter((id) =>
+      available.includes(id),
+    );
     return `<div class="settings-group">
-      <h4>${escapeHtml(this._t("info"))}</h4>
-      ${CARD_INFO_IDS.map((item) => this._arrayCheck("info", item, c.info, CARD_INFO_ITEMS[item][2])).join("")}
+      <h4>${escapeHtml(this._t("status"))}</h4>
+      ${this._orderList("info_order", order, available, (item) => CARD_INFO_ITEMS[item][2], null, "info")}
     </div>
     <div class="settings-group">
       <h4>${escapeHtml(this._t("diagnostics"))}</h4>
@@ -5400,7 +6075,9 @@ class DeepalCardSettings extends HTMLElement {
     const order = event.target.closest("[data-order]");
     if (order) {
       const key = order.dataset.order;
-      const list = [...(this._config[key] || [])];
+      const list = [
+        ...(this._orderValues?.[key] || this._config[key] || []),
+      ];
       const index = list.indexOf(order.dataset.id);
       const next = index + Number(order.dataset.dir);
       if (index < 0 || next < 0 || next >= list.length) return;

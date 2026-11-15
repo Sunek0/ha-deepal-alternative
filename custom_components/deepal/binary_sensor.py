@@ -20,8 +20,9 @@ from .const import DOMAIN, MANUFACTURER, DEFAULT_MODEL
 from .charging import charging_flag
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
+from .entity import remove_entity_registry_entries
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05, is_s05_phev
+from .vehicle_model import is_s05, is_s05_phev, supports_charge_schedule
 
 # Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
@@ -42,6 +43,9 @@ PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS = frozenset(
         "warning_coolant_temperature",
     }
 )
+
+# Charge-schedule entities exist only on models with the schedule option.
+CHARGE_SCHEDULE_BINARY_SENSOR_KEYS = frozenset({"charge_schedule_enabled"})
 
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities: the reference S05 does not
@@ -70,6 +74,7 @@ def build_binary_sensors(
 
     s05 = is_s05(vehicle)
     phev = is_s05_phev(vehicle)
+    schedule = supports_charge_schedule(vehicle)
 
     if isinstance(coordinator.client, DeepalIntlClient):
         for key in ("front_left", "front_right", "rear_left", "rear_right"):
@@ -90,6 +95,10 @@ def build_binary_sensors(
             for description in BINARY_SENSORS
             if not (s05 and description.key in S05_UNSUPPORTED_BINARY_SENSOR_KEYS)
             and not (phev and description.key in PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS)
+            and not (
+                not schedule
+                and description.key in CHARGE_SCHEDULE_BINARY_SENSOR_KEYS
+            )
         )
 
     return entities
@@ -97,12 +106,7 @@ def build_binary_sensors(
 
 def _remove_binary_entities(registry: Any, vehicle: Any, keys: Any) -> None:
     """Remove the entity-registry entries of the given binary-sensor keys."""
-    for key in keys:
-        unique_id = f"deepal_{vehicle.car_id}_{key}"
-        if entity_id := registry.async_get_entity_id(
-            "binary_sensor", DOMAIN, unique_id
-        ):
-            registry.async_remove(entity_id)
+    remove_entity_registry_entries(registry, vehicle, "binary_sensor", keys)
 
 
 def _remove_retired_entities(registry: Any, vehicle: Any) -> None:
@@ -126,6 +130,10 @@ async def async_setup_entry(
         if is_s05_phev(vehicle):
             _remove_binary_entities(
                 registry, vehicle, PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS
+            )
+        if not supports_charge_schedule(vehicle):
+            _remove_binary_entities(
+                registry, vehicle, CHARGE_SCHEDULE_BINARY_SENSOR_KEYS
             )
         entities.extend(build_binary_sensors(coordinator, vehicle))
 

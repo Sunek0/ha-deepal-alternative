@@ -6,15 +6,38 @@ from typing import Any
 from homeassistant.components.time import TimeEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import DeepalDataUpdateCoordinator
-from .entity import DeepalEntity, async_setup_control_entities
+from .entity import (
+    DeepalEntity,
+    async_setup_control_entities,
+    remove_entity_registry_entries,
+)
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import supports_charge_schedule
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
+
+#: Time keys that only exist on models with the charge-schedule option.
+CHARGE_SCHEDULE_TIME_KEYS = frozenset(
+    {"charge_schedule_start", "charge_schedule_end"}
+)
+
+
+def build_times(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[TimeEntity]:
+    """Build the charge-schedule time entities when the model supports them."""
+    if not supports_charge_schedule(vehicle):
+        return []
+    return [
+        DeepalChargeScheduleTime(coordinator, vehicle, "charge_schedule_start", "start"),
+        DeepalChargeScheduleTime(coordinator, vehicle, "charge_schedule_end", "end"),
+    ]
 
 
 async def async_setup_entry(
@@ -23,18 +46,20 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge schedule time entities."""
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
+
+    for vehicle in coordinator.vehicles:
+        if not supports_charge_schedule(vehicle):
+            remove_entity_registry_entries(
+                registry, vehicle, "time", CHARGE_SCHEDULE_TIME_KEYS
+            )
+
     async_setup_control_entities(
         hass,
         entry,
         async_add_entities,
-        lambda coordinator, vehicle: [
-            DeepalChargeScheduleTime(
-                coordinator, vehicle, "charge_schedule_start", "start"
-            ),
-            DeepalChargeScheduleTime(
-                coordinator, vehicle, "charge_schedule_end", "end"
-            ),
-        ],
+        build_times,
     )
 
 

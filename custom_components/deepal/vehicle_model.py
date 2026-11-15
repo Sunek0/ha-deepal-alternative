@@ -2,11 +2,7 @@
 
 from typing import Any
 
-# Series codes of the models known to lack some telemetry and controls: the S05
-# reports charging info but no SOC-set code, and its MQTT payload carries no
-# speed, gear, PM2.5, air quality or mileage fields. Outside temperature is
-# optional: the sensor is created but stays unknown until a report carries it.
-S05_MODEL_CODES = ("S05", "C857")
+from .deepal.mqtt import is_s05_model
 
 
 def normalize_model(*values: str | None) -> str:
@@ -20,14 +16,21 @@ def normalize_model(*values: str | None) -> str:
 
 
 def is_s05(vehicle: Any) -> bool:
-    """Return whether the vehicle is an S05 (series name or C857 series code)."""
-    model = normalize_model(
-        vehicle.series_name,
-        vehicle.series_code,
-        vehicle.model_name,
-        vehicle.model_code,
+    """Return whether the vehicle is an S05.
+
+    Delegates to the SDK model-code classifier so the entity gates and the MQTT
+    normalization agree: a vehicle whose only identifier is an ``SC646`` model
+    code (S05 PHEV) is an S05 for both.
+    """
+    return any(
+        is_s05_model(value)
+        for value in (
+            vehicle.series_name,
+            vehicle.series_code,
+            vehicle.model_name,
+            vehicle.model_code,
+        )
     )
-    return any(code in model for code in S05_MODEL_CODES)
 
 
 def is_bev(vehicle: Any) -> bool:
@@ -60,6 +63,16 @@ def is_phev(vehicle: Any) -> bool:
 def is_s05_phev(vehicle: Any) -> bool:
     """Return whether the vehicle is an S05 plug-in hybrid."""
     return is_s05(vehicle) and is_phev(vehicle)
+
+
+def supports_charge_schedule(vehicle: Any) -> bool:
+    """Return whether the vehicle exposes the charging-schedule control.
+
+    The S05 EV reports a placeholder ``chargePlanList`` entry but has no
+    schedule; the S05 PHEV is the only S05 with the option. Every other model,
+    and a vehicle with missing model data, keeps the control.
+    """
+    return not is_s05(vehicle) or is_s05_phev(vehicle)
 
 
 def supports_fuel(vehicle: Any, capabilities: Any) -> bool:

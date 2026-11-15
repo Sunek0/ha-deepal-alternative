@@ -27,7 +27,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. |
+| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. Neither powertrain exposes an outside-temperature sensor. The charging schedule is available only on the S05 PHEV. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
 | E07 | Only tested on SDA API. Telemetry through the REST API. |
 
@@ -52,9 +52,9 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   temperature), the key fob battery, the air recirculation state and the rear fog lamp.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
-- Climate target temperature, outside temperature (when the vehicle reports it), fan level, the
-  license plate and per-window opening-degree sensors (the opening sensors ship disabled by default
-  because the scale is not confirmed).
+- Climate target temperature, outside temperature (when the vehicle reports it; the S05 does not),
+  fan level, the license plate and per-window opening-degree sensors (the opening sensors ship
+  disabled by default because the scale is not confirmed).
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - **Opt-in vehicle location**: enable *Fetch the vehicle location* in the options to request and
   expose the car position as a device tracker. **European vehicles currently report no location**, so
@@ -75,8 +75,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 ### Remote controls
 
-- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights,
-  horn and lights-and-horn together.
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule (S05
+  PHEV only), lights, horn and lights-and-horn together.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
@@ -109,7 +109,7 @@ Everything the integration exposes is plain Home Assistant entities, so any dash
 | --- | --- | --- |
 | Where it comes from | Included in this integration, nothing else to install | Separate community integration that runs on top of this one |
 | Vehicles | S05, S07, E07 and a generic Deepal profile | Deepal S05 (EV and PHEV) |
-| What you get | One configurable card: hero image, sections, action buttons, climate and tyre dialogs, six languages | Full S05 dashboard: state-aware car view, charging sessions, energy and cost history, Live notifications |
+| What you get | One configurable card: hero image, sections, action buttons, a climate/seat/tyre dialog, six languages | Full S05 dashboard: state-aware car view, charging sessions, energy and cost history, Live notifications |
 | Install | Add the card, it is already served | HACS or Marketplace, then add **Deepal Companion** |
 | License | MIT (this repository) | GPL-3.0, maintained by [rmxs](https://github.com/rmxs) |
 
@@ -129,9 +129,12 @@ Everything the integration exposes is plain Home Assistant entities, so any dash
    ```
 2. Open the card's **Settings** button (or the visual editor) to choose the vehicle image style
    (plant, isometric, photos or the image entity), the sections and their order, the action buttons,
-   the information tiles, the language (automatic, or English, Spanish, German, French, Italian or
-   Portuguese) and the card margins. Climate and tyres open dialogs with the controls and the four
-   tyre pressures; the charging section appears only while the charger is connected.
+   the status tiles and their order (only the sensors the car exposes), the language (automatic, or
+   English, Spanish, German, French, Italian or Portuguese) and the card margins. Climate, seats and
+   tyres open one dialog with three tabs (climate, seats and tyres); the seats map and its controls
+   are also available on the card itself, and the Tyres section reuses the dialog layout. The
+   charging section appears only while the charger is connected. The hero can show a refresh button
+   that wakes the car and requests fresh data.
 3. Settings changed from the card are written to the card YAML when the dashboard is editable and
    the user is an administrator; otherwise they are stored in the Home Assistant user data for that
    card. The lock, windows and trunk controls require the remote control PIN.

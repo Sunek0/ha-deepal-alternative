@@ -5,15 +5,24 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import DeepalDataUpdateCoordinator
-from .entity import DeepalEntity, async_setup_control_entities
+from .entity import (
+    DeepalEntity,
+    async_setup_control_entities,
+    remove_entity_registry_entries,
+)
 from .runtime_data import DeepalConfigEntry
+from .vehicle_model import supports_charge_schedule
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
+
+#: Switch keys that only exist on models with the charge-schedule option.
+CHARGE_SCHEDULE_SWITCH_KEYS = frozenset({"charge_schedule"})
 
 
 def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
@@ -26,20 +35,37 @@ def _set_steering_wheel_heat(condition: Any, enabled: bool) -> Any:
     return condition
 
 
+def build_switches(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[SwitchEntity]:
+    """Build the switches whose model supports them."""
+    entities: list[SwitchEntity] = []
+    if supports_charge_schedule(vehicle):
+        entities.append(DeepalChargeScheduleSwitch(coordinator, vehicle))
+    entities.append(DeepalSteeringWheelHeatSwitch(coordinator, vehicle))
+    return entities
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: DeepalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the charge schedule and steering wheel heating switches."""
+    coordinator: DeepalDataUpdateCoordinator = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
+
+    for vehicle in coordinator.vehicles:
+        if not supports_charge_schedule(vehicle):
+            remove_entity_registry_entries(
+                registry, vehicle, "switch", CHARGE_SCHEDULE_SWITCH_KEYS
+            )
+
     async_setup_control_entities(
         hass,
         entry,
         async_add_entities,
-        lambda coordinator, vehicle: [
-            DeepalChargeScheduleSwitch(coordinator, vehicle),
-            DeepalSteeringWheelHeatSwitch(coordinator, vehicle),
-        ],
+        build_switches,
     )
 
 

@@ -106,3 +106,13 @@ def async_setup_control_entities(
 
     if entities:
         async_add_entities(entities)
+
+
+def remove_entity_registry_entries(
+    registry: Any, vehicle: Any, platform: str, keys: Any
+) -> None:
+    """Remove the entity-registry entries of the given keys for one vehicle."""
+    for key in keys:
+        unique_id = f"deepal_{vehicle.car_id}_{key}"
+        if entity_id := registry.async_get_entity_id(platform, DOMAIN, unique_id):
+            registry.async_remove(entity_id)
