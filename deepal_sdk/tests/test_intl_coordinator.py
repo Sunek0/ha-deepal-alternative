@@ -3275,6 +3275,216 @@ async def test_warning_lights_retain_the_last_known_values():
 
 
 @pytest.mark.asyncio
+async def test_s05_subsystem_warnings_survive_an_asleep_poll():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        warnings={"abs": False, "airbag": False, "eps": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    # The MQTT bits glitch to 1 on a healthy car, so the overlay must not use
+    # them as a fallback while the car is asleep.
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        warnings={"abs": True, "airbag": True, "eps": True},
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        raw_data={"vehicleStatus": {"powerStatus": 0}},
+        last_updated_timestamp=2000,
+    )
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.abs is False
+    assert condition.warnings.airbag is False
+    assert condition.warnings.eps is False
+
+
+@pytest.mark.asyncio
+async def test_s05_subsystem_warnings_are_replaced_when_ready_again():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        warnings={"abs": False, "airbag": False, "eps": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        raw_data={
+            "vehicleStatus": {
+                "powerStatus": 2,
+                "absAntiLockBrakingSysStatus": 1,
+                "airBagSysStatus": 1,
+                "powerSteeringSysStatus": 1,
+            }
+        },
+        last_updated_timestamp=2000,
+    )
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.abs is True
+    assert condition.warnings.airbag is True
+    assert condition.warnings.eps is True
+
+
+@pytest.mark.asyncio
+async def test_s05_subsystem_warnings_survive_the_first_asleep_poll_after_restart():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator._restored = {
+        "car-1": VehicleCondition(
+            car_id="car-1",
+            vin="VIN",
+            warnings={"abs": False, "airbag": False, "eps": False},
+            last_updated_timestamp=1000,
+        )
+    }
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        raw_data={"vehicleStatus": {"powerStatus": 0}},
+        last_updated_timestamp=2000,
+    )
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.abs is False
+    assert condition.warnings.airbag is False
+    assert condition.warnings.eps is False
+
+
+@pytest.mark.asyncio
+async def test_s05_subsystem_warnings_survive_an_unavailable_app_condition():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        warnings={"abs": False, "airbag": False, "eps": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        warnings={"abs": True, "airbag": True, "eps": True},
+        last_updated_timestamp=2000,
+    )
+    client.condition_error = DeepalAPIError("app condition unavailable")
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.abs is False
+    assert condition.warnings.airbag is False
+    assert condition.warnings.eps is False
+
+
+@pytest.mark.asyncio
+async def test_s05_subsystem_warnings_ignore_glitched_mqtt_bits_when_ready():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        warnings={"abs": False, "airbag": False, "eps": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    vehicle = Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    # Ready, glitched MQTT bits, and an app report whose subsystem block does
+    # not carry the registers: the retained REST value must win, not the bits.
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"abs": True, "airbag": True, "eps": True},
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        raw_data={"vehicleStatus": {"powerStatus": 2}},
+        last_updated_timestamp=2000,
+    )
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.abs is False
+    assert condition.warnings.airbag is False
+    assert condition.warnings.eps is False
+
+
+@pytest.mark.asyncio
 async def test_unreported_telemetry_groups_retain_the_last_known_values():
     client = _FakeIntlClient([])
     current = VehicleCondition(

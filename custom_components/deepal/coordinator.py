@@ -584,17 +584,26 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition.climate.steering_wheel_heater_on = remembered[0]
         condition.climate.steering_wheel_heater_level = remembered[1]
 
-    @staticmethod
     def _apply_rest_subsystem_warnings(
-        vehicle: Vehicle, condition: VehicleCondition, status: Any
+        self, vehicle: Vehicle, condition: VehicleCondition, status: Any
     ) -> None:
-        """Set the S05 airbag, ABS and power steering lights from REST registers."""
+        """Set the S05 airbag, ABS and power steering lights from REST registers.
+
+        The REST overlay runs after the condition merge, so it is the place
+        that can leave these three lights unknown on a sleeping car. The
+        last-known retention is applied again here, after the registers are
+        resolved, so a value confirmed while ready survives the sleep cycle
+        instead of being replaced by the overlay's unknown.
+        """
         if not (is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)):
             return
         for field, value in rest_subsystem_warnings(
             status, condition.power_status
         ).items():
             setattr(condition.warnings, field, value)
+        self._retain_unknown_warnings(
+            condition, self._previous_condition(vehicle.car_id)
+        )
 
     async def _overlay_app_comfort(
         self, vehicle: Vehicle, condition: VehicleCondition
@@ -880,6 +889,29 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         )
         return await self._async_refresh_tokens(force=True)
 
+    def _previous_condition(self, vehicle_id: str) -> VehicleCondition | None:
+        """Return the last published condition, or the stored one before it."""
+        return (self.data or {}).get(vehicle_id) or self._restored.get(vehicle_id)
+
+    @staticmethod
+    def _retain_unknown_warnings(
+        condition: VehicleCondition, previous: VehicleCondition | None
+    ) -> None:
+        """Fill the warning lights a condition did not report from the last one.
+
+        Only unknown fields are filled, so a warning value reported by the
+        current condition always wins. The power-state gate guarantees the
+        retained value came from a report with the vehicle on.
+        """
+        if previous is None:
+            return
+        for field in type(condition.warnings).model_fields:
+            if getattr(condition.warnings, field) is not None:
+                continue
+            retained = getattr(previous.warnings, field)
+            if retained is not None:
+                setattr(condition.warnings, field, retained)
+
     def _merge_condition(
         self, vehicle_id: str, condition: VehicleCondition
     ) -> VehicleCondition:
@@ -912,22 +944,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         def keep(path: str) -> bool:
             return pending is None or path not in pending
 
-        previous = (self.data or {}).get(vehicle_id) or self._restored.get(
-            vehicle_id
-        )
+        previous = self._previous_condition(vehicle_id)
         if previous is not None:
             if condition.latitude is None:
                 condition.latitude = previous.latitude
             if condition.longitude is None:
                 condition.longitude = previous.longitude
-            for field in type(condition.warnings).model_fields:
-                if (
-                    getattr(condition.warnings, field) is None
-                    and getattr(previous.warnings, field) is not None
-                ):
-                    setattr(
-                        condition.warnings, field, getattr(previous.warnings, field)
-                    )
+            self._retain_unknown_warnings(condition, previous)
             _retain_unreported_groups(previous, condition, pending)
             _retain_odometer(previous, condition)
             _copy_missing_fields(
