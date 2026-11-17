@@ -20,6 +20,26 @@ The integration provides the connection, the telemetry and the remote controls; 
   countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
   Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
 
+## Installation
+
+### HACS
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+1. Click the badge (or add this repository as a custom repository of type **Integration**:
+   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
+   offers to add the repository as a custom repository.
+2. Install **Deepal Alternative** and restart Home Assistant.
+3. Add the integration from **Settings > Devices & services**, choose the international platform and
+   log in with an email or SMS code (use the secondary account from above).
+
+Updating keeps the same `deepal` domain, so no reconfiguration is needed.
+
+### Manual
+
+1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
+2. Restart Home Assistant and add the integration as described above.
+
 ## Supported vehicles
 
 The integration talks to the official international My Changan platform and targets the European
@@ -216,27 +236,7 @@ troubleshooting) is available in every language the integration supports:
 - [Italiano](guides/installation-guide.it.md)
 - [Português](guides/installation-guide.pt.md)
 
-## Installation
-
-### HACS
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
-
-1. Click the badge (or add this repository as a custom repository of type **Integration**:
-   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
-   offers to add the repository as a custom repository.
-2. Install **Deepal Alternative** and restart Home Assistant.
-3. Add the integration from **Settings > Devices & services**, choose the international platform and
-   log in with an email or SMS code (use the secondary account from above).
-
-Updating keeps the same `deepal` domain, so no reconfiguration is needed.
-
-### Manual
-
-1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
-2. Restart Home Assistant and add the integration as described above.
-
-## Configuration
+# Configuration
 
 Open **Settings > Devices & services > Deepal Alternative > Configure** to change these options:
 
