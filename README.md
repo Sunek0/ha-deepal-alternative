@@ -26,7 +26,7 @@ The integration provides the connection, the telemetry and the remote controls; 
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
 
-1. Click the badge (or add this repository as a custom repository of type **Integration**:
+1. Click in add from link (or add this repository as a custom repository) and use this link:
    `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
    offers to add the repository as a custom repository.
 2. Install **Deepal Alternative** and restart Home Assistant.
