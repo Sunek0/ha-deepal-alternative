@@ -110,17 +110,16 @@ data:
   effective `time_zone` attribute.
 - `enabled: false` removes the active plan on the S05 BEV and disables the current plan on the
   S05 PHEV. The S05 BEV uses `add-plan`/`delete-plan` because the car rejects `modify-plan`.
-- On the S05 PHEV the integration updates the reported plan with `modify-plan`. A car that only
-  reports the placeholder plan (`planId` without an end time or end switch) creates the
-  reservation with `add-plan` instead. If `modify-plan` is rejected, enabling falls back to
-  `add-plan` and disabling deletes the plan; disabling never adds one. The service response
-  reports the command that actually ran (`modify-plan`, `add-plan`, `delete-plan`, `plan-validity`
-  or `noop`).
+- On the S05 PHEV the integration updates the reported plan with `modify-plan`; if the car rejects
+  it, the reservation is created with `add-plan`. Disabling uses the plan on/off command first and
+  deletes the plan if that fails, so it never adds a plan to switch off. The service response
+  reports the command that actually ran (`plan-validity`, `modify-plan`, `add-plan` or
+  `delete-plan`).
 - With several loaded entries or vehicles, pass `config_entry_id` and/or `vehicle_id`.
 - The switch and time controls are available for both variants. On the S05 BEV the switch adds a
   plan with the current times and deletes it when turned off; changing a time adds an active
-  plan. On the S05 PHEV the switch uses the plan on/off command first and the time entities keep
-  writing the times with `modify-plan`.
+  plan. On the S05 PHEV the switch uses the plan on/off command for both states and the time
+  entities keep writing the times with `modify-plan`.
 - The read-only "Charge schedule enabled" binary sensor and the start/end sensors are available
   for both variants.
 - The BEV deletes only the active plan before adding a new one; disabled plans created in the app

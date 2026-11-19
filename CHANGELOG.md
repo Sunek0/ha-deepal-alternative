@@ -4,6 +4,17 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b3 - 2026-11-19
+
+### Changed
+
+- The S05 PHEV charge schedule follows the reported plan id: a plan is updated with
+  `modify-plan` and falls back to `add-plan` when the car rejects it, while a car without a plan
+  creates one with `add-plan`. Disabling uses the plan on/off command (`/charge/validity`) and
+  deletes the plan when the command fails.
+- The plan-command fallback is applied after any plan-command failure, not only after the
+  `HW_1_1_01_001` rejection, and the service response no longer includes the `noop` strategy.
+
 ## 1.9.0-b2 - 2026-11-19
 
 ### Fixed

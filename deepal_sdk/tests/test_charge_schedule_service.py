@@ -218,7 +218,7 @@ async def test_phev_updates_the_existing_plan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_phev_placeholder_plan_uses_add_plan() -> None:
+async def test_phev_placeholder_plan_falls_back_to_add_plan() -> None:
     client = FakeClient()
     plans = [
         {
@@ -232,13 +232,16 @@ async def test_phev_placeholder_plan_uses_add_plan() -> None:
     hass, coordinator = _hass(
         _vehicle("SC6460AAAA7HEV"), _condition(plans), client
     )
+    client.modify_error = DeepalAPIError(
+        "API Error: HW_1_1_01_001 Operation failed", code="HW_1_1_01_001"
+    )
 
     response = await services._async_handle_set_charge_schedule(
         _call(hass, start_time="00:00", end_time="03:00", enabled=True)
     )
 
     assert response["strategy"] == "add-plan"
-    assert client.modified == []
+    assert len(client.modified) == 1
     assert len(client.added) == 1
     assert client.added[0][1:4] == ("0000", "0300", 1)
     assert client.deleted == []
@@ -246,7 +249,7 @@ async def test_phev_placeholder_plan_uses_add_plan() -> None:
 
 
 @pytest.mark.asyncio
-async def test_phev_placeholder_plan_disable_is_a_noop() -> None:
+async def test_phev_placeholder_plan_disable_uses_the_plan_validity_command() -> None:
     client = FakeClient()
     plans = [{"planId": 1, "isValid": 0, "startTime": "0000", "startSwitch": 1}]
     hass, coordinator = _hass(
@@ -257,11 +260,12 @@ async def test_phev_placeholder_plan_disable_is_a_noop() -> None:
         _call(hass, start_time="0000", end_time="0300", enabled=False)
     )
 
-    assert response["strategy"] == "noop"
+    assert response["strategy"] == "plan-validity"
+    assert client.toggled == [("car-1", "1", False)]
     assert client.modified == []
     assert client.added == []
     assert client.deleted == []
-    assert coordinator.commands == []
+    assert coordinator.commands == ["validity-command"]
 
 
 @pytest.mark.asyncio
@@ -386,13 +390,15 @@ async def test_phev_switch_off_raises_when_validity_and_delete_fail(monkeypatch)
     with pytest.raises(HomeAssistantError) as excinfo:
         await _switch(monkeypatch, coordinator, vehicle).async_turn_off()
 
-    assert excinfo.value.translation_key == "command_failed"
+    assert "Could not switch off" in str(excinfo.value)
     assert client.added == []
     assert client.modified == []
 
 
 @pytest.mark.asyncio
-async def test_phev_switch_validity_rate_limit_is_not_retried(monkeypatch) -> None:
+async def test_phev_switch_off_deletes_when_validity_fails_for_any_reason(
+    monkeypatch,
+) -> None:
     client = FakeClient()
     plans = [{"planId": 1, "isValid": 1, "startTime": "0000", "endTime": "0100"}]
     vehicle = _vehicle("SC6460AAAA7HEV")
@@ -401,37 +407,33 @@ async def test_phev_switch_validity_rate_limit_is_not_retried(monkeypatch) -> No
         "Too many control-code attempts", code="HW_1_1_01_047"
     )
 
-    with pytest.raises(HomeAssistantError):
-        await _switch(monkeypatch, coordinator, vehicle).async_turn_off()
+    await _switch(monkeypatch, coordinator, vehicle).async_turn_off()
 
-    assert client.deleted == []
+    assert client.deleted == [("car-1", "1")]
     assert client.added == []
 
 
 @pytest.mark.asyncio
-async def test_phev_modify_rejection_while_disabling_deletes_the_plan() -> None:
+async def test_phev_service_disable_uses_the_plan_validity_command() -> None:
     client = FakeClient()
     plans = [{"planId": 1, "isValid": 1, "startTime": "0000", "endTime": "0100"}]
     hass, coordinator = _hass(
         _vehicle("SC6460AAAA7HEV"), _condition(plans), client
-    )
-    client.modify_error = DeepalAPIError(
-        "API Error: HW_1_1_01_001 Operation failed", code="HW_1_1_01_001"
     )
 
     response = await services._async_handle_set_charge_schedule(
         _call(hass, start_time="0000", end_time="0100", enabled=False)
     )
 
-    assert response["strategy"] == "delete-plan"
-    assert len(client.modified) == 1
-    assert client.deleted == [("car-1", "1")]
-    assert client.added == []
-    assert coordinator.commands == ["delete-command"]
+    assert response["strategy"] == "plan-validity"
+    assert client.toggled == [("car-1", "1", False)]
+    assert client.modified == []
+    assert client.deleted == []
+    assert coordinator.commands == ["validity-command"]
 
 
 @pytest.mark.asyncio
-async def test_phev_modify_rate_limit_is_not_retried() -> None:
+async def test_phev_modify_rate_limit_still_falls_back_to_add_plan() -> None:
     client = FakeClient()
     plans = [{"planId": 1, "isValid": 0, "startTime": "0000", "endTime": "0100"}]
     hass, _ = _hass(_vehicle("SC6460AAAA7HEV"), _condition(plans), client)
@@ -439,12 +441,12 @@ async def test_phev_modify_rate_limit_is_not_retried() -> None:
         "Too many control-code attempts", code="HW_1_1_01_047"
     )
 
-    with pytest.raises(HomeAssistantError):
-        await services._async_handle_set_charge_schedule(
-            _call(hass, start_time="0000", end_time="0100", enabled=True)
-        )
+    response = await services._async_handle_set_charge_schedule(
+        _call(hass, start_time="0000", end_time="0100", enabled=True)
+    )
 
-    assert client.added == []
+    assert response["strategy"] == "add-plan"
+    assert len(client.added) == 1
     assert client.deleted == []
 
 
@@ -577,6 +579,9 @@ async def test_schedule_controls_use_the_plan_timezone(monkeypatch) -> None:
         plan_id="1",
     )
     condition.battery.charge_plan_time_zone = "GMT+02:00"
+    # Keep the reservation on so the time entity writes the times with
+    # modify-plan instead of using the plan on/off command.
+    condition.battery.charge_schedule_enabled = True
     vehicle = _vehicle("SC6460AAAA7HEV")
     hass, coordinator = _hass(vehicle, condition, client)
     # The switch tries the plan on/off command first; a rejected toggle falls
