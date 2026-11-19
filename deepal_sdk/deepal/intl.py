@@ -365,6 +365,13 @@ def _percent(value: Any) -> Optional[int]:
     return number if number is not None and 0 <= number <= 100 else None
 
 
+def _text(value: Any) -> Optional[str]:
+    """Return a string for a scalar field, or ``None`` when it is unusable."""
+    if value is None or isinstance(value, (dict, list, tuple)):
+        return None
+    return value if isinstance(value, str) else str(value)
+
+
 def _flag_active(value: Any) -> bool:
     """Return whether a numeric on/off flag is set; absent or unparsable is not.
 
@@ -1316,35 +1323,66 @@ class DeepalIntlClient:
             return token
 
     async def get_vehicles(self) -> list[Vehicle]:
-        """Fetch the account vehicles from the international gateway."""
+        """Fetch the account vehicles from the international gateway.
+
+        An unusable payload returns an empty list and entries without a usable
+        vehicle identifier are skipped, so a transient shape change cannot raise
+        a non-SDK exception or create a vehicle with an empty id. The
+        coordinator keeps the current vehicles when the list is empty.
+        """
         data = await self._request(INTL_GET_MY_CARS, auth_required=True)
-        items = data if isinstance(data, list) else (data or {}).get("list", [])
+        if isinstance(data, list):
+            items: Any = data
+        elif isinstance(data, dict):
+            items = data.get("list", [])
+        else:
+            items = []
+        if not isinstance(items, list):
+            items = []
 
         vehicles = []
         for item in items:
+            if not isinstance(item, dict):
+                continue
+            car_id = item.get("carId") or item.get("car_id")
+            if not car_id:
+                continue
             vehicles.append(
                 Vehicle(
-                    car_id=str(item.get("carId") or item.get("car_id") or ""),
-                    vin=item.get("vin") or "",
-                    series_name=item.get("seriesName") or item.get("series_name") or "Deepal",
-                    series_code=item.get("seriesCode") or item.get("series_code"),
-                    model_name=item.get("modelName") or item.get("model_name"),
-                    model_code=item.get("modelCode") or item.get("model_code"),
-                    car_name=item.get("nickName") or item.get("carName"),
-                    license_plate=item.get("licensePlate") or item.get("plateNumber"),
-                    thumbnail_url=(
+                    car_id=str(car_id),
+                    vin=_text(item.get("vin")) or "",
+                    series_name=(
+                        _text(item.get("seriesName") or item.get("series_name"))
+                        or "Deepal"
+                    ),
+                    series_code=_text(
+                        item.get("seriesCode") or item.get("series_code")
+                    ),
+                    model_name=_text(
+                        item.get("modelName") or item.get("model_name")
+                    ),
+                    model_code=_text(
+                        item.get("modelCode") or item.get("model_code")
+                    ),
+                    car_name=_text(item.get("nickName") or item.get("carName")),
+                    license_plate=_text(
+                        item.get("licensePlate") or item.get("plateNumber")
+                    ),
+                    thumbnail_url=_text(
                         item.get("imgUrl")
                         or item.get("vehicleImageUrl")
                         or item.get("imageUrl")
                         or item.get("carImageUrl")
                         or item.get("modelImageUrl")
                     ),
-                    car_platform=(
+                    car_platform=_as_int(
                         item.get("carPlatform")
                         if item.get("carPlatform") is not None
                         else item.get("car_platform")
                     ),
-                    protocol_type=item.get("protocolType") or item.get("protocol_type"),
+                    protocol_type=_text(
+                        item.get("protocolType") or item.get("protocol_type")
+                    ),
                 )
             )
         return vehicles
@@ -1767,7 +1805,18 @@ class DeepalIntlClient:
         lamp = raw.get("lamp") or {}
         warnings = raw.get("warningLights") or {}
         window_openings = raw.get("windowOpenings") or {}
-        charge_plan = _path_value(charge, ("chargePlanList", 0)) or {}
+        plans = charge.get("chargePlanList")
+        if not isinstance(plans, list):
+            plans = []
+        charge_plan = next(
+            (
+                plan
+                for plan in plans
+                if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
+            ),
+            plans[0] if plans and isinstance(plans[0], dict) else {},
+        ) or {}
+        plan_valid = _as_int(charge_plan.get("isValid"))
 
         def _tenths(value: Any) -> Optional[float]:
             parsed = _as_float(value)
@@ -1855,9 +1904,17 @@ class DeepalIntlClient:
             remaining_charge_time_min=remaining_charge_time,
             charge_limit_percent=_percent(charge.get("maxSocPercent")),
             charge_schedule_enabled=(
-                _as_int(charge_plan.get("startSwitch")) == 1
-                and _as_int(charge_plan.get("endSwitch")) == 1
+                bool(plan_valid)
+                if plan_valid is not None
+                else (
+                    _as_int(charge_plan.get("startSwitch")) == 1
+                    and _as_int(charge_plan.get("endSwitch")) == 1
+                )
             ),
+            charge_plan_valid=(
+                bool(plan_valid) if plan_valid is not None else None
+            ),
+            charge_plans=[plan for plan in plans if isinstance(plan, dict)],
             charge_schedule_start=(
                 str(charge_plan["startTime"])
                 if charge_plan.get("startTime") is not None
@@ -4040,6 +4097,11 @@ class DeepalIntlClient:
             data = await self._request(
                 path, json_data=signed_payload, auth_required=True
             )
+        except DeepalRateLimitError:
+            # A rate limit is not a stale token: exchanging the PIN would spend
+            # one of the account's attempts and replaying the command ignores
+            # the gateway backoff. Let the caller handle the rate limit.
+            raise
         except (DeepalAPIError, DeepalAuthError):
             # A cached rcToken is a session that expires (the official app asks
             # for the control PIN again roughly weekly); the server only reveals

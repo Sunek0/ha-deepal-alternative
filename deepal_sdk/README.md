@@ -15,7 +15,7 @@ The SDK speaks to two different Changan platforms, each with its own client:
 | Client | Platform | Base host | Login | Reference |
 | --- | --- | --- | --- | --- |
 | `DeepalIntlClient` | International (My Changan app, Europe/LatAm) | `m.iov.changanauto.com.de` | Email or SMS verification code | [`docs/reference/intl-api.md`](docs/reference/intl-api.md) |
-| `DeepalClient` | SDA (mainland China) | `pre-acenter.sda.changan.com.cn` | SMS code or a pasted access token | [`docs/reference/sda-api.md`](docs/reference/sda-api.md) |
+| `DeepalClient` | SDA (mainland China) | `m.sda.changan.com.cn` | Pasted access token (SMS is captcha-gated) | [`docs/reference/sda-api.md`](docs/reference/sda-api.md) |
 
 The international platform is the fully implemented path: REST telemetry, remote commands signed
 with the account keypair, S05 MQTT telemetry (`docs/reference/mqtt-telemetry.md`) and read-only
@@ -173,10 +173,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The SMS login flow (`request_sms_code` / `login_with_code`) is implemented but the recommended path
-is an access token issued by the SDA platform. See
+The SMS login flow (`request_sms_code` / `login_with_code`) is implemented at the transport level,
+but the SDA gateway requires a captcha authorization code for the send-code request, which the SDK
+does not produce. Use an access token issued by the SDA platform. See
 [`docs/reference/sda-api.md`](docs/reference/sda-api.md) for the headers, the telemetry mapping and
-the unverified caveats.
+the limitations.
 
 ## Error handling
 

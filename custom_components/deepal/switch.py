@@ -4,11 +4,10 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .charge_schedule import async_set_charge_schedule, ha_gmt_offset
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import (
     DeepalEntity,
@@ -23,11 +22,6 @@ PARALLEL_UPDATES = 0
 
 #: Switch keys that only exist on models with the charge-schedule option.
 CHARGE_SCHEDULE_SWITCH_KEYS = frozenset({"charge_schedule"})
-
-
-def _set_schedule_enabled(condition: Any, enabled: bool) -> Any:
-    condition.battery.charge_schedule_enabled = enabled
-    return condition
 
 
 def _set_steering_wheel_heat(condition: Any, enabled: bool) -> Any:
@@ -97,24 +91,24 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
 
     async def _async_update(self, *, enabled: bool) -> None:
         cond = self.condition
-        if not cond or not cond.battery.charge_plan_id:
-            raise HomeAssistantError(
-                "Deepal charge schedule plan is not available",
-                translation_domain=DOMAIN,
-                translation_key="charge_schedule_unavailable",
-            )
-        await self.async_send_command(
-            lambda: self.client.control_charge_schedule(
-                self._car_id,
-                cond.battery.charge_plan_id,
-                cond.battery.charge_schedule_start or "0000",
-                cond.battery.charge_schedule_end or "0000",
-                enabled,
-                cond.battery.charge_plan_type or 1,
-                cond.battery.charge_plan_time_format or 1,
-                cond.battery.charge_plan_time_zone or "GMT+08:00",
-            ),
-            optimistic_update=lambda new: _set_schedule_enabled(new, enabled),
+        start = (
+            cond.battery.charge_schedule_start or "0000"
+            if cond is not None
+            else "0000"
+        )
+        end = (
+            cond.battery.charge_schedule_end or "0800"
+            if cond is not None
+            else "0800"
+        )
+        await async_set_charge_schedule(
+            self.coordinator,
+            self.vehicle,
+            start,
+            end,
+            enabled,
+            ha_gmt_offset(self.hass),
+            wait_for_plan=not enabled,
         )
 
 

@@ -41,6 +41,21 @@
     },
     "command_result_failed_unreachable": {
       "message": "Deepal command failed with result code {code}: {message} (the vehicle did not accept the command; it may be offline or busy, try again when it is awake)"
+    },
+    "invalid_charge_schedule_time": {
+      "message": "Invalid charge schedule time {value!r}; use HH:MM or HHMM."
+    },
+    "charge_schedule_no_target": {
+      "message": "No Deepal vehicle matches the service target."
+    },
+    "charge_schedule_multiple_targets": {
+      "message": "Several Deepal vehicles match the target; pass config_entry_id or vehicle_id."
+    },
+    "charge_schedule_unsupported": {
+      "message": "The charge schedule is only supported on the S05."
+    },
+    "charge_schedule_delete_failed": {
+      "message": "The charge schedule could not be deleted: {error}"
     }
   },
   "issues": {
@@ -320,7 +335,8 @@
           "connected_dc": "DC cable connected",
           "charging_ac": "Charging on AC",
           "charging_dc": "Charging on DC",
-          "charge_stopped": "Charging stopped"
+          "charge_stopped": "Charging stopped",
+          "waiting_schedule": "Waiting for charge schedule"
         }
       },
       "charge_mode": {
@@ -651,5 +667,33 @@
     "diagnostics_status_download": "Download diagnostics file",
     "diagnostics_status_dropped": "**Dropped events:** {count}",
     "diagnostics_status_last_error": "**Last capture error:** `{error}`"
+  },
+  "services": {
+    "set_charge_schedule": {
+      "name": "Set charge schedule",
+      "description": "Create, update or remove the S05 charge reservation.",
+      "fields": {
+        "start_time": {
+          "name": "Start time",
+          "description": "Reservation start in HH:MM or HHMM (vehicle local time)."
+        },
+        "end_time": {
+          "name": "End time",
+          "description": "Reservation end in HH:MM or HHMM (vehicle local time)."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Enable the reservation; disable it to remove the active BEV plan or disable the PHEV plan."
+        },
+        "vehicle_id": {
+          "name": "Vehicle id",
+          "description": "Optional car id when the account has several vehicles."
+        },
+        "config_entry_id": {
+          "name": "Config entry id",
+          "description": "Optional Deepal config entry when several entries are loaded."
+        }
+      }
+    }
   }
 }

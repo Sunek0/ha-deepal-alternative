@@ -151,6 +151,8 @@ class BatteryCondition(BaseModel):
     remaining_charge_time_min: Optional[int] = Field(default=None, description="Remaining charge time in minutes")
     charge_limit_percent: Optional[int] = Field(default=None, ge=0, le=100, description="Maximum charge percentage")
     charge_schedule_enabled: bool = Field(default=False, description="Is the charging schedule enabled")
+    charge_plan_valid: Optional[bool] = Field(default=None, description="Whether the charging plan is active")
+    charge_plans: list[dict[str, Any]] = Field(default_factory=list, description="Raw charge plan list")
     charge_schedule_start: Optional[str] = Field(default=None, description="Charging schedule start time")
     charge_schedule_end: Optional[str] = Field(default=None, description="Charging schedule end time")
     charge_plan_id: Optional[str] = Field(default=None, description="Charging plan identifier")

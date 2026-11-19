@@ -41,6 +41,21 @@
     },
     "command_result_failed_unreachable": {
       "message": "Il comando Deepal non è riuscito con codice risultato {code}: {message} (il veicolo non ha accettato il comando; potrebbe essere offline o occupato, riprova quando è sveglio)"
+    },
+    "invalid_charge_schedule_time": {
+      "message": "Orario di ricarica non valido {value!r}; usa HH:MM o HHMM."
+    },
+    "charge_schedule_no_target": {
+      "message": "Nessun veicolo Deepal corrisponde al target del servizio."
+    },
+    "charge_schedule_multiple_targets": {
+      "message": "Più veicoli Deepal corrispondono; indica config_entry_id o vehicle_id."
+    },
+    "charge_schedule_unsupported": {
+      "message": "L’orario di ricarica è supportato solo sull’S05."
+    },
+    "charge_schedule_delete_failed": {
+      "message": "Impossibile eliminare l’orario di ricarica: {error}"
     }
   },
   "issues": {
@@ -310,7 +325,8 @@
           "connected_dc": "Cavo CC collegato",
           "charging_ac": "In carica in CA",
           "charging_dc": "In carica in CC",
-          "charge_stopped": "Ricarica interrotta"
+          "charge_stopped": "Ricarica interrotta",
+          "waiting_schedule": "In attesa dell'orario di ricarica"
         }
       },
       "charge_mode": {
@@ -651,5 +667,33 @@
     "diagnostics_status_download": "Scarica il file di diagnostica",
     "diagnostics_status_dropped": "**Eventi scartati:** {count}",
     "diagnostics_status_last_error": "**Ultimo errore di cattura:** `{error}`"
+  },
+  "services": {
+    "set_charge_schedule": {
+      "name": "Imposta orario di ricarica",
+      "description": "Crea, aggiorna o rimuove la prenotazione di ricarica dell’S05.",
+      "fields": {
+        "start_time": {
+          "name": "Ora di inizio",
+          "description": "Inizio della prenotazione in HH:MM o HHMM (ora locale del veicolo)."
+        },
+        "end_time": {
+          "name": "Ora di fine",
+          "description": "Fine della prenotazione in HH:MM o HHMM (ora locale del veicolo)."
+        },
+        "enabled": {
+          "name": "Attiva",
+          "description": "Attiva la prenotazione; disattivala per rimuovere il piano BEV attivo o disattivare il piano PHEV."
+        },
+        "vehicle_id": {
+          "name": "ID veicolo",
+          "description": "ID auto opzionale quando l’account ha più veicoli."
+        },
+        "config_entry_id": {
+          "name": "ID voce",
+          "description": "Config entry Deepal opzionale quando sono caricate più voci."
+        }
+      }
+    }
   }
 }

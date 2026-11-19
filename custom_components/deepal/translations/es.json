@@ -41,6 +41,21 @@
     },
     "command_result_failed_unreachable": {
       "message": "El comando de Deepal falló con el código de resultado {code}: {message} (el vehículo no aceptó el comando; puede estar desconectado u ocupado, inténtalo de nuevo cuando esté despierto)"
+    },
+    "invalid_charge_schedule_time": {
+      "message": "Hora de carga no válida {value!r}; usa HH:MM o HHMM."
+    },
+    "charge_schedule_no_target": {
+      "message": "Ningún vehículo Deepal coincide con el destino del servicio."
+    },
+    "charge_schedule_multiple_targets": {
+      "message": "Varios vehículos Deepal coinciden; indica config_entry_id o vehicle_id."
+    },
+    "charge_schedule_unsupported": {
+      "message": "El horario de carga solo está disponible en el S05."
+    },
+    "charge_schedule_delete_failed": {
+      "message": "No se pudo borrar el horario de carga: {error}"
     }
   },
   "issues": {
@@ -310,7 +325,8 @@
           "connected_dc": "Cable CC conectado",
           "charging_ac": "Cargando en CA",
           "charging_dc": "Cargando en CC",
-          "charge_stopped": "Carga detenida"
+          "charge_stopped": "Carga detenida",
+          "waiting_schedule": "Esperando horario de carga"
         }
       },
       "charge_mode": {
@@ -651,5 +667,33 @@
     "diagnostics_status_download": "Descargar archivo de diagnóstico",
     "diagnostics_status_dropped": "**Eventos descartados:** {count}",
     "diagnostics_status_last_error": "**Último error de captura:** `{error}`"
+  },
+  "services": {
+    "set_charge_schedule": {
+      "name": "Establecer horario de carga",
+      "description": "Crea, actualiza o elimina la reserva de carga del S05.",
+      "fields": {
+        "start_time": {
+          "name": "Hora de inicio",
+          "description": "Inicio de la reserva en HH:MM o HHMM (hora local del coche)."
+        },
+        "end_time": {
+          "name": "Hora de fin",
+          "description": "Fin de la reserva en HH:MM o HHMM (hora local del coche)."
+        },
+        "enabled": {
+          "name": "Activada",
+          "description": "Activa la reserva; desactívala para borrar el plan activo del BEV o desactivar el del PHEV."
+        },
+        "vehicle_id": {
+          "name": "Id del vehículo",
+          "description": "Car id opcional cuando la cuenta tiene varios vehículos."
+        },
+        "config_entry_id": {
+          "name": "Id de la entrada",
+          "description": "Config entry de Deepal opcional cuando hay varias entradas."
+        }
+      }
+    }
   }
 }

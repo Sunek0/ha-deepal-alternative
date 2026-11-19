@@ -1,0 +1,38 @@
+set_charge_schedule:
+  name: Set charge schedule
+  description: >-
+    Create, update or remove the charge reservation of an S05 BEV or S05 PHEV.
+    The S05 BEV uses add-plan/delete-plan; the S05 PHEV uses modify-plan.
+  fields:
+    start_time:
+      name: Start time
+      description: Reservation start in HH:MM or HHMM (vehicle local time).
+      required: true
+      example: "00:00"
+      selector:
+        text:
+    end_time:
+      name: End time
+      description: Reservation end in HH:MM or HHMM (vehicle local time).
+      required: true
+      example: "01:00"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: >-
+        Enable the reservation. Disable it to remove the active plan on an S05
+        BEV or to disable the current plan on an S05 PHEV.
+      default: true
+      selector:
+        boolean:
+    vehicle_id:
+      name: Vehicle id
+      description: Optional car id when the account has several vehicles.
+      selector:
+        text:
+    config_entry_id:
+      name: Config entry id
+      description: Optional Deepal config entry when several entries are loaded.
+      selector:
+        text:

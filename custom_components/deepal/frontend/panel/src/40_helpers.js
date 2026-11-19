@@ -122,11 +122,16 @@ function layoutFor(vehicle) {
  * Reads the frontend registries only: `hass.entities` carries the platform,
  * device and translation key of every entity, and `hass.devices` the vehicle
  * names. No entity id is assumed, so the card works on any installation.
- * Every vehicle also carries its detected model profile.
+ *
+ * Home Assistant replaces the registry objects on registry updates, so the
+ * grouping is cached by object identity and only the state-driven profile and
+ * model assets are refreshed on every call. This keeps regular state updates
+ * from walking the whole registry.
  */
-function discoverVehicles(hass) {
+let discoveryCache = { entities: null, devices: null, vehicles: [] };
+
+function buildVehicles(entities, devices) {
   const vehicles = new Map();
-  const entities = (hass && hass.entities) || {};
   for (const entry of Object.values(entities)) {
     if (entry.platform !== "deepal") continue;
     if (!entry.device_id || !entry.translation_key) continue;
@@ -135,7 +140,7 @@ function discoverVehicles(hass) {
     if (!PANEL_DOMAINS.includes(domain)) continue;
     let vehicle = vehicles.get(entry.device_id);
     if (!vehicle) {
-      const device = ((hass && hass.devices) || {})[entry.device_id] || {};
+      const device = devices[entry.device_id] || {};
       vehicle = {
         deviceId: entry.device_id,
         name: device.name_by_user || device.name || "Deepal",
@@ -148,7 +153,26 @@ function discoverVehicles(hass) {
     vehicle.entities[domain] = vehicle.entities[domain] || {};
     vehicle.entities[domain][entry.translation_key] = entry.entity_id;
   }
-  for (const vehicle of vehicles.values()) {
+  return [...vehicles.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+function discoverVehicles(hass) {
+  const entities = (hass && hass.entities) || {};
+  const devices = (hass && hass.devices) || {};
+  if (
+    discoveryCache.entities !== entities ||
+    discoveryCache.devices !== devices
+  ) {
+    discoveryCache = {
+      entities,
+      devices,
+      vehicles: buildVehicles(entities, devices),
+    };
+  }
+  const vehicles = discoveryCache.vehicles;
+  for (const vehicle of vehicles) {
     vehicle.profile = detectProfile(vehicle);
     const imageId = vehicle.entities.image?.vehicle_image;
     const imageState = imageId && hass.states ? hass.states[imageId] : null;
@@ -164,9 +188,7 @@ function discoverVehicles(hass) {
           }
         : null;
   }
-  return [...vehicles.values()].sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  return vehicles;
 }
 
 /**

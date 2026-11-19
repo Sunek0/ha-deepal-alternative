@@ -11,7 +11,11 @@ from .const import DOMAIN, PERCENTAGE_UNIT
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import DeepalEntity, async_setup_control_entities
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05_phev, supports_charge_limit
+from .vehicle_model import (
+    is_s05_phev,
+    seat_function_supported,
+    supports_charge_limit,
+)
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
@@ -34,6 +38,8 @@ def build_control_numbers(
         entities.append(DeepalChargeLimitNumber(coordinator, vehicle))
     for seat in SEAT_LABELS:
         for function in SEAT_FUNCTIONS:
+            if not seat_function_supported(capabilities, seat, function):
+                continue
             entities.append(DeepalSeatLevelNumber(coordinator, vehicle, seat, function))
     return entities
 

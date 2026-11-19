@@ -5,11 +5,10 @@ from typing import Any
 
 from homeassistant.components.time import TimeEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .charge_schedule import async_set_charge_schedule, ha_gmt_offset
 from .coordinator import DeepalDataUpdateCoordinator
 from .entity import (
     DeepalEntity,
@@ -17,7 +16,7 @@ from .entity import (
     remove_entity_registry_entries,
 )
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import supports_charge_schedule
+from .vehicle_model import is_s05, is_s05_phev, supports_charge_schedule
 
 # The coordinator serializes state-sharing commands per vehicle
 PARALLEL_UPDATES = 0
@@ -110,37 +109,49 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
         )
         return _parse_hhmm(value)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        """Expose the timezone the plan time is expressed in."""
+        cond = self.condition
+        zone = cond.battery.charge_plan_time_zone if cond else None
+        if not zone:
+            hass = getattr(self, "hass", None)
+            if hass is not None:
+                zone = ha_gmt_offset(hass)
+        return {"time_zone": zone} if zone else None
+
     async def async_set_value(self, value: time) -> None:
         """Update the schedule time."""
         cond = self.condition
-        if not cond or not cond.battery.charge_plan_id:
-            raise HomeAssistantError(
-                "Deepal charge schedule plan is not available",
-                translation_domain=DOMAIN,
-                translation_key="charge_schedule_unavailable",
-            )
-        start = cond.battery.charge_schedule_start or "0000"
-        end = cond.battery.charge_schedule_end or "0000"
+        start = (
+            cond.battery.charge_schedule_start or "0000"
+            if cond is not None
+            else "0000"
+        )
+        end = (
+            cond.battery.charge_schedule_end or "0800"
+            if cond is not None
+            else "0800"
+        )
         if self._field == "start":
             start = _format_hhmm(value)
         else:
             end = _format_hhmm(value)
 
-        def _optimistic(condition: Any) -> Any:
-            condition.battery.charge_schedule_start = start
-            condition.battery.charge_schedule_end = end
-            return condition
+        enabled = (
+            cond.battery.charge_schedule_enabled if cond is not None else True
+        )
+        if is_s05(self.vehicle) and not is_s05_phev(self.vehicle):
+            # The BEV has no separate "store a disabled plan" command: a new
+            # add-plan with the chosen times becomes active immediately.
+            enabled = True
 
-        await self.async_send_command(
-            lambda: self.client.control_charge_schedule(
-                self._car_id,
-                cond.battery.charge_plan_id,
-                start,
-                end,
-                cond.battery.charge_schedule_enabled,
-                cond.battery.charge_plan_type or 1,
-                cond.battery.charge_plan_time_format or 1,
-                cond.battery.charge_plan_time_zone or "GMT+08:00",
-            ),
-            optimistic_update=_optimistic,
+        await async_set_charge_schedule(
+            self.coordinator,
+            self.vehicle,
+            start,
+            end,
+            enabled,
+            ha_gmt_offset(self.hass),
+            wait_for_plan=False,
         )

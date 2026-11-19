@@ -22,7 +22,13 @@ from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
 from .entity import remove_entity_registry_entries
 from .runtime_data import DeepalConfigEntry
-from .vehicle_model import is_s05, is_s05_phev, supports_charge_schedule
+from .vehicle_model import (
+    is_s05,
+    is_s05_phev,
+    supports_charge_plan,
+    supports_charge_schedule,
+    uses_s05_charge_enum,
+)
 
 # Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
@@ -66,41 +72,46 @@ REMOVED_BINARY_SENSOR_KEYS = frozenset(
 def build_binary_sensors(
     coordinator: DeepalDataUpdateCoordinator, vehicle: Any
 ) -> list[BinarySensorEntity]:
-    """Build the binary sensors for one vehicle, skipping what its model lacks."""
+    """Build the binary sensors one vehicle supports on its platform and model."""
+    international = isinstance(coordinator.client, DeepalIntlClient)
     entities: list[BinarySensorEntity] = [
         DeepalChargerPluggedBinarySensor(coordinator, vehicle),
         DeepalDoorsLockedBinarySensor(coordinator, vehicle),
     ]
+    if international:
+        entities.extend(_international_binary_sensors(coordinator, vehicle))
 
     s05 = is_s05(vehicle)
     phev = is_s05_phev(vehicle)
-    schedule = supports_charge_schedule(vehicle)
-
-    if isinstance(coordinator.client, DeepalIntlClient):
-        for key in ("front_left", "front_right", "rear_left", "rear_right"):
-            entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key))
-
-        for key in (
-            "front_left_open",
-            "front_right_open",
-            "rear_left_open",
-            "rear_right_open",
-        ):
-            entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key))
-
-        entities.append(DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle))
-
-        entities.extend(
-            DeepalBinarySensor(coordinator, vehicle, description)
-            for description in BINARY_SENSORS
-            if not (s05 and description.key in S05_UNSUPPORTED_BINARY_SENSOR_KEYS)
-            and not (phev and description.key in PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS)
-            and not (
-                not schedule
-                and description.key in CHARGE_SCHEDULE_BINARY_SENSOR_KEYS
-            )
+    schedule = supports_charge_plan(vehicle)
+    entities.extend(
+        DeepalBinarySensor(coordinator, vehicle, description)
+        for description in BINARY_SENSORS
+        if (international or not description.international_only)
+        and not (s05 and description.key in S05_UNSUPPORTED_BINARY_SENSOR_KEYS)
+        and not (phev and description.key in PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS)
+        and not (
+            not schedule and description.key in CHARGE_SCHEDULE_BINARY_SENSOR_KEYS
         )
+    )
+    return entities
 
+
+def _international_binary_sensors(
+    coordinator: DeepalDataUpdateCoordinator, vehicle: Any
+) -> list[BinarySensorEntity]:
+    """Build the binary sensors only the international platform reports."""
+    entities: list[BinarySensorEntity] = []
+    for key in ("front_left", "front_right", "rear_left", "rear_right"):
+        entities.append(DeepalTireAlarmBinarySensor(coordinator, vehicle, key))
+    for key in (
+        "front_left_open",
+        "front_right_open",
+        "rear_left_open",
+        "rear_right_open",
+    ):
+        entities.append(DeepalWindowBinarySensor(coordinator, vehicle, key))
+    entities.append(DeepalSteeringWheelHeaterBinarySensor(coordinator, vehicle))
     return entities
 
 
@@ -131,7 +142,7 @@ async def async_setup_entry(
             _remove_binary_entities(
                 registry, vehicle, PHEV_UNSUPPORTED_BINARY_SENSOR_KEYS
             )
-        if not supports_charge_schedule(vehicle):
+        if not supports_charge_plan(vehicle):
             _remove_binary_entities(
                 registry, vehicle, CHARGE_SCHEDULE_BINARY_SENSOR_KEYS
             )
@@ -256,10 +267,16 @@ class DeepalSteeringWheelHeaterBinarySensor(DeepalBaseBinarySensor):
 
 @dataclass(frozen=True, kw_only=True)
 class DeepalBinarySensorDescription(BinarySensorEntityDescription):
-    """Description of an extended international binary sensor."""
+    """Description of an extended binary sensor.
+
+    ``international_only`` keeps the platform rule in the table instead of a
+    per-platform branch in ``build_binary_sensors``: a description that only the
+    international gateway reports is skipped on SDA entries.
+    """
 
     value_fn: Callable[[Any, Any], bool | None]
     enabled_default: bool = True
+    international_only: bool = True
 
 
 def _seat_level_on(position: str, field: str) -> Callable[[Any, Any], bool | None]:
@@ -275,11 +292,20 @@ def _seat_level_on(position: str, field: str) -> Callable[[Any, Any], bool | Non
 
 
 def _charging(condition: Any, vehicle: Any) -> bool | None:
+    if uses_s05_charge_enum(vehicle, condition):
+        return charging_flag(condition, True)
     return charging_flag(condition)
 
 
-def _not_locked(value: bool | None) -> bool | None:
-    return None if value is None else not value
+# The coordinator tracks charging sessions for every platform, so the sensor
+# that carries the current and last session is not international-only.
+CHARGING_BINARY_SENSOR = DeepalBinarySensorDescription(
+    key="charging",
+    name="Charging",
+    value_fn=_charging,
+    device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
+    international_only=False,
+)
 
 
 BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
@@ -394,12 +420,7 @@ BINARY_SENSORS: tuple[DeepalBinarySensorDescription, ...] = (
         value_fn=lambda cond, vehicle: cond.battery.dc_gun_connected,
         device_class=BinarySensorDeviceClass.PLUG,
     ),
-    DeepalBinarySensorDescription(
-        key="charging",
-        name="Charging",
-        value_fn=_charging,
-        device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
-    ),
+    CHARGING_BINARY_SENSOR,
     DeepalBinarySensorDescription(
         key="charge_schedule_enabled",
         name="Charge Schedule Enabled",

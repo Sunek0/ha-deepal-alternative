@@ -11,6 +11,7 @@ import pytest
 from deepal.mqtt import (
     rest_subsystem_warnings,
     CHARGE_STATE_CHARGE_STOPPED,
+    CHARGE_STATE_WAITING_SCHEDULE,
     MAPPED_S05_KEYS,
     ConnackInfo,
     MqttBrokerSettings,
@@ -1244,6 +1245,71 @@ def test_charge_state_recognizes_the_charging_stopped_state():
     assert charge_is_active("5") is False
     assert charge_state(9) is None
     assert charge_is_active(9) is None
+
+
+def test_charge_state_recognizes_the_scheduled_charge_waiting_state():
+    assert charge_state(8) == CHARGE_STATE_WAITING_SCHEDULE
+    assert charge_state("8") == CHARGE_STATE_WAITING_SCHEDULE
+    assert charge_is_active(8) is False
+    assert charge_is_active("8") is False
+
+
+def test_normalize_s05_params_maps_the_waiting_schedule_state():
+    condition = normalize_s05_params(
+        {
+            "ChrgSts": 8,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+            "BattACChrgInCurr": 0,
+            "BattDCChrgInCurr": 0,
+            "chargDeltMins": 8191,
+        },
+        model_code="SC6464AAKBEV",
+    )
+
+    assert condition["charge"]["chargeStatus"] == 8
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
+    assert condition["charge"]["chargeCurrent"] == 0.0
+    assert condition["charge"]["remainChargeTime"] is None
+
+
+def test_normalize_s05_params_zeroes_the_currents_while_waiting_for_the_schedule():
+    condition = normalize_s05_params(
+        {"ChrgSts": 8, "BattACChrgInCurr": 12.5, "BattDCChrgInCurr": 60.5},
+        model_code="SC6464AAKBEV",
+    )
+
+    assert condition["charge"]["chargeCurrent"] == 0.0
+    assert condition["charge"]["acChargeCurrent"] == 0.0
+    assert condition["charge"]["dcChargeCurrent"] == 0.0
+
+
+def test_normalize_s05_params_keeps_the_ac_gun_while_waiting_with_a_stale_raw_field():
+    condition = normalize_s05_params(
+        {"ChrgSts": 8, "acChargeGunConnectionState": 0},
+        model_code="SC6464AAKBEV",
+    )
+
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
+
+
+def test_normalize_s05_params_maps_the_phev_waiting_schedule_state():
+    condition = normalize_s05_params(
+        {
+            "ChrgSts": 8,
+            "acChargeGunConnectionState": 1,
+            "dcChargeGunConnectionState": 0,
+        },
+        model_code="SC6460AAAA7HEV",
+    )
+
+    assert condition["charge"]["chargeConStatus"] is True
+    assert condition["charge"]["acChargeGunConnectStatus"] is True
+    assert condition["charge"]["dcChargeGunConnectStatus"] is False
 
 
 def test_normalize_s05_params_falls_back_to_the_gun_fields_without_a_state():

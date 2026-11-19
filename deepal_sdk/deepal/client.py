@@ -1,6 +1,7 @@
 """Asynchronous HTTP Client for Changan Deepal API."""
 
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -33,6 +34,43 @@ from deepal.models import (
 )
 
 logger = logging.getLogger("deepal_sdk")
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    """Return an integer reading, or ``None`` when missing or unparsable.
+
+    Numeric strings such as ``"85"``, ``"85.0"`` or ``"85.7"`` follow the same
+    truncation as their float form; a non-finite value (``inf``, ``nan``) is
+    unknown instead of an ``OverflowError`` that would abort the poll.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number)
+
+
+def _percentage(value: Any) -> Optional[int]:
+    """Return a 0-100 percentage, or ``None`` when missing or out of range.
+
+    The app uses a ``255`` "invalid" marker for the SDA battery. Pydantic
+    rejects it for ``BatteryCondition.soc_percentage``, and a ``ValidationError``
+    is not a ``DeepalError``: one impossible reading would abort the vehicle
+    poll, so an impossible percentage is unknown instead.
+    """
+    number = _optional_int(value)
+    return number if number is not None and 0 <= number <= 100 else None
+
+
+def _text(value: Any) -> Optional[str]:
+    """Return a string for a scalar field, or ``None`` when it is unusable."""
+    if value is None or isinstance(value, (dict, list, tuple)):
+        return None
+    return value if isinstance(value, str) else str(value)
 
 
 class DeepalClient:
@@ -82,9 +120,27 @@ class DeepalClient:
             "User-Agent": "MyChangan/1.12.0 (Android; Deepal S05)",
         }
         if self.access_token:
-            headers["Authorization"] = f"Bearer {self.access_token}"
-            headers["token"] = self.access_token
+            # The SDA gateway authenticates with the VCS header and ignores
+            # Authorization/token (verified live: without it the gateway
+            # answers 40005 "X-VCS-User-Token cannot be empty").
+            headers["X-VCS-User-Token"] = self.access_token
         return headers
+
+    @staticmethod
+    def _is_auth_failure(code: Any, message: str, *, authenticated: bool) -> bool:
+        """Return whether an SDA business code means the session is unusable.
+
+        ``46000`` is the gateway's expired/invalid-token code. ``40005`` is a
+        generic missing-parameter code, so it only counts as an auth failure on
+        an authenticated request whose message names the VCS user token.
+        """
+        if not authenticated:
+            return False
+        normalized = str(code)
+        if normalized == "46000":
+            return True
+        lowered = message.lower().replace("_", "-")
+        return normalized == "40005" and "vcs" in lowered and "token" in lowered
 
     async def _request(
         self,
@@ -92,14 +148,25 @@ class DeepalClient:
         path: str,
         params: Optional[dict[str, Any]] = None,
         json_data: Optional[dict[str, Any]] = None,
+        form_data: Optional[dict[str, Any]] = None,
         auth_required: bool = True,
     ) -> dict[str, Any]:
-        """Perform an HTTP request with error handling and model parsing."""
+        """Perform an HTTP request with error handling and model parsing.
+
+        Exactly one of ``json_data`` and ``form_data`` is expected. The SDA
+        login endpoints consume ``application/x-www-form-urlencoded`` bodies;
+        the rest of the API uses JSON.
+        """
         if auth_required and not self.access_token:
             raise DeepalAuthError("Access token is required for this operation.")
 
         url = f"{self.base_url}{path}" if path.startswith("/") else path
         headers = self._get_headers()
+        is_form = form_data is not None
+        payload = form_data if is_form else json_data
+        body = {"data": form_data} if is_form else {"json": json_data}
+        if is_form:
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
         method = method.upper()
         started = time.monotonic()
 
@@ -108,9 +175,9 @@ class DeepalClient:
                 method=method,
                 url=url,
                 params=params,
-                json=json_data,
                 headers=headers,
                 timeout=self.timeout,
+                **body,
             )
         except httpx.RequestError as exc:
             self._emit_exchange(
@@ -123,7 +190,7 @@ class DeepalClient:
                     "path": path,
                     "url": url,
                     "query": params,
-                    "request": json_data,
+                    "request": payload,
                     "headers": headers,
                     "error": str(exc),
                     "duration_ms": round((time.monotonic() - started) * 1000, 1),
@@ -143,7 +210,7 @@ class DeepalClient:
                     "path": path,
                     "url": url,
                     "query": params,
-                    "request": json_data,
+                    "request": payload,
                     "headers": headers,
                     "status": response.status_code,
                     "response": response.text[:2000],
@@ -167,7 +234,7 @@ class DeepalClient:
                     "path": path,
                     "url": url,
                     "query": params,
-                    "request": json_data,
+                    "request": payload,
                     "headers": headers,
                     "status": response.status_code,
                     "response": response.text[:2000],
@@ -189,7 +256,7 @@ class DeepalClient:
                     "path": path,
                     "url": url,
                     "query": params,
-                    "request": json_data,
+                    "request": payload,
                     "headers": headers,
                     "status": response.status_code,
                     "response": response.text[:2000],
@@ -212,7 +279,7 @@ class DeepalClient:
                 "path": path,
                 "url": url,
                 "query": params,
-                "request": json_data,
+                "request": payload,
                 "headers": headers,
                 "status": response.status_code,
                 "response": data,
@@ -223,21 +290,35 @@ class DeepalClient:
         if not response.is_success or (isinstance(data, dict) and data.get("code") not in (0, 200, "0", "200", None)):
             code = data.get("code") if isinstance(data, dict) else response.status_code
             msg = data.get("msg") or data.get("message") or f"HTTP {response.status_code}"
+            if self._is_auth_failure(
+                code,
+                str(msg),
+                authenticated=auth_required and bool(self.access_token),
+            ):
+                raise DeepalAuthError(f"Authentication token expired or invalid: {msg}")
             raise DeepalAPIError(f"API Error: {msg}", status_code=response.status_code, code=code)
 
         return data
 
     async def request_sms_code(self, phone: str) -> bool:
-        """Request SMS verification code for login."""
+        """Request SMS verification code for login.
+
+        The SDA gateway requires an out-of-band captcha authorization code for
+        this request, which the client does not implement; the call surfaces
+        the gateway's captcha error as ``DeepalAPIError``.
+        """
         payload = {"phone": phone}
-        res = await self._request("POST", LOGIN_SMS_CODE, json_data=payload, auth_required=False)
+        res = await self._request(
+            "POST", LOGIN_SMS_CODE, form_data=payload, auth_required=False
+        )
         return res.get("code") in (0, 200, "0", "200")
 
     async def login_with_code(self, phone: str, code: str) -> AuthToken:
         """Login using phone number and SMS verification code."""
         payload = {"phone": phone, "code": code}
-        data = await self._request("POST", OAUTH_TOKEN_BIND, json_data=payload, auth_required=False)
-        
+        data = await self._request(
+            "POST", OAUTH_TOKEN_BIND, form_data=payload, auth_required=False
+        )
         result_data = data.get("data", {})
         token_str = result_data.get("token") or result_data.get("access_token")
         if not token_str:
@@ -251,25 +332,43 @@ class DeepalClient:
         )
 
     async def get_vehicles(self) -> list[Vehicle]:
-        """Fetch list of user's registered vehicles."""
+        """Fetch list of user's registered vehicles.
+
+        An unusable payload (a missing, non-list or non-object ``data`` value)
+        returns an empty list instead of leaking ``AttributeError``/
+        ``TypeError``: the coordinator keeps the current vehicles when the
+        account reports none, so the next refresh recovers without touching the
+        registries.
+        """
         res = await self._request("GET", GET_MY_CARS)
-        car_list = res.get("data", [])
+        car_list = res.get("data", []) if isinstance(res, dict) else []
         if isinstance(car_list, dict):
             car_list = car_list.get("list", [])
+        if not isinstance(car_list, list):
+            car_list = []
 
         vehicles = []
         for c in car_list:
+            if not isinstance(c, dict):
+                continue
             car_id = c.get("car_id") or c.get("carId") or c.get("id")
             if not car_id:
                 continue
             vehicles.append(
                 Vehicle(
                     car_id=str(car_id),
-                    vin=c.get("vin") or "",
-                    series_name=c.get("series_name") or c.get("carModelName") or "Deepal S05",
-                    car_name=c.get("car_name") or c.get("nickName"),
-                    license_plate=c.get("car_num") or c.get("licensePlate"),
-                    thumbnail_url=c.get("car_pic") or c.get("thumbnailUrl"),
+                    vin=_text(c.get("vin")) or "",
+                    series_name=(
+                        _text(c.get("series_name") or c.get("carModelName"))
+                        or "Deepal S05"
+                    ),
+                    car_name=_text(c.get("car_name") or c.get("nickName")),
+                    license_plate=_text(
+                        c.get("car_num") or c.get("licensePlate")
+                    ),
+                    thumbnail_url=_text(
+                        c.get("car_pic") or c.get("thumbnailUrl")
+                    ),
                 )
             )
         return vehicles
@@ -298,9 +397,9 @@ class DeepalClient:
         range_val = raw_data.get("RemainingRange") or raw_data.get("battery_range")
 
         battery = BatteryCondition(
-            soc_percentage=int(soc_val) if soc_val is not None else None,
-            remaining_range_km=int(range_val) if range_val is not None else None,
-            charging_status=raw_data.get("ChargingState"),
+            soc_percentage=_percentage(soc_val),
+            remaining_range_km=_optional_int(range_val),
+            charging_status=_text(raw_data.get("ChargingState")),
             charger_connected=bool(raw_data.get("ChargerPlugged", False)),
         )
 
@@ -321,7 +420,7 @@ class DeepalClient:
 
         return VehicleCondition(
             car_id=car_id,
-            vin=raw_data.get("vin") or "",
+            vin=_text(raw_data.get("vin")) or "",
             total_odometer_km=tot_milg_val,
             battery=battery,
             doors=doors,

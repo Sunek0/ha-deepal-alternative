@@ -1,11 +1,13 @@
 """Tests for the Home Assistant coordinator command flow."""
 
 import asyncio
+import inspect
 import math
 import time
 from datetime import timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 pytest.importorskip("homeassistant")
@@ -17,6 +19,7 @@ from custom_components.deepal.charging import ChargingSessionManager
 from custom_components.deepal.const import (
     CONF_ACCESS_TOKEN,
     CONF_CAC_TOKEN,
+    CONF_ENABLE_LOCATION,
     CONF_REFRESH_TOKEN,
 )
 from custom_components.deepal.coordinator import DeepalDataUpdateCoordinator, WakeResult
@@ -27,6 +30,7 @@ from custom_components.deepal.deepal import (
     CommandResultStatus,
     DeepalAPIError,
     DeepalAuthError,
+    DeepalClient,
     DeepalCommandAuthError,
     DeepalCommandNotReady,
     DeepalConnectionError,
@@ -60,6 +64,7 @@ class _FakeIntlClient(DeepalIntlClient):
         self.condition_model_codes: list[str | None] = []
         self.capabilities_error: Exception | None = None
         self.refresh_calls = 0
+        self.refresh_error: Exception | None = None
         self.wake_calls = 0
         self.wake_error: Exception | None = None
         self.wake_errors: list[Exception] = []
@@ -124,6 +129,8 @@ class _FakeIntlClient(DeepalIntlClient):
 
     async def refresh_tokens(self, force: bool = False) -> AuthToken:
         self.refresh_calls += 1
+        if self.refresh_error is not None:
+            raise self.refresh_error
         self.access_token = f"refreshed_token_{self.refresh_calls}"
         return AuthToken(
             access_token=self.access_token,
@@ -182,6 +189,7 @@ def _coordinator(
     coordinator.client = client
     coordinator.vehicles = []
     coordinator._last_vehicle_refresh = time.monotonic()
+    coordinator._last_ca_refresh_at = None
     coordinator.data = data or {}
     coordinator.update_interval = timedelta(seconds=120)
     coordinator._command_locks = {}
@@ -1197,6 +1205,45 @@ async def test_app_comfort_overlay_uses_server_condition():
     plain.seats.front_left.ventilation_level = None
     merged = await coordinator._overlay_app_comfort(vehicle, plain)
     assert merged.seats.front_left.ventilation_level is None
+
+
+@pytest.mark.asyncio
+async def test_app_comfort_overlay_copies_the_charge_plan():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(car_id="car-1", vin="VIN", protocol_type="MQTT")
+    coordinator.vehicles = [vehicle]
+
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.battery.charge_plan_id = "99"
+    app_condition.battery.charge_plan_valid = True
+    app_condition.battery.charge_schedule_enabled = True
+    app_condition.battery.charge_schedule_start = "0000"
+    app_condition.battery.charge_schedule_end = "0100"
+    plans = [
+        {
+            "planId": 99,
+            "isValid": 1,
+            "startSwitch": 1,
+            "endSwitch": 1,
+            "startTime": "0000",
+            "endTime": "0100",
+        }
+    ]
+    app_condition.battery.charge_plans = plans
+    app_condition.raw_data = {"charge": {"chargePlanList": plans}}
+    client.http_condition = app_condition
+
+    merged = await coordinator._overlay_app_comfort(
+        vehicle, VehicleCondition(car_id="car-1", vin="VIN")
+    )
+
+    assert merged.battery.charge_plan_id == "99"
+    assert merged.battery.charge_plans == plans
+    assert merged.battery.charge_plan_valid is True
+    assert merged.battery.charge_schedule_enabled is True
+    assert merged.battery.charge_schedule_start == "0000"
+    assert merged.battery.charge_schedule_end == "0100"
 
 
 @pytest.mark.asyncio
@@ -2311,6 +2358,67 @@ async def test_charging_read_uses_the_sda_condition_without_inquiry():
 
 
 @pytest.mark.asyncio
+async def test_sda_condition_fetch_uses_the_real_client_without_model_code():
+    """An SDA poll must reach the real client, whose signature has no model_code."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {"BatterySoc": 82, "CdcTotMilg": "1234"},
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    ) as http_client:
+        client = DeepalClient(
+            access_token="test_token_123", httpx_client=http_client
+        )
+        coordinator, _ = _coordinator(client)
+        coordinator.vehicles = [
+            Vehicle(car_id="car-1", vin="VIN-PLACEHOLDER-1", model_code="C857")
+        ]
+
+        condition = await coordinator._async_fetch_condition("car-1")
+
+    assert condition.car_id == "car-1"
+    assert condition.battery.soc_percentage == 82
+    assert condition.condition_source == "rest"
+    assert seen[0].url.params["carId"] == "car-1"
+
+
+@pytest.mark.asyncio
+async def test_sda_condition_fetch_never_forwards_the_model_code():
+    """The coordinator keeps model_code for the international client only."""
+
+    class _RecordingSdaClient(DeepalClient):
+        def __init__(self) -> None:
+            super().__init__(access_token="test_token_123")
+            self.calls: list[tuple[str, str | None]] = []
+
+        async def get_vehicle_condition(
+            self, car_id: str, vin: str | None = None
+        ) -> VehicleCondition:
+            self.calls.append((car_id, vin))
+            return VehicleCondition(car_id=car_id, vin=vin or "")
+
+    client = _RecordingSdaClient()
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [
+        Vehicle(car_id="car-1", vin="VIN-PLACEHOLDER-1", model_code="C857")
+    ]
+
+    await coordinator._async_fetch_condition("car-1")
+
+    assert client.calls == [("car-1", "VIN-PLACEHOLDER-1")]
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_periodic_update_does_not_wake():
     client = _FakeIntlClient([])
     coordinator, _ = _coordinator(client)
@@ -2364,6 +2472,61 @@ async def test_one_vehicle_failure_does_not_fail_the_others():
 
     assert data["car-1"].last_updated_timestamp == 2000
     assert data["car-2"] is previous
+
+
+@pytest.mark.asyncio
+async def test_ca_refresh_is_throttled_to_once_per_hour():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    rejection = DeepalAPIError("token rejected", code="APIGW_-1_7_01_004")
+
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is True
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is False
+
+    assert client.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ca_refresh_retries_after_the_hour_window():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    rejection = DeepalAPIError("token rejected", code="APIGW_-1_7_01_004")
+
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is True
+    coordinator._last_ca_refresh_at -= 3601
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is True
+
+    assert client.refresh_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_auth_refresh_is_not_capped_by_the_ca_window():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    await coordinator._async_refresh_session_for_mqtt(
+        DeepalAPIError("token rejected", code="APIGW_-1_7_01_004")
+    )
+    client.condition_error = DeepalAuthError("expired")
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    assert client.refresh_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_ca_refresh_failure_occupies_the_hour_window():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    client.refresh_error = DeepalConnectionError("offline")
+    rejection = DeepalAPIError("token rejected", code="APIGW_-1_7_01_004")
+
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is False
+    assert await coordinator._async_refresh_session_for_mqtt(rejection) is False
+
+    assert client.refresh_calls == 1
 
 
 @pytest.mark.asyncio
@@ -2528,6 +2691,70 @@ async def test_retry_after_auth_refresh_keeps_auth_errors_as_reauth():
     assert calls["count"] == 2
 
 
+@pytest.mark.asyncio
+async def test_rejected_refresh_maps_to_reauth():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalAuthError("expired")
+    client.refresh_error = DeepalAuthError("refresh rejected")
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+    assert client.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_transport_error_maps_to_update_failed():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+    client.condition_error = DeepalAuthError("expired")
+    client.refresh_error = DeepalConnectionError("offline")
+
+    with pytest.raises(UpdateFailed) as err:
+        await coordinator._async_update_data()
+
+    assert err.value.retry_after is None
+    assert client.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_proactive_refresh_transport_error_maps_to_update_failed():
+    client = _FakeIntlClient([])
+    client.access_token_expires_soon = lambda: True
+    client.refresh_error = DeepalConnectionError("offline")
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator._capabilities = {}
+
+    with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+    assert client.refresh_calls == 1
+    assert client.events == []
+
+
+@pytest.mark.asyncio
+async def test_ca_refresh_transport_error_falls_back_to_rest():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle()]
+    coordinator._capabilities = {}
+    client.mqtt_condition_errors = [
+        DeepalAPIError("token rejected", code="APIGW_-1_7_01_004")
+    ]
+    client.refresh_error = DeepalConnectionError("offline")
+
+    data = await coordinator._async_update_data()
+
+    assert client.refresh_calls == 1
+    assert data["car-1"].condition_source == "rest"
+
+
 class _RecordingStore:
     """Store double recording the saved snapshots."""
 
@@ -2583,6 +2810,29 @@ async def test_periodic_update_does_not_track_a_plugged_only_car():
 
     assert coordinator.charging.attributes("car-1") == {}
     assert store.saved == []
+
+
+@pytest.mark.asyncio
+async def test_retained_s05_charge_state_starts_no_session_or_read_loop():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [
+        Vehicle(car_id="car-1", vin="VIN-PLACEHOLDER-1", series_name="S05")
+    ]
+    retained = VehicleCondition(car_id="car-1", vin="VIN-PLACEHOLDER-1")
+    retained.battery.charging_status = "5"  # retained from the previous report
+    retained.mqtt_raw_data = {"BattSoc": 50}  # partial payload: no ChrgSts
+    retained.condition_source = "legacy-mqtt"
+    coordinator.data = {"car-1": retained}
+    store = _RecordingStore()
+    coordinator.charging = ChargingSessionManager(store)
+
+    coordinator._track_charging(coordinator.data)
+    coordinator._sync_charging_read(coordinator.data)
+
+    assert coordinator.charging.attributes("car-1") == {}
+    assert store.saved == []
+    assert coordinator._charging_read_task is None
 
 
 def _charging_condition(car_id: str, charging: bool = True) -> VehicleCondition:
@@ -2647,6 +2897,39 @@ async def test_charging_read_loop_reads_only_charging_vehicles_and_stops():
     )
     await asyncio.sleep(0.01)
     assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_applying_a_charging_condition_starts_the_read_loop():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator._charging_read_interval = 600.0
+    condition = _charging_condition("car-1")
+
+    await coordinator._async_apply_condition("car-1", condition)
+
+    assert coordinator._charging_read_task is not None
+    coordinator._sync_charging_read({})
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_read_from_inside_the_loop_keeps_its_task():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    stop = asyncio.Event()
+    coordinator._charging_read_stop = stop
+    coordinator._charging_read_task = asyncio.current_task()
+    sentinel = coordinator._charging_read_task
+
+    await coordinator._async_apply_condition(
+        "car-1", _charging_condition("car-1")
+    )
+
+    # The loop publishes through the same path: it must not replace its own
+    # task or stop itself while the session is still open.
+    assert coordinator._charging_read_task is sentinel
+    assert not stop.is_set()
 
 
 @pytest.mark.asyncio
@@ -3407,6 +3690,64 @@ async def test_s05_subsystem_warnings_survive_the_first_asleep_poll_after_restar
 
 
 @pytest.mark.asyncio
+async def test_partial_first_poll_keeps_the_restored_state_of_failed_vehicles():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.vehicles = [
+        Vehicle(car_id="car-1", vin="VIN-1"),
+        Vehicle(car_id="car-2", vin="VIN-2"),
+    ]
+    coordinator._capabilities = {}
+    coordinator._restored_loaded = True
+    coordinator._restored = {
+        "car-1": VehicleCondition(car_id="car-1", vin="VIN-1"),
+        "car-2": VehicleCondition(car_id="car-2", vin="VIN-2"),
+    }
+
+    async def condition(vehicle_id, vin=None, *, model_code=None):
+        if vehicle_id == "car-2":
+            raise DeepalAPIError("boom")
+        return VehicleCondition(
+            car_id=vehicle_id, vin=vin or "", last_updated_timestamp=2000
+        )
+
+    client.get_vehicle_condition = condition
+
+    await coordinator._async_update_data()
+
+    assert set(coordinator._restored) == {"car-2"}
+
+
+def test_snapshot_payload_excludes_location_when_the_option_is_off():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    condition = VehicleCondition(car_id="car-1", vin="VIN")
+    condition.latitude = 37.5
+    condition.longitude = 23.7
+    coordinator.data = {"car-1": condition}
+
+    payload = coordinator._snapshot_payload()["conditions"]["car-1"]
+
+    assert "latitude" not in payload
+    assert "longitude" not in payload
+
+
+def test_snapshot_payload_keeps_location_when_the_option_is_on():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator.entry.options = {CONF_ENABLE_LOCATION: True}
+    condition = VehicleCondition(car_id="car-1", vin="VIN")
+    condition.latitude = 37.5
+    condition.longitude = 23.7
+    coordinator.data = {"car-1": condition}
+
+    payload = coordinator._snapshot_payload()["conditions"]["car-1"]
+
+    assert payload["latitude"] == 37.5
+    assert payload["longitude"] == 23.7
+
+
+@pytest.mark.asyncio
 async def test_s05_subsystem_warnings_survive_an_unavailable_app_condition():
     client = _FakeIntlClient([])
     current = VehicleCondition(
@@ -3525,6 +3866,59 @@ async def test_unreported_telemetry_groups_retain_the_last_known_values():
     assert merged.doors.locked is True
     assert merged.doors.driver_door_open is False
     assert merged.windows.front_left_open is True
+
+
+def test_expired_optimistic_field_keeps_the_rest_of_its_group():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        doors={
+            "locked": False,
+            "trunk_open": True,
+            "driver_door_open": True,
+            "hood_open": True,
+        },
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    coordinator._optimistic_pending = {"car-1": {"doors.locked"}}
+
+    partial = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        mqtt_raw_data={"soc": 50},
+        last_updated_timestamp=2000,
+    )
+    merged = coordinator._merge_condition("car-1", partial)
+
+    # The unconfirmed lock field expires to the parser default...
+    assert merged.doors.locked is True
+    # ...but the rest of the group keeps the last reported value.
+    assert merged.doors.trunk_open is True
+    assert merged.doors.driver_door_open is True
+    assert merged.doors.hood_open is True
+
+
+def test_expired_optimistic_charge_field_keeps_the_other_charger_flags():
+    client = _FakeIntlClient([])
+    current = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        battery={"charging_status": "5", "charger_connected": True},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+    coordinator._optimistic_pending = {"car-1": {"battery.charging_status"}}
+
+    partial = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        mqtt_raw_data={"soc": 50},
+        last_updated_timestamp=2000,
+    )
+    merged = coordinator._merge_condition("car-1", partial)
+
+    assert merged.battery.charging_status is None
+    assert merged.battery.charger_connected is True
 
 
 @pytest.mark.asyncio

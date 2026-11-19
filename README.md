@@ -15,30 +15,10 @@ The integration provides the connection, the telemetry and the remote controls; 
 
 ## Requirements
 
-- Home Assistant 2026.11.0.
+- Home Assistant 2026.8.0.
 - An international My Changan account (email or SMS login). The HACS metadata advertises the
   countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
   Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
-
-## Installation
-
-### HACS
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
-
-1. Click in add from link (or add this repository as a custom repository) and use this link:
-   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
-   offers to add the repository as a custom repository.
-2. Install **Deepal Alternative** and restart Home Assistant.
-3. Add the integration from **Settings > Devices & services**, choose the international platform and
-   log in with an email or SMS code (use the secondary account from above).
-
-Updating keeps the same `deepal` domain, so no reconfiguration is needed.
-
-### Manual
-
-1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
-2. Restart Home Assistant and add the integration as described above.
 
 ## Supported vehicles
 
@@ -96,7 +76,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 ### Remote controls
 
 - Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule (S05
-  PHEV only), lights, horn and lights-and-horn together.
+  BEV and PHEV), lights, horn and lights-and-horn together.
+- The S05 BEV charge reservation is managed with the `deepal.set_charge_schedule` service; the
+  PHEV also keeps its switch/time entities. The integration uses `/charge/add-plan` and
+  `/charge/delete-plan` on the BEV, and `/charge/modify-plan` on the PHEV.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
@@ -106,6 +89,34 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   seconds while the vehicle wakes up and reports before the command is sent.
 - Flashing the lights, sounding the horn and the combined lights-and-horn button make the car run a
   physical cycle (about 30 s, 6 s and 30 s respectively).
+
+### Charge schedule
+
+The S05 BEV and S05 PHEV expose a real charge reservation. Set it from an automation, script or
+the service developer tools:
+
+```yaml
+service: deepal.set_charge_schedule
+data:
+  start_time: "00:00"
+  end_time: "01:00"
+  enabled: true
+```
+
+- The times are the vehicle's local time in `HH:MM` or `HHMM` form. The plan's own timezone wins
+  when the car reports one; Home Assistant is the fallback. The schedule time entities expose the
+  effective `time_zone` attribute.
+- `enabled: false` removes the active plan on the S05 BEV and disables the current plan on the
+  S05 PHEV. The S05 BEV uses `add-plan`/`delete-plan` because the car rejects `modify-plan`; the
+  PHEV keeps the verified `modify-plan` path.
+- With several loaded entries or vehicles, pass `config_entry_id` and/or `vehicle_id`.
+- The switch and time controls are available for both variants. On the S05 BEV the switch adds a
+  plan with the current times and deletes it when turned off; changing a time adds an active
+  plan. On the S05 PHEV the controls keep the `modify-plan` path.
+- The read-only "Charge schedule enabled" binary sensor and the start/end sensors are available
+  for both variants.
+- The BEV deletes only the active plan before adding a new one; disabled plans created in the app
+  are left untouched.
 
 ### Vehicle image
 
@@ -236,7 +247,27 @@ troubleshooting) is available in every language the integration supports:
 - [Italiano](guides/installation-guide.it.md)
 - [Português](guides/installation-guide.pt.md)
 
-# Configuration
+## Installation
+
+### HACS
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+1. Click the badge (or add this repository as a custom repository of type **Integration**:
+   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
+   offers to add the repository as a custom repository.
+2. Install **Deepal Alternative** and restart Home Assistant.
+3. Add the integration from **Settings > Devices & services**, choose the international platform and
+   log in with an email or SMS code (use the secondary account from above).
+
+Updating keeps the same `deepal` domain, so no reconfiguration is needed.
+
+### Manual
+
+1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
+2. Restart Home Assistant and add the integration as described above.
+
+## Configuration
 
 Open **Settings > Devices & services > Deepal Alternative > Configure** to change these options:
 

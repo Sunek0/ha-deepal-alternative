@@ -172,6 +172,46 @@ async def test_capture_rotates_and_retains_a_bounded_number_of_files(
 
 
 @pytest.mark.asyncio
+async def test_recent_events_are_bounded_by_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(diagnostics_capture, "DIAGNOSTICS_RECENT_BYTES", 1200)
+    hass = _FakeHass(tmp_path)
+    capture = DiagnosticsCapture(hass, _FakeEntry(), enabled=True)
+    await capture.async_start()
+
+    for index in range(10):
+        capture.record(_event(note=f"event-{index}-" + "x" * 300))
+
+    status = await capture.async_status()
+    await capture.async_stop()
+
+    assert status["recent_bytes"] <= 1200
+    assert len(status["recent_events"]) < 10
+    assert status["recent_events"][-1]["note"].startswith("event-9")
+
+
+@pytest.mark.asyncio
+async def test_recent_events_are_bounded_by_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(diagnostics_capture, "DIAGNOSTICS_RECENT_EVENTS", 3)
+    monkeypatch.setattr(diagnostics_capture, "DIAGNOSTICS_RECENT_BYTES", 10**9)
+    hass = _FakeHass(tmp_path)
+    capture = DiagnosticsCapture(hass, _FakeEntry(), enabled=True)
+    await capture.async_start()
+
+    for index in range(6):
+        capture.record(_event(note=f"event-{index}"))
+
+    status = await capture.async_status()
+    await capture.async_stop()
+
+    assert [event["note"] for event in status["recent_events"]] == [
+        "event-3",
+        "event-4",
+        "event-5",
+    ]
+    assert status["recent_bytes"] > 0
+
+
+@pytest.mark.asyncio
 async def test_new_segment_and_delete_all(tmp_path):
     hass = _FakeHass(tmp_path)
     capture = DiagnosticsCapture(hass, _FakeEntry(), enabled=True)

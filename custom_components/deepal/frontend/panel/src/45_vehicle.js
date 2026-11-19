@@ -10,6 +10,7 @@
 function installPointerFreeze(element) {
   element._pointerDown = false;
   element._renderPending = false;
+  element._pointerListenersAttached = false;
   element.shadowRoot.addEventListener("pointerdown", () => {
     element._pointerDown = true;
   });
@@ -21,12 +22,22 @@ function installPointerFreeze(element) {
       element._render();
     }
   };
-  window.addEventListener("pointerup", element._releasePointer, true);
-  window.addEventListener("pointercancel", element._releasePointer, true);
-  element._removePointerFreeze = () => {
-    window.removeEventListener("pointerup", element._releasePointer, true);
-    window.removeEventListener("pointercancel", element._releasePointer, true);
+  element._attachPointerFreeze = () => {
+    if (element._pointerListenersAttached) return;
+    element._pointerListenersAttached = true;
+    window.addEventListener("pointerup", element._releasePointer, true);
+    window.addEventListener("pointercancel", element._releasePointer, true);
   };
+  element._removePointerFreeze = () => {
+    if (element._pointerListenersAttached) {
+      element._pointerListenersAttached = false;
+      window.removeEventListener("pointerup", element._releasePointer, true);
+      window.removeEventListener("pointercancel", element._releasePointer, true);
+    }
+    element._pointerDown = false;
+    element._renderPending = false;
+  };
+  element._attachPointerFreeze();
 }
 
 /** Language of a standalone element (no hass yet), for the card picker. */

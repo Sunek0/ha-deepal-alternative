@@ -25,6 +25,7 @@ from .deepal import (
     DeepalClient,
     DeepalCommandAuthError,
     DeepalCommandNotReady,
+    DeepalConnectionError,
     DeepalError,
     DeepalIntlClient,
     DeepalRateLimitError,
@@ -37,6 +38,7 @@ from .snapshot import (
     conditions_from_snapshot,
     conditions_to_snapshot,
 )
+from .vehicle_model import uses_s05_charge_enum
 from .deepal.mqtt import (
     S05_CHARGE_GUN_KEYS,
     S05_DC_GUN_KEYS,
@@ -47,9 +49,11 @@ from .const import (
     DOMAIN,
     DEFAULT_SCAN_INTERVAL,
     CONF_ACCESS_TOKEN,
+    CONF_ENABLE_LOCATION,
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
     CONF_USER_ID,
+    DEFAULT_ENABLE_LOCATION,
     WAKE_BEFORE_COMMAND_TIMEOUT,
     WAKE_COOLDOWN,
     WAKE_REPORT_TIMEOUT,
@@ -68,6 +72,11 @@ _WAKE_POLL_INTERVAL = 5.0
 _VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
 _CHARGING_READ_INTERVAL = 600.0
+# A rejected CA/MQTT token triggers a forced session refresh, which bypasses the
+# SDK's own INTL_REFRESH_THROTTLE_SECONDS window (1800 s) because the refresh no
+# longer depends on the JWT expiry. This coarser per-entry cap keeps that
+# trigger at one attempt per hour, as ha-intl-platform requires.
+_CA_REFRESH_MIN_INTERVAL = 3600.0
 _CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 # Home Assistant's statistics code treats a total_increasing drop below this
 # fraction of the previous value as a meter reset; smaller drops are precision
@@ -347,6 +356,16 @@ _REST_GROUP_KEYS = {
     "charge": "charge",
 }
 
+#: Telemetry groups whose last known value is retained field by field.
+_RETAINED_GROUPS = ("doors", "windows", "lamps", "tires")
+#: Charger fields stored on ``battery`` but sourced from the charge group.
+_CHARGE_FIELDS = (
+    "charging_status",
+    "charger_connected",
+    "dc_gun_connected",
+    "ac_gun_connected",
+)
+
 
 def _group_was_reported(condition: VehicleCondition, group: str) -> bool:
     """Return whether the source payload carried one telemetry group."""
@@ -368,35 +387,42 @@ def _retain_unreported_groups(
     condition: VehicleCondition,
     pending: set[str] | None = None,
 ) -> None:
-    """Keep the last known groups a partial payload did not carry."""
-    group_prefixes = {
-        "doors": "doors.",
-        "windows": "windows.",
-        "lamps": "lamps.",
-        "tires": "tires.",
-    }
-    for group, prefix in group_prefixes.items():
-        if pending and any(path.startswith(prefix) for path in pending):
+    """Keep the last known groups a partial payload did not carry.
+
+    The retention is per field: a field whose last value came from an
+    unconfirmed optimistic update must expire, but that pending mark must not
+    publish the parser defaults for the rest of its group. A group with no
+    pending field keeps the whole-group fast path.
+    """
+    pending = pending or set()
+    for group in _RETAINED_GROUPS:
+        if _group_was_reported(condition, group):
             continue
-        if not _group_was_reported(condition, group):
+        previous_group = getattr(previous, group)
+        group_pending = {
+            path for path in pending if path.startswith(f"{group}.")
+        }
+        if not group_pending:
+            setattr(condition, group, previous_group.model_copy(deep=True))
+            continue
+        current_group = getattr(condition, group)
+        for field in type(previous_group).model_fields:
+            if f"{group}.{field}" in group_pending:
+                continue
+            value = getattr(previous_group, field)
             setattr(
-                condition,
-                group,
-                getattr(previous, group).model_copy(deep=True),
+                current_group,
+                field,
+                value.model_copy(deep=True)
+                if hasattr(value, "model_copy")
+                else value,
             )
-    charge_paths = {
-        "battery.charging_status",
-        "battery.charger_connected",
-        "battery.dc_gun_connected",
-        "battery.ac_gun_connected",
-    }
-    if pending and charge_paths & pending:
+    if _group_was_reported(condition, "charge"):
         return
-    if not _group_was_reported(condition, "charge"):
-        condition.battery.charging_status = previous.battery.charging_status
-        condition.battery.charger_connected = previous.battery.charger_connected
-        condition.battery.dc_gun_connected = previous.battery.dc_gun_connected
-        condition.battery.ac_gun_connected = previous.battery.ac_gun_connected
+    for field in _CHARGE_FIELDS:
+        if f"battery.{field}" in pending:
+            continue
+        setattr(condition.battery, field, getattr(previous.battery, field))
 
 
 def _copy_missing_fields(target: Any, source: Any, fields: tuple[str, ...]) -> None:
@@ -433,6 +459,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.wake_enabled = wake_enabled
         self.vehicles: list[Vehicle] = []
         self._last_vehicle_refresh: float = 0.0
+        self._last_ca_refresh_at: float | None = None
         self._command_locks: dict[str, asyncio.Lock] = {}
         self._command_cooldowns: dict[tuple[str, str], float] = {}
         self._optimistic_holds: dict[str, dict[str, _OptimisticFieldHold]] = {}
@@ -658,11 +685,34 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if (app_condition.raw_data or {}).get("charge", {}).get("chargePlanList"):
             # The charge plan only exists in the app condition (the MQTT report
             # carries no schedule); it is configuration, so it applies even
-            # when the app report is older.
-            _copy_missing_fields(
-                condition.battery,
-                app_condition.battery,
-                ("charge_schedule_start", "charge_schedule_end"),
+            # when the app report is older. The plan id, validity and the full
+            # plan list are always taken from the app condition: a stale
+            # charge_plan_id in the MQTT snapshot would make the switch delete
+            # the wrong plan after an add.
+            condition.battery.charge_schedule_start = (
+                app_condition.battery.charge_schedule_start
+            )
+            condition.battery.charge_schedule_end = (
+                app_condition.battery.charge_schedule_end
+            )
+            condition.battery.charge_plan_id = app_condition.battery.charge_plan_id
+            condition.battery.charge_plan_type = (
+                app_condition.battery.charge_plan_type
+            )
+            condition.battery.charge_plan_time_format = (
+                app_condition.battery.charge_plan_time_format
+            )
+            condition.battery.charge_plan_time_zone = (
+                app_condition.battery.charge_plan_time_zone
+            )
+            condition.battery.charge_plan_valid = (
+                app_condition.battery.charge_plan_valid
+            )
+            condition.battery.charge_schedule_enabled = (
+                app_condition.battery.charge_schedule_enabled
+            )
+            condition.battery.charge_plans = list(
+                app_condition.battery.charge_plans
             )
         app_is_older = (
             mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts
@@ -840,11 +890,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # A broker connection or session failure is not a reason to
                 # fail the poll while the REST condition endpoint is available.
                 self._record_mqtt_failure(vehicle_id, err)
-        condition = await self.client.get_vehicle_condition(
-            vehicle_id,
-            vin=vehicle.vin if vehicle is not None else None,
-            model_code=vehicle.model_code if vehicle is not None else None,
-        )
+        vin = vehicle.vin if vehicle is not None else None
+        if isinstance(self.client, DeepalIntlClient):
+            # The model code selects the S05 PHEV REST charge rule and is an
+            # international-only argument: the SDA client addresses vehicles by
+            # car id and its signature does not accept it.
+            condition = await self.client.get_vehicle_condition(
+                vehicle_id,
+                vin=vin,
+                model_code=vehicle.model_code if vehicle is not None else None,
+            )
+        else:
+            condition = await self.client.get_vehicle_condition(vehicle_id, vin=vin)
         condition.condition_source = "rest"
         return self._merge_condition(vehicle_id, condition)
 
@@ -878,16 +935,40 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def _async_refresh_session_for_mqtt(self, err: Exception) -> bool:
         """Refresh the session when the CA gateway rejects it.
 
-        The coordinator only decides that a refresh is justified here; the SDK
-        owns the per-client refresh window and single-flight behavior.
+        A persistently rejected CA token must not refresh on every poll, so the
+        attempt is capped at one per hour; a failed attempt occupies the window
+        like the SDK's own throttle. The SDK still owns the per-client window
+        and the single-flight behavior.
         """
         if not getattr(self.client, "refresh_token", None):
             return False
+        now = time.monotonic()
+        last_attempt = self._last_ca_refresh_at
+        if (
+            last_attempt is not None
+            and now - last_attempt < _CA_REFRESH_MIN_INTERVAL
+        ):
+            _LOGGER.info(
+                "Deepal CA token refresh throttled (last attempt %.0f s ago); "
+                "using the REST condition",
+                now - last_attempt,
+            )
+            return False
+        self._last_ca_refresh_at = now
         _LOGGER.warning(
             "Deepal MQTT token rejected (%s); refreshing the session and retrying",
             err,
         )
-        return await self._async_refresh_tokens(force=True)
+        try:
+            return await self._async_refresh_tokens(force=True)
+        except DeepalConnectionError as err:
+            # The CA token is auxiliary to telemetry: a refresh that cannot
+            # reach the gateway must not fail the poll while REST still works.
+            _LOGGER.warning(
+                "Deepal session refresh failed (%s); using the REST condition",
+                err,
+            )
+            return False
 
     def _previous_condition(self, vehicle_id: str) -> VehicleCondition | None:
         """Return the last published condition, or the stored one before it."""
@@ -956,8 +1037,25 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             _copy_missing_fields(
                 condition.battery,
                 previous.battery,
-                ("charge_schedule_start", "charge_schedule_end"),
+                (
+                    "charge_schedule_start",
+                    "charge_schedule_end",
+                    "charge_plan_id",
+                    "charge_plan_type",
+                    "charge_plan_time_format",
+                    "charge_plan_time_zone",
+                ),
             )
+            if condition.battery.charge_plan_valid is None:
+                condition.battery.charge_plan_valid = (
+                    previous.battery.charge_plan_valid
+                )
+                condition.battery.charge_schedule_enabled = (
+                    previous.battery.charge_schedule_enabled
+                )
+                condition.battery.charge_plans = list(
+                    previous.battery.charge_plans
+                )
             _copy_missing_fields(condition.fuel, previous.fuel, _FUEL_FIELDS)
             if condition.battery.charge_limit_percent is None and keep(
                 "battery.charge_limit_percent"
@@ -1061,6 +1159,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         previous_access_token = getattr(self.client, "access_token", None)
         try:
             token = await refresh(force=force)
+        except DeepalConnectionError:
+            # A transport failure is not a rejected session: the update path
+            # reports it as UpdateFailed instead of starting reauthentication.
+            raise
         except DeepalError as err:
             _LOGGER.error("Deepal token refresh failed: %s", err)
             return False
@@ -1245,7 +1347,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         data = dict(self.data or {})
         data[vehicle_id] = condition
         self._track_charging(data)
-        self._sync_charging_read(data, start=False)
+        self._sync_charging_read(data)
         self.async_set_updated_data(data)
 
     async def _async_wake_and_wait(
@@ -1438,12 +1540,18 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
         await self._async_load_snapshot()
-        await self._async_maybe_refresh_tokens()
         try:
+            await self._async_maybe_refresh_tokens()
             data = await self._async_fetch()
         except DeepalAuthError as err:
             _LOGGER.warning("Deepal authentication failed, attempting token refresh")
-            if not await self._async_refresh_tokens(force=True):
+            try:
+                refreshed = await self._async_refresh_tokens(force=True)
+            except DeepalConnectionError as refresh_err:
+                raise UpdateFailed(
+                    f"Error refreshing the Deepal session: {refresh_err}"
+                ) from refresh_err
+            if not refreshed:
                 raise ConfigEntryAuthFailed("Authentication token expired") from err
             try:
                 data = await self._async_fetch()
@@ -1466,8 +1574,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
         self._track_charging(data)
         self._sync_charging_read(data)
-        # From now on the in-memory data is the previous state.
-        self._restored.clear()
+        # From now on the in-memory data is the previous state. A vehicle that
+        # failed this poll keeps its restored condition as the fallback until a
+        # poll publishes it.
+        for car_id in list(self._restored):
+            if car_id in data:
+                del self._restored[car_id]
         self._store.async_delay_save(self._snapshot_payload, _SNAPSHOT_SAVE_DELAY)
         return data
 
@@ -1484,8 +1596,25 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._restored = conditions_from_snapshot(VehicleCondition, stored)
 
     def _snapshot_payload(self) -> dict[str, Any]:
-        """Return the data written to the store (the conditions last published)."""
-        return conditions_to_snapshot(self.data)
+        """Return the data written to the store (the conditions last published).
+
+        The opt-in vehicle location is only persisted while the option is on, so
+        turning it off removes the coordinates from the stored condition.
+        """
+        options = getattr(self.entry, "options", None) or {}
+        return conditions_to_snapshot(
+            self.data,
+            include_location=bool(
+                options.get(CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION)
+            ),
+        )
+
+    def _charging_flag(self, car_id: str, condition: VehicleCondition) -> bool | None:
+        """Return the charging flag with the vehicle's model semantics."""
+        vehicle = self._vehicle(car_id)
+        if uses_s05_charge_enum(vehicle, condition):
+            return charging_flag(condition, True)
+        return charging_flag(condition)
 
     def _track_charging(self, data: dict[str, VehicleCondition]) -> None:
         """Feed one telemetry snapshot into the charging-session tracker."""
@@ -1495,31 +1624,30 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         for car_id, condition in data.items():
             self.charging.apply(
                 car_id,
-                charging_flag(condition),
+                self._charging_flag(car_id, condition),
                 condition.battery.soc_percentage,
                 condition.battery.remaining_range_km,
                 now,
             )
 
-    @staticmethod
     def _charging_vehicle_ids(
+        self,
         data: dict[str, VehicleCondition],
     ) -> list[str]:
         """Return the vehicles that currently report an active charge."""
         return [
             car_id
             for car_id, condition in data.items()
-            if charging_flag(condition) is True
+            if self._charging_flag(car_id, condition) is True
         ]
 
     def _sync_charging_read(
-        self, data: dict[str, VehicleCondition], *, start: bool = True
+        self, data: dict[str, VehicleCondition]
     ) -> None:
         """Start, keep or stop the charging refresh loop.
 
-        ``start=False`` is used by the loop itself after a targeted read: it may
-        stop the loop when the charge ended, but must not create a replacement
-        task from inside the current one.
+        Called on every published condition. A read from the loop itself cannot
+        replace the running task: the not-done guard keeps it in place.
         """
         charging = self._charging_vehicle_ids(data)
         current = asyncio.current_task()
@@ -1536,7 +1664,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return
 
         task = self._charging_read_task
-        if not start or (task is not None and not task.done()):
+        if task is not None and not task.done():
             return
         self._charging_read_stop = asyncio.Event()
         self._charging_read_task = self.entry.async_create_background_task(

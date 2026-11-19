@@ -22,14 +22,28 @@ SNAPSHOT_EXCLUDE = frozenset(
     {"car_id", "vin", "raw_data", "mqtt_raw_data", "mqtt_variants", "sda_plan"}
 )
 
+#: Opt-in location fields, persisted only while the option is enabled.
+SNAPSHOT_LOCATION = frozenset({"latitude", "longitude"})
+
 SNAPSHOT_VERSION = 1
 
 
-def conditions_to_snapshot(conditions: dict[str, Any] | None) -> dict[str, Any]:
-    """Return the JSON-serializable snapshot of the published conditions."""
+def conditions_to_snapshot(
+    conditions: dict[str, Any] | None, *, include_location: bool = True
+) -> dict[str, Any]:
+    """Return the JSON-serializable snapshot of the published conditions.
+
+    ``include_location`` lets the integration keep the coordinates out of disk
+    storage while the opt-in vehicle location is disabled.
+    """
+    exclude = (
+        SNAPSHOT_EXCLUDE
+        if include_location
+        else SNAPSHOT_EXCLUDE | SNAPSHOT_LOCATION
+    )
     return {
         "conditions": {
-            car_id: condition.model_dump(mode="json", exclude=SNAPSHOT_EXCLUDE)
+            car_id: condition.model_dump(mode="json", exclude=exclude)
             for car_id, condition in (conditions or {}).items()
         }
     }

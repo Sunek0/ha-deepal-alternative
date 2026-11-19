@@ -65,6 +65,19 @@ def test_snapshot_does_not_store_identifiers_or_raw_payloads():
     assert "raw_data" not in text and "mqtt_raw_data" not in text
 
 
+def test_snapshot_can_omit_the_location():
+    stored = snapshot.conditions_to_snapshot(
+        {"car-1": _condition()}, include_location=False
+    )
+    text = json.dumps(stored)
+
+    assert "latitude" not in text
+    assert "longitude" not in text
+    restored = snapshot.conditions_from_snapshot(VehicleCondition, stored)["car-1"]
+    assert restored.latitude is None
+    assert restored.longitude is None
+
+
 @pytest.mark.parametrize("stored", [None, [], "x", {}, {"conditions": None}, {"conditions": []}])
 def test_missing_or_malformed_store_restores_nothing(stored):
     assert snapshot.conditions_from_snapshot(VehicleCondition, stored) == {}

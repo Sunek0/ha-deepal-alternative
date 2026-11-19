@@ -142,7 +142,7 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
 | `airPurifierStatus` | `hvac.insideAirQualityLevel` | `climate.air_quality_level` |
 | `airConditioningHairRatings` | `hvac.fanLevel` | `climate.fan_level` |
-| `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished; anything else unknown) | `battery.charging_status` |
+| `ChrgSts` | `charge.chargeStatus` (state enum: `0` not charging, `1` AC connected, `2` DC connected, `3` AC charging, `4` DC charging, `5` charging stopped/finished, `8` AC connected and waiting for the scheduled charge window; anything else unknown) | `battery.charging_status` |
 | `acChargeGunConnectionState`, `dcDhargeGunConnectionState`, `dcChargeGunConnectionState` | `charge.chargeConStatus` (`0` not connected, any other reported value connected). State `0` ignores these raw fields for every S05; state `5` uses the DC field to choose the gun (see below) | `battery.charger_connected` |
 | `BattACChrgInCurr` / `BattDCChrgInCurr` | `charge.acChargeCurrent` / `dcChargeCurrent` and `chargeCurrent` (the field of the active state; the other is zeroed when reported; readings whose absolute value exceeds the applicable ceiling become unknown: `600 A` for the S05 BEV and an unknown model, `250 A` for the S05 PHEV; negative readings are exposed as their magnitude) | `battery.ac_charge_current_a` / `dc_charge_current_a`, `charge_current_a` |
 | `chargDeltMins` | `charge.remainChargeTime` (`8191` sentinel to unknown) | `battery.remaining_charge_time_min` |

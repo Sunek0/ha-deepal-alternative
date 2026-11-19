@@ -1147,6 +1147,62 @@ async def test_get_vehicles_maps_international_fields():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        None,
+        "oops",
+        {"unexpected": []},
+        {"list": None},
+        [1, "x", None],
+        [{"vin": "VIN-ONLY"}],
+    ],
+)
+async def test_get_vehicles_tolerates_an_unusable_payload(data):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": data}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    try:
+        assert await client.get_vehicles() == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_vehicles_normalizes_scalar_fields():
+    payload = [
+        {
+            "carId": 123,
+            "vin": 456,
+            "seriesName": 789,
+            "carPlatform": "2",
+            "protocolType": 3,
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"success": True, "code": "0", "data": payload}
+        )
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    vehicles = await client.get_vehicles()
+    await client.close()
+
+    assert len(vehicles) == 1
+    assert vehicles[0].car_id == "123"
+    assert vehicles[0].vin == "456"
+    assert vehicles[0].series_name == "789"
+    assert vehicles[0].car_platform == 2
+    assert vehicles[0].protocol_type == "3"
+
+
+@pytest.mark.asyncio
 async def test_get_vehicle_model_posts_car_id_and_platform():
     captured = {}
 
@@ -4664,6 +4720,49 @@ async def test_stale_rc_token_without_pin_propagates():
 
 
 @pytest.mark.asyncio
+async def test_rate_limited_command_does_not_exchange_the_control_pin():
+    counts: dict = {}
+    private_pem, public_key = _login_keypair()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == INTL_GET_SERIAL_NO:
+            counts["serial"] = counts.get("serial", 0) + 1
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    "code": "0",
+                    "data": _encrypted_serial(public_key, "SN123"),
+                },
+            )
+        if path in (INTL_GET_SECURITY_CODE_STATUS, INTL_CHECK_CONTROL_CODE):
+            counts["pin"] = counts.get("pin", 0) + 1
+            return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
+        counts["command"] = counts.get("command", 0) + 1
+        return httpx.Response(429, text="slow down")
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+    client.rc_token = "cached-token"
+    client.control_pin = "1234"
+
+    with pytest.raises(DeepalRateLimitError):
+        await client._signed_command(
+            "/intl-app-gw/intl-app-car-control/api/control/doors",
+            "car-1",
+            {"command": "lock", "open": True},
+            require_rc_token=True,
+            sign_omit_keys={"command", "rcToken"},
+        )
+    await client.close()
+
+    assert counts == {"serial": 1, "command": 1}
+    assert client.rc_token == "cached-token"
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_error_mapped():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -4799,6 +4898,83 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.lamps.low_beam is False
     assert condition.lamps.front_fog is False
     assert condition.lamps.rear_fog is False
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_selects_the_active_charge_plan():
+    payload = {
+        "vehicleStatus": {"soc": 38},
+        "charge": {
+            "soc": 38,
+            "chargePlanList": [
+                {
+                    "planId": 1,
+                    "isValid": 0,
+                    "startSwitch": 1,
+                    "endSwitch": 1,
+                    "startTime": "0000",
+                    "endTime": "0100",
+                },
+                {
+                    "planId": 99,
+                    "isValid": 1,
+                    "startSwitch": 1,
+                    "endSwitch": 1,
+                    "startTime": "2300",
+                    "endTime": "0700",
+                },
+            ],
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charge_plan_id == "99"
+    assert condition.battery.charge_plan_valid is True
+    assert condition.battery.charge_plans == payload["charge"]["chargePlanList"]
+    assert condition.battery.charge_schedule_enabled is True
+    assert condition.battery.charge_schedule_start == "2300"
+    assert condition.battery.charge_schedule_end == "0700"
+
+
+@pytest.mark.asyncio
+async def test_get_vehicle_condition_uses_is_valid_for_a_disabled_plan():
+    payload = {
+        "vehicleStatus": {"soc": 38},
+        "charge": {
+            "soc": 38,
+            "chargePlanList": [
+                {
+                    "planId": 1,
+                    "isValid": 0,
+                    "startSwitch": 1,
+                    "endSwitch": 1,
+                    "startTime": "0000",
+                    "endTime": "0100",
+                }
+            ],
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
+
+    client = _client(handler)
+    client.access_token = "test_token_123"
+    condition = await client.get_vehicle_condition("car-1")
+    await client.close()
+
+    assert condition.battery.charge_plan_id == "1"
+    assert condition.battery.charge_plan_valid is False
+    assert condition.battery.charge_schedule_enabled is False
+    assert condition.battery.charge_schedule_start == "0000"
+    assert condition.battery.charge_schedule_end == "0100"
 
 
 @pytest.mark.asyncio

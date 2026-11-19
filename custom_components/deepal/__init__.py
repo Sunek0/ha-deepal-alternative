@@ -18,18 +18,17 @@ from homeassistant.helpers.storage import Store
 
 from .charging import ChargingSessionManager
 from .deepal import DeepalClient, DeepalIntlClient
+from .device_tracker import remove_location_trackers
 from .diagnostics_capture import (
     async_get_capture_manager,
     async_register_diagnostics_view,
     async_remove_capture,
     async_shutdown_capture,
 )
+from .entry_platform import is_international
 from .frontend import async_register_frontend, async_unregister_frontend
 from .const import (
     DOMAIN,
-    PLATFORM_SDA,
-    PLATFORM_INTL,
-    CONF_PLATFORM,
     CONF_COUNTRY,
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
@@ -52,6 +51,7 @@ from .const import (
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .runtime_data import DeepalConfigEntry, DeepalRuntimeData
+from .services import async_register_services
 from .model_assets import (
     DATA_MODEL_ENTRIES,
     VehicleModelAssetManager,
@@ -84,7 +84,7 @@ def _build_client(
         raise ConfigEntryAuthFailed(
             "The Deepal entry stores no access token; reauthenticate the entry."
         )
-    if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
+    if is_international(entry):
         client = DeepalIntlClient(
             country=entry.data.get(CONF_COUNTRY) or DEFAULT_COUNTRY,
             environment=(
@@ -138,14 +138,11 @@ def _build_client(
 def _platforms(entry: DeepalConfigEntry) -> list[Platform]:
     """Return the entity platforms for an entry."""
     platforms = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.IMAGE]
-    if getattr(entry, "options", {}).get(
+    if is_international(entry) and getattr(entry, "options", {}).get(
         CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
     ):
         platforms.append(Platform.DEVICE_TRACKER)
-    if (
-        entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL
-        and entry.data.get(CONF_PRIVATE_KEY)
-    ):
+    if is_international(entry) and entry.data.get(CONF_PRIVATE_KEY):
         platforms.extend(
             [
                 Platform.CLIMATE,
@@ -359,9 +356,15 @@ async def _async_remove_stale_after_grace(
             return
 
 
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Set up the Deepal integration-level services."""
+    await async_register_services(hass)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bool:
     """Set up Changan Deepal from a config entry."""
-    if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
+    if is_international(entry):
         data_updates = dict(entry.data)
         if not data_updates.get(CONF_DEVICE_ID):
             data_updates[CONF_DEVICE_ID] = secrets.token_hex(16)
@@ -452,6 +455,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
         )
 
     _remove_stale_vehicle_registry(hass, entry, coordinator)
+    remove_location_trackers(hass, entry, coordinator)
     if _has_pending_vehicle_removals(hass, entry):
         entry.async_create_background_task(
             hass,
@@ -524,7 +528,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> N
         for other in hass.config_entries.async_entries(DOMAIN)
     ):
         await async_unregister_frontend(hass)
-    if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) != PLATFORM_INTL:
+    if not is_international(entry):
         return
     if not entry.data.get(CONF_ACCESS_TOKEN):
         return

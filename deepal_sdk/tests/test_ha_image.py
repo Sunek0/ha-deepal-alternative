@@ -403,6 +403,16 @@ async def test_image_entity_contract_and_metadata() -> None:
     assert entity.unique_id == "deepal_car-1_vehicle_image"
     assert entity.image_last_updated is not None
     assert entity.state is not None
+    assert entity.available is True
+
+
+@pytest.mark.asyncio
+async def test_image_stays_available_when_the_poll_fails() -> None:
+    entity = _entity(FakeHttpClient(), _vehicle(thumbnail_url=None))
+    entity.coordinator.last_update_success = False
+
+    assert entity.available is True
+    assert await entity.async_image() == GENERIC_ASSET.read_bytes()
 
 
 @pytest.mark.asyncio

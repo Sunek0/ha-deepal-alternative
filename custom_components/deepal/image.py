@@ -189,6 +189,11 @@ class DeepalVehicleImage(DeepalEntity, ImageEntity):
             self._attr_content_type = SVG_CONTENT_TYPE
 
     @property
+    def available(self) -> bool:
+        """Return True: the bundled asset is always available."""
+        return True
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose the official layered pack so the card can discover it."""
         manager = self._model_assets

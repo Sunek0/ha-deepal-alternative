@@ -21,6 +21,10 @@ class DeepalCardBase extends HTMLElement {
     this.shadowRoot.addEventListener("change", (event) => this._onChange(event));
   }
 
+  connectedCallback() {
+    this._attachPointerFreeze();
+  }
+
   disconnectedCallback() {
     this._removePointerFreeze();
   }
@@ -275,9 +279,11 @@ class DeepalCardBase extends HTMLElement {
           const entityId = ids[key];
           if (!entityId) continue;
           const state = hass.states[entityId];
+          // last_updated bumps on any state or attribute change, so the key
+          // detects what the card displays without serializing attributes.
           parts.push(
             state
-              ? `${entityId}=${state.state};${JSON.stringify(state.attributes)}`
+              ? `${entityId}=${state.state};${state.last_updated || ""}`
               : `${entityId}=missing`,
           );
         }
@@ -289,7 +295,7 @@ class DeepalCardBase extends HTMLElement {
         const state = hass.states[entry.entity];
         parts.push(
           state
-            ? `${entry.entity}=${state.state};${JSON.stringify(state.attributes)}`
+            ? `${entry.entity}=${state.state};${state.last_updated || ""}`
             : `${entry.entity}=missing`,
         );
       }

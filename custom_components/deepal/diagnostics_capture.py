@@ -27,6 +27,7 @@ from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, callback
 
 from .const import (
+    PLATFORM_SDA,
     CONF_ENABLE_DIAGNOSTICS_CAPTURE,
     CONF_ENVIRONMENT,
     CONF_PLATFORM,
@@ -37,6 +38,7 @@ from .const import (
     DIAGNOSTICS_MAX_FILES,
     DIAGNOSTICS_MAX_FILE_BYTES,
     DIAGNOSTICS_MAX_STRING_LENGTH,
+    DIAGNOSTICS_RECENT_BYTES,
     DIAGNOSTICS_RECENT_EVENTS,
     DIAGNOSTICS_SCHEMA_VERSION,
     DOMAIN,
@@ -144,18 +146,25 @@ def _event_size(event: dict[str, Any]) -> int:
         return DIAGNOSTICS_MAX_EVENT_BYTES + 1
 
 
-def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Replace an oversized event with a small summary."""
-    if _event_size(event) <= DIAGNOSTICS_MAX_EVENT_BYTES:
-        return event
-    return {
+def _bounded_event(event: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Return the event to keep and its serialized size.
+
+    An oversized event becomes a small summary; the size is computed once for
+    the decision and reused by the caller, so a large payload is not serialized
+    twice on the event loop.
+    """
+    size = _event_size(event)
+    if size <= DIAGNOSTICS_MAX_EVENT_BYTES:
+        return event, size
+    summary = {
         "ts": event.get("ts") or datetime.now(UTC).isoformat(),
         "kind": event.get("kind") or "event",
         "event": "truncated",
         "original_kind": event.get("kind"),
         "original_event": event.get("event"),
-        "bytes": _event_size(event),
+        "bytes": size,
     }
+    return summary, _event_size(summary)
 
 
 class DiagnosticsCapture:
@@ -183,7 +192,8 @@ class DiagnosticsCapture:
             tuple[dict[str, Any] | None, asyncio.Future[Any] | None]
         ] = asyncio.Queue(maxsize=2000)
         self._writer_task: asyncio.Task[None] | None = None
-        self._recent: deque[dict[str, Any]] = deque(maxlen=DIAGNOSTICS_RECENT_EVENTS)
+        self._recent: deque[tuple[int, dict[str, Any]]] = deque()
+        self._recent_bytes = 0
         self._dropped = 0
         self._last_error: str | None = None
         self._logged_error = False
@@ -231,7 +241,7 @@ class DiagnosticsCapture:
             ),
             "entry_id": self.entry_id,
             "entry_title": getattr(self.entry, "title", ""),
-            "platform": entry_data.get(CONF_PLATFORM, "sda"),
+            "platform": entry_data.get(CONF_PLATFORM, PLATFORM_SDA),
             "environment": (
                 options.get(CONF_ENVIRONMENT)
                 or entry_data.get(CONF_ENVIRONMENT)
@@ -279,7 +289,7 @@ class DiagnosticsCapture:
         """Write the header if the segment is new or empty."""
         if path.exists() and path.stat().st_size > 0:
             return
-        header = _bounded_event(redact_event(self._header()))
+        header = _bounded_event(redact_event(self._header()))[0]
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(header, ensure_ascii=False, default=_json_default))
             handle.write("\n")
@@ -342,6 +352,7 @@ class DiagnosticsCapture:
         elif control == "delete":
             await asyncio.to_thread(self._delete)
             self._recent.clear()
+            self._recent_bytes = 0
             self._dropped = 0
             if self.enabled:
                 await asyncio.to_thread(self._rotate)
@@ -383,10 +394,17 @@ class DiagnosticsCapture:
         if not self._started:
             return
         try:
-            safe = _bounded_event(redact_event(event))
+            safe, size = _bounded_event(redact_event(event))
             if "ts" not in safe:
                 safe["ts"] = datetime.now(UTC).isoformat()
-            self._recent.append(safe)
+            self._recent.append((size, safe))
+            self._recent_bytes += size
+            while self._recent and (
+                self._recent_bytes > DIAGNOSTICS_RECENT_BYTES
+                or len(self._recent) > DIAGNOSTICS_RECENT_EVENTS
+            ):
+                dropped_size, _ = self._recent.popleft()
+                self._recent_bytes -= dropped_size
             try:
                 self._queue.put_nowait((safe, None))
             except asyncio.QueueFull:
@@ -447,6 +465,7 @@ class DiagnosticsCapture:
         elif control == "delete":
             self._delete()
             self._recent.clear()
+            self._recent_bytes = 0
             self._dropped = 0
             if self.enabled:
                 self._rotate()
@@ -494,7 +513,8 @@ class DiagnosticsCapture:
             "total_bytes": total,
             "dropped_events": self._dropped,
             "last_error": self._last_error,
-            "recent_events": list(self._recent),
+            "recent_bytes": self._recent_bytes,
+            "recent_events": [event for _size, event in self._recent],
         }
 
     async def async_remove(self) -> None:

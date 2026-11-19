@@ -36,21 +36,28 @@ _START_FIELDS = ("start", "start_level", "start_range")
 _END_FIELDS = ("end", "end_level", "end_range")
 
 
-def charging_flag(condition: Any) -> Optional[bool]:
+def charging_flag(condition: Any, s05: bool | None = None) -> Optional[bool]:
     """Return whether a condition reports the car charging (``None`` = unknown).
 
     The S05 reports ``ChrgSts`` as a charging-state enum whose connected-only
     values (1 and 2) used to read as "charging": for those snapshots only the
     charging states 3 and 4 are on. State 5 (charge stopped with the cable
-    connected) is also off. Vehicles that do not report ``ChrgSts`` (the SDA
-    broker, the REST condition) keep the previous any-non-zero behaviour until
-    their enum is confirmed.
+    connected) and state 8 (connected, waiting for the scheduled charge window)
+    are also off. ``s05`` identifies the vehicle model explicitly so a partial
+    payload that omitted the charge group, and therefore carries a retained
+    ``charging_status`` without the raw ``ChrgSts`` key, keeps the enum
+    semantics. Vehicles that do not report ``ChrgSts`` (the SDA broker, the
+    REST condition) keep the previous any-non-zero behaviour until their enum
+    is confirmed; ``s05=None`` keeps the raw-payload inference for callers that
+    only have the condition.
     """
     status = condition.battery.charging_status
     if status is None:
         return None
     raw = getattr(condition, "mqtt_raw_data", None) or {}
-    if "ChrgSts" in raw:
+    if s05 is None:
+        s05 = "ChrgSts" in raw
+    if s05:
         return charge_is_active(status)
     return str(status) not in ("0", "None")
 

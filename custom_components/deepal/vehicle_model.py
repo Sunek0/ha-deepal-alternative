@@ -66,13 +66,24 @@ def is_s05_phev(vehicle: Any) -> bool:
 
 
 def supports_charge_schedule(vehicle: Any) -> bool:
-    """Return whether the vehicle exposes the charging-schedule control.
+    """Return whether the switch/time charge-schedule controls are available.
 
-    The S05 EV reports a placeholder ``chargePlanList`` entry but has no
-    schedule; the S05 PHEV is the only S05 with the option. Every other model,
-    and a vehicle with missing model data, keeps the control.
+    The S05 BEV writes the plan through ``add-plan``/``delete-plan`` and the
+    PHEV through ``modify-plan``; both use the model-aware command helper. Other
+    international models keep the control they already had.
     """
-    return not is_s05(vehicle) or is_s05_phev(vehicle)
+    return not is_s05(vehicle) or is_s05(vehicle)
+
+
+def supports_charge_plan(vehicle: Any) -> bool:
+    """Return whether the vehicle exposes charge-plan telemetry (read-only).
+
+    Every international vehicle may report a ``chargePlanList``; the platform
+    only builds these read-only entities for the international client. The gate
+    deliberately does not enable the switch/time controls, which keep the
+    stricter :func:`supports_charge_schedule` gate.
+    """
+    return True
 
 
 def supports_fuel(vehicle: Any, capabilities: Any) -> bool:
@@ -87,6 +98,40 @@ def supports_fuel(vehicle: Any, capabilities: Any) -> bool:
     if capabilities is None or not getattr(capabilities, "has_fuel", False):
         return False
     return not is_bev(vehicle)
+
+
+def seat_function_supported(
+    capabilities: Any, position: str, function: str
+) -> bool:
+    """Return whether the fetched capabilities include a seat function.
+
+    Conservative on purpose: without capabilities, or with a configuration that
+    carries no seat comfort code at all, the model-based entity set is kept, so
+    an incomplete capability response never removes working entities.
+    """
+    if capabilities is None:
+        return True
+    seats = getattr(capabilities, "seats", None) or {}
+    if not any(
+        getattr(seat, "heating", False) or getattr(seat, "ventilation", False)
+        for seat in seats.values()
+    ):
+        return True
+    seat = seats.get(position)
+    return bool(seat and getattr(seat, function, False))
+
+
+def uses_s05_charge_enum(vehicle: Any, condition: Any) -> bool:
+    """Return whether a condition reports the S05 CA-broker charge enum.
+
+    The enum rule applies to S05 telemetry read from the CA broker, including a
+    payload whose charge group was omitted and whose state was retained from the
+    previous S05 report. The SDA broker, the REST condition and other models
+    keep their own charging-status semantics.
+    """
+    if vehicle is None or not is_s05(vehicle):
+        return False
+    return (getattr(condition, "condition_source", None) or "") == "legacy-mqtt"
 
 
 def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:

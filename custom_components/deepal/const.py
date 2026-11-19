@@ -52,7 +52,6 @@ CONF_ENABLE_LOCATION = "enable_location"
 CONF_WAKE = "wake"
 
 DEFAULT_COUNTRY = "ES"
-DEFAULT_NAME = "Deepal Alternative"
 DEFAULT_SCAN_INTERVAL = 300  # seconds (5 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 DEFAULT_WAKE = True
@@ -86,6 +85,10 @@ DIAGNOSTICS_MAX_FILES = 5
 DIAGNOSTICS_MAX_STRING_LENGTH = 20_000
 DIAGNOSTICS_MAX_EVENT_BYTES = 512 * 1024
 DIAGNOSTICS_RECENT_EVENTS = 200
+#: Total serialized size of the in-memory recent events (200 maximum-size
+#: events would fit ~100 MiB; the budget keeps the summary and the diagnostics
+#: payload proportional to what a support session needs).
+DIAGNOSTICS_RECENT_BYTES = 2 * 1024 * 1024
 DIAGNOSTICS_DOWNLOAD_URL = "/api/deepal/diagnostics"
 DIAGNOSTICS_DOWNLOAD_TTL_MINUTES = 10
 

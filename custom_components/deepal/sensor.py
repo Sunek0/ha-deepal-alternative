@@ -43,6 +43,7 @@ from .deepal.mqtt import (
     CHARGE_STATE_DC_CHARGING,
     CHARGE_STATE_DC_CONNECTED,
     CHARGE_STATE_NOT_CHARGING,
+    CHARGE_STATE_WAITING_SCHEDULE,
     charge_is_active,
     charge_state,
 )
@@ -51,7 +52,9 @@ from .runtime_data import DeepalConfigEntry
 from .vehicle_model import (
     is_s05,
     is_s05_phev,
+    seat_function_supported,
     supports_charge_limit,
+    supports_charge_plan,
     supports_charge_schedule,
     supports_fuel,
 )
@@ -69,6 +72,7 @@ CHARGE_STATUS_OPTIONS = (
     "charging_ac",
     "charging_dc",
     "charge_stopped",
+    "waiting_schedule",
 )
 CHARGE_STATUS_OPTION_BY_STATE = {
     CHARGE_STATE_NOT_CHARGING: "not_charging",
@@ -77,6 +81,7 @@ CHARGE_STATUS_OPTION_BY_STATE = {
     CHARGE_STATE_AC_CHARGING: "charging_ac",
     CHARGE_STATE_DC_CHARGING: "charging_dc",
     CHARGE_STATE_CHARGE_STOPPED: "charge_stopped",
+    CHARGE_STATE_WAITING_SCHEDULE: "waiting_schedule",
 }
 
 #: Power-state enum options: only the verified 0/2 mapping is translated.
@@ -208,21 +213,25 @@ def build_sensors(
         for key in ("front_left", "front_right", "rear_left", "rear_right"):
             entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
 
+        capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
         for position in ("front_left", "front_right", "rear_left", "rear_right"):
             if s05 and position in S05_UNSUPPORTED_SEAT_POSITIONS:
+                continue
+            if not seat_function_supported(capabilities, position, "heating"):
                 continue
             entities.append(
                 DeepalSeatLevelSensor(coordinator, vehicle, position, "heating_level")
             )
         for position in ("front_left", "front_right"):
+            if not seat_function_supported(capabilities, position, "ventilation"):
+                continue
             entities.append(
                 DeepalSeatLevelSensor(coordinator, vehicle, position, "ventilation_level")
             )
 
-        capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
         fuel = supports_fuel(vehicle, capabilities)
         charge_limit = supports_charge_limit(vehicle, capabilities)
-        schedule = supports_charge_schedule(vehicle)
+        schedule = supports_charge_plan(vehicle)
 
         def supported(description: DeepalSensorDescription) -> bool:
             if description.key in CHARGE_SCHEDULE_SENSOR_KEYS and not schedule:
@@ -268,7 +277,7 @@ async def async_setup_entry(
             if is_s05_phev(vehicle):
                 removed.add("charge_limit")
             _remove_sensor_entities(registry, vehicle, removed)
-        if not supports_charge_schedule(vehicle):
+        if not supports_charge_plan(vehicle):
             _remove_sensor_entities(registry, vehicle, CHARGE_SCHEDULE_SENSOR_KEYS)
         entities.extend(build_sensors(coordinator, vehicle))
 
@@ -446,9 +455,10 @@ class DeepalChargeStatusSensor(DeepalBaseSensor):
     """S05 charging-state sensor with the app's translated states.
 
     The wire values are the ``ChrgSts`` enum: 0 not charging, 1 AC gun
-    connected, 2 DC gun connected, 3 AC charging, 4 DC charging and 5 charging
-    stopped/finished with the cable still connected. A value outside the enum
-    is unknown, logged once per distinct value and kept visible through the raw
+    connected, 2 DC gun connected, 3 AC charging, 4 DC charging, 5 charging
+    stopped/finished with the cable still connected and 8 AC cable connected,
+    waiting for the scheduled charge window. A value outside the enum is
+    unknown, logged once per distinct value and kept visible through the raw
     attribute; it is never translated into a state.
     """
 
@@ -542,9 +552,10 @@ class DeepalPowerStatusSensor(DeepalBaseSensor):
 class DeepalChargeModeSensor(DeepalBaseSensor):
     """Charging type (AC/DC) derived from the S05 charging state.
 
-    States 1/3 report AC and 2/4 report DC. The not-charging states 0 and 5 do
-    not carry a gun type, so the gun flags the SDK resolved from the raw fields
-    are used as the fallback; the type stays unknown when no gun is connected.
+    States 1/3 and the schedule waiting state 8 report AC, and states 2/4
+    report DC. The not-charging states 0 and 5 do not carry a gun type, so the
+    gun flags the SDK resolved from the raw fields are used as the fallback; the
+    type stays unknown when no gun is connected.
     """
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -561,7 +572,11 @@ class DeepalChargeModeSensor(DeepalBaseSensor):
         """Return ``ac``/``dc`` while connected or charging, else unknown."""
         cond = self.coordinator.data.get(self._car_id)
         state = charge_state(cond.battery.charging_status) if cond else None
-        if state in (CHARGE_STATE_AC_CONNECTED, CHARGE_STATE_AC_CHARGING):
+        if state in (
+            CHARGE_STATE_AC_CONNECTED,
+            CHARGE_STATE_AC_CHARGING,
+            CHARGE_STATE_WAITING_SCHEDULE,
+        ):
             return "ac"
         if state in (CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING):
             return "dc"

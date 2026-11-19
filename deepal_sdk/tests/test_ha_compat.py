@@ -68,6 +68,7 @@ from custom_components.deepal.vehicle_model import (
     supports_charge_limit,
     supports_charge_schedule,
     supports_fuel,
+    uses_s05_charge_enum,
 )
 from deepal.models import Vehicle, VehicleCondition
 
@@ -1387,6 +1388,20 @@ def test_charge_limit_is_kept_for_other_and_unknown_models() -> None:
     assert supports_charge_limit(unknown, no_code) is True
 
 
+def test_uses_s05_charge_enum_is_scoped_to_the_ca_broker_s05_conditions() -> None:
+    s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
+    s07 = _model_vehicle("car-2", series_name="S07", series_code="C673-EU")
+    mqtt = VehicleCondition(
+        car_id="car-1", vin="", condition_source="legacy-mqtt"
+    )
+    rest = VehicleCondition(car_id="car-1", vin="", condition_source="rest")
+
+    assert uses_s05_charge_enum(s05, mqtt) is True
+    assert uses_s05_charge_enum(s05, rest) is False
+    assert uses_s05_charge_enum(s07, mqtt) is False
+    assert uses_s05_charge_enum(None, mqtt) is False
+
+
 def test_build_control_numbers_skips_the_charge_limit_on_the_s05() -> None:
     coordinator = FakeCoordinator()
     s05 = _model_vehicle("car-1", series_name="S05", series_code="C857-EU")
@@ -1424,6 +1439,39 @@ def test_build_control_numbers_skip_the_charge_limit_on_the_s05_phev() -> None:
     assert len(phev_ids) == 4
 
 
+def test_build_control_numbers_follow_the_reported_seat_capabilities() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(
+        ["#driverSeatHeat", "#driverSeatVent"]
+    )
+    vehicle = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+
+    ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, vehicle)
+    ]
+
+    assert "deepal_car-1_seat_front_left_heating_control" in ids
+    assert "deepal_car-1_seat_front_left_ventilation_control" in ids
+    assert "deepal_car-1_seat_front_right_heating_control" not in ids
+    assert not any("rear" in unique_id for unique_id in ids)
+
+
+def test_build_control_numbers_keep_the_model_seats_without_seat_codes() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(["#ota"])
+    vehicle = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+
+    ids = [
+        entity.unique_id
+        for entity in number.build_control_numbers(coordinator, vehicle)
+    ]
+
+    assert len([unique_id for unique_id in ids if "_seat_" in unique_id]) == 4
+    assert "deepal_car-1_seat_front_left_heating_control" in ids
+    assert "deepal_car-1_seat_front_left_ventilation_control" in ids
+
+
 def test_is_s05_matches_name_and_code() -> None:
     assert is_s05(_model_vehicle("car-1", series_name="S05")) is True
     assert is_s05(_model_vehicle("car-2", series_code="c857-eu")) is True
@@ -1441,7 +1489,7 @@ def test_is_s05_matches_the_sdk_model_codes() -> None:
     assert is_s05(_model_vehicle("car-3", model_code="SC6501ABABEV")) is False
 
 
-def test_charge_schedule_is_s05_phev_only() -> None:
+def test_charge_schedule_is_available_on_known_models() -> None:
     bev = _model_vehicle(
         "car-1", series_name="S05", model_code="SC6464AAKBEV"
     )
@@ -1451,7 +1499,7 @@ def test_charge_schedule_is_s05_phev_only() -> None:
     s07 = _model_vehicle("car-3", series_name="S07", series_code="C673-EU")
     unknown = _model_vehicle("car-4")
 
-    assert supports_charge_schedule(bev) is False
+    assert supports_charge_schedule(bev) is True
     assert supports_charge_schedule(phev) is True
     assert supports_charge_schedule(s07) is True
     assert supports_charge_schedule(unknown) is True
@@ -1497,6 +1545,42 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
             if entity.translation_key == "charge_status"
         )
     ) is sensor.DeepalSensor
+
+
+def test_build_sensors_follow_the_reported_seat_capabilities() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(
+        ["#driverSeatHeat", "#driverSeatVent"]
+    )
+    vehicle = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+
+    keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, vehicle)
+    }
+
+    assert "seat_heating_level_front_left" in keys
+    assert "seat_ventilation_level_front_left" in keys
+    assert "seat_heating_level_front_right" not in keys
+    assert "seat_ventilation_level_front_right" not in keys
+    assert "seat_heating_level_rear_left" not in keys
+    assert "seat_heating_level_rear_right" not in keys
+
+
+def test_build_sensors_keep_the_model_seats_without_seat_codes() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    coordinator.capabilities["car-1"] = VehicleCapabilities.from_codes(["#ota"])
+    vehicle = _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+
+    keys = {
+        entity.translation_key for entity in sensor.build_sensors(coordinator, vehicle)
+    }
+
+    assert "seat_heating_level_front_left" in keys
+    assert "seat_ventilation_level_front_left" in keys
+    assert "seat_heating_level_rear_left" in keys
+    assert "seat_heating_level_rear_right" in keys
 
 
 def test_is_bev_matches_the_model_token() -> None:
@@ -1624,7 +1708,26 @@ def test_build_binary_sensors_skips_s05_unsupported_entities() -> None:
     assert "front_left_seat_heating" in s07_keys
 
 
-def test_charge_schedule_entities_are_s05_phev_only() -> None:
+def test_sda_entries_get_the_charging_binary_sensor() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object()
+
+    entities = binary_sensor.build_binary_sensors(
+        coordinator, _model_vehicle("car-1", series_name="S07", series_code="C673-EU")
+    )
+    keys = {entity.translation_key for entity in entities}
+    charging = next(
+        entity for entity in entities if entity.translation_key == "charging"
+    )
+
+    assert keys == {"charger_plugged", "doors_lock_state", "charging"}
+    assert charging.device_class is (
+        binary_sensor.BinarySensorDeviceClass.BATTERY_CHARGING
+    )
+    assert charging.unique_id == "deepal_car-1_charging"
+
+
+def test_charge_schedule_entity_gates() -> None:
     coordinator = FakeCoordinator()
     coordinator.client = object.__new__(DeepalIntlClient)
     vehicles = (
@@ -1632,18 +1735,24 @@ def test_charge_schedule_entities_are_s05_phev_only() -> None:
             _model_vehicle(
                 "car-1", series_name="S05", model_code="SC6464AAKBEV"
             ),
-            False,
+            True,
+            True,
         ),
         (
             _model_vehicle(
                 "car-2", series_name="S05", model_code="SC6460AAAA7HEV"
             ),
             True,
+            True,
         ),
-        (_model_vehicle("car-3", series_name="S07", series_code="C673-EU"), True),
+        (
+            _model_vehicle("car-3", series_name="S07", series_code="C673-EU"),
+            True,
+            True,
+        ),
     )
 
-    for vehicle, expected in vehicles:
+    for vehicle, plan_expected, control_expected in vehicles:
         sensor_keys = {
             entity.translation_key
             for entity in sensor.build_sensors(coordinator, vehicle)
@@ -1661,12 +1770,12 @@ def test_charge_schedule_entities_are_s05_phev_only() -> None:
             for entity in time_platform.build_times(coordinator, vehicle)
         }
 
-        assert ("charge_schedule_start" in sensor_keys) is expected
-        assert ("charge_schedule_end" in sensor_keys) is expected
-        assert ("charge_schedule_enabled" in binary_keys) is expected
-        assert ("charge_schedule" in switch_keys) is expected
-        assert ("charge_schedule_start" in time_keys) is expected
-        assert ("charge_schedule_end" in time_keys) is expected
+        assert ("charge_schedule_start" in sensor_keys) is plan_expected
+        assert ("charge_schedule_end" in sensor_keys) is plan_expected
+        assert ("charge_schedule_enabled" in binary_keys) is plan_expected
+        assert ("charge_schedule" in switch_keys) is control_expected
+        assert ("charge_schedule_start" in time_keys) is control_expected
+        assert ("charge_schedule_end" in time_keys) is control_expected
         assert "steering_wheel_heating" in switch_keys
 
 
@@ -1971,6 +2080,76 @@ def test_device_tracker_platform_is_gated_by_the_option() -> None:
 
     entry.options = {CONF_ENABLE_LOCATION: True}
     assert Platform.DEVICE_TRACKER in _platforms(entry)
+
+
+def test_device_tracker_is_not_forwarded_for_sda_entries() -> None:
+    from homeassistant.const import Platform
+
+    from custom_components.deepal import _platforms
+    from custom_components.deepal.const import (
+        CONF_ENABLE_LOCATION,
+        CONF_PLATFORM,
+        PLATFORM_INTL,
+        PLATFORM_SDA,
+    )
+
+    entry = SimpleNamespace(
+        data={CONF_PLATFORM: PLATFORM_SDA},
+        options={CONF_ENABLE_LOCATION: True},
+    )
+    assert Platform.DEVICE_TRACKER not in _platforms(entry)
+
+    entry.data = {CONF_PLATFORM: PLATFORM_INTL}
+    assert Platform.DEVICE_TRACKER in _platforms(entry)
+
+
+def test_platform_helper_defaults_to_sda() -> None:
+    from custom_components.deepal.const import CONF_PLATFORM, PLATFORM_INTL
+    from custom_components.deepal.entry_platform import is_international
+
+    entry = SimpleNamespace(data={})
+    assert not is_international(entry)
+
+    entry.data = {CONF_PLATFORM: PLATFORM_INTL}
+    assert is_international(entry)
+
+
+def test_sda_entries_drop_a_leftover_location_tracker(monkeypatch) -> None:
+    from custom_components.deepal import device_tracker as tracker_platform
+    from custom_components.deepal.const import (
+        CONF_ENABLE_LOCATION,
+        CONF_PLATFORM,
+        PLATFORM_INTL,
+        PLATFORM_SDA,
+    )
+
+    removed: list[str] = []
+
+    class _Registry:
+        def async_get_entity_id(self, platform, domain, unique_id):
+            if (platform, unique_id) == ("device_tracker", "deepal_car-1_location"):
+                return "device_tracker.deepal_car_1"
+            return None
+
+        def async_remove(self, entity_id):
+            removed.append(entity_id)
+
+    monkeypatch.setattr(tracker_platform.er, "async_get", lambda hass: _Registry())
+    coordinator = SimpleNamespace(vehicles=[SimpleNamespace(car_id="car-1")])
+    hass = SimpleNamespace()
+
+    sda_entry = SimpleNamespace(
+        data={CONF_PLATFORM: PLATFORM_SDA, CONF_ENABLE_LOCATION: True}
+    )
+    tracker_platform.remove_location_trackers(hass, sda_entry, coordinator)
+    assert removed == ["device_tracker.deepal_car_1"]
+
+    removed.clear()
+    international_entry = SimpleNamespace(
+        data={CONF_PLATFORM: PLATFORM_INTL, CONF_ENABLE_LOCATION: True}
+    )
+    tracker_platform.remove_location_trackers(hass, international_entry, coordinator)
+    assert removed == []
 
 
 def test_location_tracker_exposes_the_condition_coordinates() -> None:
@@ -2663,6 +2842,31 @@ def test_options_flow_lists_the_supported_environments() -> None:
     assert labels == ["Europe", "Latin America", "ASEAN", "ASEAN CONNECT"]
 
 
+def _options_flow(*, international: bool) -> config_flow.DeepalOptionsFlow:
+    """Return an options flow bound to a fake entry of one platform."""
+    from custom_components.deepal.const import (
+        CONF_PLATFORM,
+        PLATFORM_INTL,
+        PLATFORM_SDA,
+    )
+
+    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow.handler = "entry-1"
+    flow.hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_get_known_entry=lambda entry_id: SimpleNamespace(
+                data={
+                    CONF_PLATFORM: (
+                        PLATFORM_INTL if international else PLATFORM_SDA
+                    )
+                },
+                options={},
+            )
+        )
+    )
+    return flow
+
+
 def test_options_schema_exposes_the_wake_toggle() -> None:
     from custom_components.deepal.const import (
         CONF_ENVIRONMENT,
@@ -2670,7 +2874,7 @@ def test_options_schema_exposes_the_wake_toggle() -> None:
         DEFAULT_WAKE,
     )
 
-    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow = _options_flow(international=False)
     schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
 
     wake_keys = [key for key in schema.schema if key.schema == CONF_WAKE]
@@ -2686,7 +2890,7 @@ def test_options_schema_exposes_the_location_toggle() -> None:
         DEFAULT_ENABLE_LOCATION,
     )
 
-    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow = _options_flow(international=True)
     schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
 
     location_keys = [
@@ -2696,6 +2900,20 @@ def test_options_schema_exposes_the_location_toggle() -> None:
     assert location_keys[0].default() == DEFAULT_ENABLE_LOCATION
     assert DEFAULT_ENABLE_LOCATION is False
     assert schema({CONF_ENABLE_LOCATION: True})[CONF_ENABLE_LOCATION] is True
+
+
+def test_options_schema_hides_the_location_toggle_for_sda() -> None:
+    from custom_components.deepal.const import (
+        CONF_ENABLE_LOCATION,
+        CONF_ENVIRONMENT,
+    )
+
+    flow = _options_flow(international=False)
+    schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
+
+    assert not [
+        key for key in schema.schema if key.schema == CONF_ENABLE_LOCATION
+    ]
 
 
 @pytest.mark.asyncio
@@ -3077,6 +3295,7 @@ def test_charge_status_sensor_maps_the_s05_states() -> None:
         "3": "charging_ac",
         "4": "charging_dc",
         "5": "charge_stopped",
+        "8": "waiting_schedule",
     }
     for raw, option in expected.items():
         condition.battery.charging_status = raw
@@ -3121,7 +3340,7 @@ def test_charge_mode_sensor_derives_the_type() -> None:
     entity = sensor.DeepalChargeModeSensor(coordinator, _fake_vehicle())
 
     assert entity._attr_unique_id == "deepal_car-1_charge_mode"
-    for raw, option in (("1", "ac"), ("3", "ac"), ("2", "dc"), ("4", "dc")):
+    for raw, option in (("1", "ac"), ("3", "ac"), ("8", "ac"), ("2", "dc"), ("4", "dc")):
         condition.battery.charging_status = raw
         assert entity.native_value == option
     for raw in ("0", "5", "9", None):
@@ -3157,7 +3376,7 @@ def test_options_schema_exposes_the_diagnostics_section() -> None:
         DIAGNOSTICS_ACTION_NONE,
     )
 
-    flow = object.__new__(config_flow.DeepalOptionsFlow)
+    flow = _options_flow(international=False)
     schema = flow._options_schema({config_flow.CONF_ENVIRONMENT: "release_eu"})
     diagnostics_key = next(
         key for key in schema.schema if str(key) == config_flow.DIAGNOSTICS_SECTION
@@ -3292,7 +3511,7 @@ def test_phev_coolant_entity_is_removed_from_the_registry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_s05_bev_schedule_and_outside_temperature_entries_are_removed(
+async def test_s05_bev_outside_temperature_is_removed(
     monkeypatch,
 ) -> None:
     coordinator = FakeCoordinator()
@@ -3345,7 +3564,19 @@ async def test_s05_bev_schedule_and_outside_temperature_entries_are_removed(
     await switch.async_setup_entry(None, entry, added.extend)
     await time_platform.async_setup_entry(None, entry, added.extend)
 
-    assert sorted(removed) == sorted(entries.values())
+    expected_removed = {
+        entries[("sensor", "deepal_car-1_outside_temperature")],
+    }
+    assert sorted(removed) == sorted(expected_removed)
+    assert entries[("sensor", "deepal_car-1_charge_schedule_start")] not in removed
+    assert entries[("sensor", "deepal_car-1_charge_schedule_end")] not in removed
+    assert (
+        entries[("binary_sensor", "deepal_car-1_charge_schedule_enabled")]
+        not in removed
+    )
+    assert entries[("switch", "deepal_car-1_charge_schedule")] not in removed
+    assert entries[("time", "deepal_car-1_charge_schedule_start")] not in removed
+    assert entries[("time", "deepal_car-1_charge_schedule_end")] not in removed
 
 
 def test_phev_charge_limit_registry_entries_are_removed() -> None:
@@ -3373,3 +3604,43 @@ def test_phev_charge_limit_registry_entries_are_removed() -> None:
         "number.deepal_car-1_charge_limit",
         "sensor.deepal_car-1_charge_limit",
     ]
+
+
+@pytest.mark.asyncio
+async def test_bev_schedule_controls_use_the_model_aware_helper(monkeypatch) -> None:
+    from datetime import time as dt_time
+
+    coordinator = FakeCoordinator()
+    vehicle = _model_vehicle(
+        "car-1", series_name="S05", model_code="SC6464AAKBEV"
+    )
+    condition = VehicleCondition(car_id="car-1", vin="test-vin")
+    condition.battery.charge_schedule_start = "0000"
+    condition.battery.charge_schedule_end = "0100"
+    condition.battery.charge_schedule_enabled = False
+    coordinator.data["car-1"] = condition
+
+    calls: list[tuple] = []
+
+    async def fake_schedule(
+        coordinator, vehicle, start, end, enabled, time_zone, **kwargs
+    ):
+        calls.append((start, end, enabled, time_zone, kwargs.get("wait_for_plan")))
+        return "add-plan"
+
+    monkeypatch.setattr(switch, "async_set_charge_schedule", fake_schedule)
+    monkeypatch.setattr(time_platform, "async_set_charge_schedule", fake_schedule)
+    monkeypatch.setattr(switch, "ha_gmt_offset", lambda hass: "GMT+01:00")
+    monkeypatch.setattr(time_platform, "ha_gmt_offset", lambda hass: "GMT+01:00")
+
+    schedule_switch = switch.DeepalChargeScheduleSwitch(coordinator, vehicle)
+    await schedule_switch.async_turn_on()
+    assert calls[-1] == ("0000", "0100", True, "GMT+01:00", False)
+    await schedule_switch.async_turn_off()
+    assert calls[-1] == ("0000", "0100", False, "GMT+01:00", True)
+
+    schedule_time = time_platform.DeepalChargeScheduleTime(
+        coordinator, vehicle, "charge_schedule_start", "start"
+    )
+    await schedule_time.async_set_value(dt_time(1, 30))
+    assert calls[-1] == ("0130", "0100", True, "GMT+01:00", False)

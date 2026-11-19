@@ -33,10 +33,15 @@ def test_charging_flag_reads_the_status():
 
 
 def test_charging_flag_only_counts_the_s05_charging_states():
-    for status in ("0", "1", "2", "5"):
+    for status in ("0", "1", "2", "5", "8"):
         assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is False
     for status in ("3", "4"):
         assert charging_flag(_condition(status, {"ChrgSts": int(status)})) is True
+
+
+def test_charging_flag_is_off_while_waiting_for_the_scheduled_charge():
+    assert charging_flag(_condition("8", {"ChrgSts": 8})) is False
+    assert charging_flag(_condition("8", {"BattSoc": 50}), s05=True) is False
 
 
 def test_charging_flag_is_unknown_for_an_unrecognized_s05_state():
@@ -46,6 +51,22 @@ def test_charging_flag_is_unknown_for_an_unrecognized_s05_state():
 def test_charging_flag_keeps_the_non_s05_semantics():
     assert charging_flag(_condition("2", {"BcuChrgSts": 2})) is True
     assert charging_flag(_condition("2", None)) is True
+
+
+def test_charging_flag_keeps_the_s05_semantics_for_a_retained_state():
+    # A partial payload that omitted the charge group keeps the last S05 state
+    # without the raw ChrgSts key; the model flag must keep the enum rule.
+    for status in ("0", "1", "2", "5"):
+        assert charging_flag(_condition(status, None), s05=True) is False
+        assert charging_flag(_condition(status, {"BattSoc": 50}), s05=True) is False
+    for status in ("3", "4"):
+        assert charging_flag(_condition(status, None), s05=True) is True
+    assert charging_flag(_condition("9", None), s05=True) is None
+
+
+def test_charging_flag_explicit_non_s05_keeps_the_legacy_rule():
+    assert charging_flag(_condition("2", {"ChrgSts": 2}), s05=False) is True
+    assert charging_flag(_condition("0", {"ChrgSts": 0}), s05=False) is False
 
 
 def test_session_starts_with_the_current_values():
@@ -119,6 +140,38 @@ def test_long_session_is_kept_without_gain():
 
     assert state["last"]["start_level"] == 40
     assert state["last"]["end_level"] == 40
+
+
+def test_waiting_for_the_scheduled_charge_does_not_start_a_session():
+    flag = charging_flag(_condition("8", {"ChrgSts": 8}), s05=True)
+
+    state, changed = update(None, flag, 32, 155, START)
+
+    assert flag is False
+    assert changed is False
+    assert state == {}
+
+
+def test_scheduled_charge_interruption_closes_the_session():
+    started, _ = update(
+        None,
+        charging_flag(_condition("3", {"ChrgSts": 3}), s05=True),
+        32,
+        155,
+        START,
+    )
+    state, changed = update(
+        started,
+        charging_flag(_condition("8", {"ChrgSts": 8}), s05=True),
+        32,
+        154,
+        START + timedelta(minutes=50),
+    )
+
+    assert changed is True
+    assert "current" not in state
+    assert state["last"]["start_level"] == 32
+    assert state["last"]["end_level"] == 32
 
 
 def test_attributes_omit_unknown_fields():

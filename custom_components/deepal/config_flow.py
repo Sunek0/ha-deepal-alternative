@@ -62,6 +62,7 @@ from .const import (
     DIAGNOSTICS_ACTIONS,
 )
 from .deepal.endpoints import INTL_ENVIRONMENTS
+from .entry_platform import is_international
 from .diagnostics_capture import async_download_url, async_get_capture_manager
 
 _LOGGER = logging.getLogger(__name__)
@@ -723,7 +724,7 @@ class DeepalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Start the reauthentication flow."""
         entry = self._get_reauth_entry()
-        if entry.data.get(CONF_PLATFORM, PLATFORM_SDA) == PLATFORM_INTL:
+        if is_international(entry):
             self._reauth_identity = {
                 CONF_DEVICE_ID: entry_data.get(CONF_DEVICE_ID),
                 CONF_PRIVATE_KEY: entry_data.get(CONF_PRIVATE_KEY),
@@ -1000,75 +1001,79 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
 
     def _options_schema(self, options: Any) -> vol.Schema:
         """Build the options schema with the stored values as defaults."""
-        return vol.Schema(
-            {
-                vol.Optional(
-                    CONF_SCAN_INTERVAL,
-                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(
-                        min=30,
-                        max=3600,
-                        step=1,
-                        mode=selector.NumberSelectorMode.BOX,
-                        unit_of_measurement="s",
-                    )
-                ),
-                vol.Optional(
-                    CONF_CONTROL_PIN, default=options.get(CONF_CONTROL_PIN, "")
-                ): selector.TextSelector(
-                    selector.TextSelectorConfig(
-                        type=selector.TextSelectorType.PASSWORD
-                    )
-                ),
-                vol.Optional(
-                    CONF_ENABLE_API_LOGGING,
-                    default=options.get(CONF_ENABLE_API_LOGGING, False),
-                ): bool,
-                vol.Optional(DIAGNOSTICS_SECTION): section(
-                    vol.Schema(
-                        {
-                            vol.Optional(
-                                CONF_ENABLE_DIAGNOSTICS_CAPTURE,
-                                default=options.get(
-                                    CONF_ENABLE_DIAGNOSTICS_CAPTURE, False
-                                ),
-                            ): bool,
-                            vol.Optional(
-                                CONF_DIAGNOSTICS_ACTION,
-                                default=DIAGNOSTICS_ACTION_NONE,
-                            ): selector.SelectSelector(
-                                selector.SelectSelectorConfig(
-                                    options=list(DIAGNOSTICS_ACTIONS),
-                                    translation_key=DIAGNOSTICS_ACTION_TRANSLATION_KEY,
-                                    mode=selector.SelectSelectorMode.DROPDOWN,
-                                )
+        fields: dict[Any, Any] = {
+            vol.Optional(
+                CONF_SCAN_INTERVAL,
+                default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=30,
+                    max=3600,
+                    step=1,
+                    mode=selector.NumberSelectorMode.BOX,
+                    unit_of_measurement="s",
+                )
+            ),
+            vol.Optional(
+                CONF_CONTROL_PIN, default=options.get(CONF_CONTROL_PIN, "")
+            ): selector.TextSelector(
+                selector.TextSelectorConfig(
+                    type=selector.TextSelectorType.PASSWORD
+                )
+            ),
+            vol.Optional(
+                CONF_ENABLE_API_LOGGING,
+                default=options.get(CONF_ENABLE_API_LOGGING, False),
+            ): bool,
+            vol.Optional(DIAGNOSTICS_SECTION): section(
+                vol.Schema(
+                    {
+                        vol.Optional(
+                            CONF_ENABLE_DIAGNOSTICS_CAPTURE,
+                            default=options.get(
+                                CONF_ENABLE_DIAGNOSTICS_CAPTURE, False
                             ),
-                            vol.Optional(
-                                CONF_DIAGNOSTICS_CONFIRM_DELETE, default=False
-                            ): bool,
-                        }
-                    ),
-                    {"collapsed": False},
+                        ): bool,
+                        vol.Optional(
+                            CONF_DIAGNOSTICS_ACTION,
+                            default=DIAGNOSTICS_ACTION_NONE,
+                        ): selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=list(DIAGNOSTICS_ACTIONS),
+                                translation_key=DIAGNOSTICS_ACTION_TRANSLATION_KEY,
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
+                        vol.Optional(
+                            CONF_DIAGNOSTICS_CONFIRM_DELETE, default=False
+                        ): bool,
+                    }
                 ),
-                vol.Optional(
-                    CONF_WAKE,
-                    default=options.get(CONF_WAKE, DEFAULT_WAKE),
-                ): bool,
+                {"collapsed": False},
+            ),
+            vol.Optional(
+                CONF_WAKE,
+                default=options.get(CONF_WAKE, DEFAULT_WAKE),
+            ): bool,
+        }
+        if is_international(self.config_entry):
+            fields[
                 vol.Optional(
                     CONF_ENABLE_LOCATION,
                     default=options.get(
                         CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
                     ),
-                ): bool,
-                vol.Optional(
-                    CONF_ENVIRONMENT,
-                    default=(
-                        options.get(CONF_ENVIRONMENT)
-                        or self.config_entry.data.get(
-                            CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
-                        )
-                    ),
-                ): _environment_selector(),
-            }
-        )
+                )
+            ] = bool
+        fields[
+            vol.Optional(
+                CONF_ENVIRONMENT,
+                default=(
+                    options.get(CONF_ENVIRONMENT)
+                    or self.config_entry.data.get(
+                        CONF_ENVIRONMENT, DEFAULT_ENVIRONMENT
+                    )
+                ),
+            )
+        ] = _environment_selector()
+        return vol.Schema(fields)

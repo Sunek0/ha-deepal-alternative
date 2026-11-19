@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 
 # Base Hostnames
-DEFAULT_BASE_URL = "https://pre-acenter.sda.changan.com.cn"
+# Production China gateway the official app uses (MicroCoreManager ENV_PROD_URL).
+# The preproduction host `pre-acenter.sda.changan.com.cn` is documented in the
+# SDA reference and can be passed as ``base_url``.
+DEFAULT_BASE_URL = "https://m.sda.changan.com.cn"
 # Research-only: recovered from the APK, not referenced by the client.
 GATEWAY_BASE_URL = "https://pre-acenter.sda.changan.com.cn/app-apigw/store-sda-api/api/v2"
 INTL_BASE_URL = "https://m.iov.changanauto.com.de"
@@ -85,11 +88,12 @@ def get_intl_environment(environment: str) -> IntlEnvironment:
             f"Unknown international environment {environment!r}; supported: {supported}."
         ) from exc
 
-# Authentication Endpoints
-LOGIN_SMS_CODE = "/appauth/sda-app/api/user/login/code"
-OAUTH_TOKEN_BIND = "/appauth/sda-app/api/v2/oauth2-login/token/bind"
+# Authentication Endpoints (China SDA gateway; the /app-apigw prefix is part of
+# the path the official app calls, see LoginApiKt in the 1.12.0 DEX).
+LOGIN_SMS_CODE = "/app-apigw/appauth/sda-app/api/user/login/code"
+OAUTH_TOKEN_BIND = "/app-apigw/appauth/sda-app/api/v3/oauth2-login/token/bind"
 # Research-only: not referenced by the client.
-OAUTH_THIRD_UNBIND = "/appauth/sda-app/api/v2/oauth2/third/unbind"
+OAUTH_THIRD_UNBIND = "/app-apigw/appauth/sda-app/api/v2/oauth2/third/unbind"
 INTL_SEND_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-send-auth-code"
 INTL_LOGIN_BY_EMAIL_CODE = "/intl-app-gw/intl-app-auth/api/login/email-code-in"
 INTL_LOGIN_BY_EMAIL_PASSWORD = "/intl-app-gw/intl-app-auth/api/login/email-pass-in"
@@ -194,23 +198,23 @@ INTL_SDA_VOT_FUNCTION_CONFIG = (
 )
 
 # Vehicle Information & Telemetry Endpoints
-GET_MY_CARS = "/dae-terminal-mobile/api/v1/car/my-cars"
+GET_MY_CARS = "/app-apigw/dae-terminal-mobile/api/v1/car/my-cars"
 # Research-only: not referenced by the client.
-GET_CAR_STATUS = "/dae-terminal-mobile/api/v1/car/status"
-GET_CAR_FULL_CONDITION = "/dae-terminal-mobile/api/v1/car/full-condition"
+GET_CAR_STATUS = "/app-apigw/dae-terminal-mobile/api/v1/car/status"
+GET_CAR_FULL_CONDITION = "/app-apigw/dae-terminal-mobile/api/v1/car/full-condition"
 # Research-only: not referenced by the client.
-GET_CAR_SETTINGS = "/dae-terminal-mobile/api/v1/car/settings"
+GET_CAR_SETTINGS = "/app-apigw/dae-terminal-mobile/api/v1/car/settings"
 
 # Charging & Home Charger Endpoints
 # Research-only: not referenced by the client.
-GET_HOME_CHARGER_STATUS = "/dae-terminal-mobile/api/v1/charger/home-status"
-GET_CHARGE_HISTORY = "/dae-terminal-mobile/api/v1/charger/history"
+GET_HOME_CHARGER_STATUS = "/app-apigw/dae-terminal-mobile/api/v1/charger/home-status"
+GET_CHARGE_HISTORY = "/app-apigw/dae-terminal-mobile/api/v1/charger/history"
 
 # Control Commands Endpoints
-REMOTE_CLIMATE_CONTROL = "/dae-terminal-mobile/api/v1/control/climate"
-REMOTE_DOOR_LOCK = "/dae-terminal-mobile/api/v1/control/lock"
+REMOTE_CLIMATE_CONTROL = "/app-apigw/dae-terminal-mobile/api/v1/control/climate"
+REMOTE_DOOR_LOCK = "/app-apigw/dae-terminal-mobile/api/v1/control/lock"
 # Research-only: not referenced by the client.
-PARKING_COMMAND = "/dae-terminal-mobile/api/v1/control/parking"
+PARKING_COMMAND = "/app-apigw/dae-terminal-mobile/api/v1/control/parking"
 
 REQUEST_ENCRYPTION_PUBLIC_KEY = (
     "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkyhr43cBPTJ3jLiYsmbUwUp74cMJIOju5vqVzgtuK63Q99qV6iVT8wN5cXlyMtWI2mfOmhIao/fUN821im69MfOHsWXdqQEo5e9v654GPw+bju0pCphEPtD1I0VcyS34QkAu04urSun2U1q3Dr2OICLVWSnLa+01ioKxkaB0D209zXcls2eFQpvRAWm7xxVsoqzSwqp+neu5quOpn+eO/bW0TxcSQ8VZcDEUvadRTLSR0eOWgRuHIBiD2RGqPIPzKCm5A14q1qhxUZ8U0pmYe0Sx7eMy4RVe2iW7fnjc6pxTUMBkercSL26mevYouuCKqyie+LVQAtGa29RMl/lyiwIDAQAB"

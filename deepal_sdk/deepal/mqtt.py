@@ -1719,14 +1719,23 @@ CHARGE_TIME_SENTINEL = 8191
 # 2 DC gun connected, 3 AC charging, 4 DC charging. State 5 was observed on
 # 2026-10-25 with the AC wallbox disabled while the cable stayed connected:
 # the car reported 5, zero current and no remaining-time estimate, so 5 means
-# the charge stopped/finished and is not charging. Any other value means the
-# state is unknown and MUST NOT be translated into one.
+# the charge stopped/finished and is not charging. State 8 was observed on the
+# reference S05 BEV on 2026-11-18/19 with the charge schedule enabled
+# (chargePlanList.isValid=1): the car stayed plugged with zero current and no
+# remaining-time estimate before the 00:00 window and again after an
+# interrupted session. With the plan disabled the same car reported state 1
+# while plugged and idle, and state 3 when charging. State 8 therefore means
+# "AC cable connected, waiting for the scheduled charge window" and is not
+# charging. The raw AC gun field can lag by one report during an unplug; the
+# state is authoritative for the gun like states 1 and 3. Any other value means
+# the state is unknown and MUST NOT be translated into one.
 CHARGE_STATE_NOT_CHARGING = 0
 CHARGE_STATE_AC_CONNECTED = 1
 CHARGE_STATE_DC_CONNECTED = 2
 CHARGE_STATE_AC_CHARGING = 3
 CHARGE_STATE_DC_CHARGING = 4
 CHARGE_STATE_CHARGE_STOPPED = 5
+CHARGE_STATE_WAITING_SCHEDULE = 8
 CHARGE_STATES = (
     CHARGE_STATE_NOT_CHARGING,
     CHARGE_STATE_AC_CONNECTED,
@@ -1734,10 +1743,17 @@ CHARGE_STATES = (
     CHARGE_STATE_AC_CHARGING,
     CHARGE_STATE_DC_CHARGING,
     CHARGE_STATE_CHARGE_STOPPED,
+    CHARGE_STATE_WAITING_SCHEDULE,
 )
 CHARGING_STATES = frozenset({CHARGE_STATE_AC_CHARGING, CHARGE_STATE_DC_CHARGING})
 #: States that mean the AC gun is plugged in (charging or only connected).
-AC_GUN_STATES = frozenset({CHARGE_STATE_AC_CONNECTED, CHARGE_STATE_AC_CHARGING})
+AC_GUN_STATES = frozenset(
+    {
+        CHARGE_STATE_AC_CONNECTED,
+        CHARGE_STATE_AC_CHARGING,
+        CHARGE_STATE_WAITING_SCHEDULE,
+    }
+)
 #: States that mean the DC gun is plugged in (charging or only connected).
 DC_GUN_STATES = frozenset({CHARGE_STATE_DC_CONNECTED, CHARGE_STATE_DC_CHARGING})
 
@@ -1938,10 +1954,11 @@ def charge_currents(
     real DC current. Both fields are resolved against ``ChrgSts``: the field of
     the active mode is the active current, the other one is zeroed when the car
     reported a value, and connected-without-charging (``1``, ``2``), stopped
-    (``5``) or unplugged (``0``) report ``0`` instead of a stale value or the
-    post-session sentinel. An unrecognized state keeps the sanitized readings,
-    preferring a non-zero one. ``max_current`` is the model-specific plausibility
-    ceiling; the S05 PHEV passes the tighter bound.
+    (``5``), waiting for the schedule (``8``) or unplugged (``0``) report ``0``
+    instead of a stale value or the post-session sentinel. An unrecognized state
+    keeps the sanitized readings, preferring a non-zero one. ``max_current`` is
+    the model-specific plausibility ceiling; the S05 PHEV passes the tighter
+    bound.
     """
     state = charge_state(state_value)
     ac_reported = _as_float(ac_value) is not None
@@ -2026,12 +2043,14 @@ def charge_gun_flags(
     """Return the (charger plugged, AC gun, DC gun) flags of one report.
 
     States ``1``-``4`` identify the gun (`2`/`4` DC, `1`/`3` AC) and are
-    authoritative. State ``0`` (not charging) means no gun is connected for
-    every S05 model: the raw AC field can stay at ``1`` while unplugged (the
-    PHEV for hours on 2026-10-26, the BEV for at least 25 minutes while driving
-    on 2026-10-30), so it MUST be ignored. State ``5`` (charge stopped) means a
-    cable stayed connected: the raw DC field selects DC and the AC gun is
-    assumed otherwise.
+    authoritative. State ``8`` is the AC schedule waiting state: the cable is
+    connected and the AC gun is on, because the schedule only applies to AC and
+    the car reports the state with the cable connected. State ``0`` (not
+    charging) means no gun is connected for every S05 model: the raw AC field
+    can stay at ``1`` while unplugged (the PHEV for hours on 2026-10-26, the BEV
+    for at least 25 minutes while driving on 2026-10-30), so it MUST be ignored.
+    State ``5`` (charge stopped) means a cable stayed connected: the raw DC
+    field selects DC and the AC gun is assumed otherwise.
 
     An absent or unrecognized state falls back to the raw fields; in that
     fallback ``0`` means not connected and any other reported value means
@@ -2091,7 +2110,8 @@ def normalize_s05_params(
     model code from the MQTT envelope (``b.mc``) when available; it selects the
     PHEV fallback for an absent or unrecognized charging state. State ``0`` and
     state ``5`` apply to every S05 model, so the stale AC gun field cannot turn
-    the cable on while unplugged.
+    the cable on while unplugged. State ``8`` is the AC schedule waiting state:
+    it resolves the cable and the AC gun as connected but reports no current.
     """
     latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
     charge_status = _as_int(params.get("ChrgSts"))

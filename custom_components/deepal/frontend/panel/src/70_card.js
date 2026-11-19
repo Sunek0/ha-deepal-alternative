@@ -175,6 +175,7 @@ class DeepalCard extends DeepalCardBase {
   }
 
   connectedCallback() {
+    super.connectedCallback();
     document.addEventListener("keydown", this._onKeyDown);
   }
 
