@@ -2,7 +2,9 @@ set_charge_schedule:
   name: Set charge schedule
   description: >-
     Create, update or remove the charge reservation of an S05 BEV or S05 PHEV.
-    The S05 BEV uses add-plan/delete-plan; the S05 PHEV uses modify-plan.
+    The S05 BEV uses add-plan/delete-plan. The S05 PHEV uses modify-plan when
+    the car reports a complete plan, and add-plan when it only reports the
+    placeholder plan or rejects the update. Disabling never adds a plan.
   fields:
     start_time:
       name: Start time

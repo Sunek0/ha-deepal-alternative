@@ -79,7 +79,9 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   BEV and PHEV), lights, horn and lights-and-horn together.
 - The S05 BEV charge reservation is managed with the `deepal.set_charge_schedule` service; the
   PHEV also keeps its switch/time entities. The integration uses `/charge/add-plan` and
-  `/charge/delete-plan` on the BEV, and `/charge/modify-plan` on the PHEV.
+  `/charge/delete-plan` on the BEV, and `/charge/modify-plan` on the PHEV with an `add-plan`
+  fallback when the car only reports the placeholder plan or rejects the update. The PHEV switch
+  uses `/charge/validity` to flip the plan on or off.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
@@ -107,12 +109,18 @@ data:
   when the car reports one; Home Assistant is the fallback. The schedule time entities expose the
   effective `time_zone` attribute.
 - `enabled: false` removes the active plan on the S05 BEV and disables the current plan on the
-  S05 PHEV. The S05 BEV uses `add-plan`/`delete-plan` because the car rejects `modify-plan`; the
-  PHEV keeps the verified `modify-plan` path.
+  S05 PHEV. The S05 BEV uses `add-plan`/`delete-plan` because the car rejects `modify-plan`.
+- On the S05 PHEV the integration updates the reported plan with `modify-plan`. A car that only
+  reports the placeholder plan (`planId` without an end time or end switch) creates the
+  reservation with `add-plan` instead. If `modify-plan` is rejected, enabling falls back to
+  `add-plan` and disabling deletes the plan; disabling never adds one. The service response
+  reports the command that actually ran (`modify-plan`, `add-plan`, `delete-plan`, `plan-validity`
+  or `noop`).
 - With several loaded entries or vehicles, pass `config_entry_id` and/or `vehicle_id`.
 - The switch and time controls are available for both variants. On the S05 BEV the switch adds a
   plan with the current times and deletes it when turned off; changing a time adds an active
-  plan. On the S05 PHEV the controls keep the `modify-plan` path.
+  plan. On the S05 PHEV the switch uses the plan on/off command first and the time entities keep
+  writing the times with `modify-plan`.
 - The read-only "Charge schedule enabled" binary sensor and the start/end sensors are available
   for both variants.
 - The BEV deletes only the active plan before adding a new one; disabled plans created in the app

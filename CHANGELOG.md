@@ -4,6 +4,22 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b2 - 2026-11-19
+
+### Fixed
+
+- The S05 PHEV charge schedule works when the car only reports the placeholder plan (a
+  `planId` without an end time or end switch): the reservation is created with
+  `/charge/add-plan` instead of a `modify-plan` the car rejects with `HW_1_1_01_001`.
+- The charge schedule switch uses the plan on/off command (`/charge/validity`) to enable and
+  disable the PHEV reservation, so turning it off no longer rewrites the plan. A rejected
+  disable deletes the plan and never creates a new one; if the delete also fails, the service
+  reports one translated error.
+- A rejected `modify-plan` falls back to `/charge/add-plan` when enabling and to
+  `/charge/delete-plan` when disabling. Authentication, rate-limit and transport errors are
+  still reported instead of retried, and the service response names the command that ran
+  (`plan-validity`, `modify-plan`, `add-plan`, `delete-plan` or `noop`).
+
 ## 1.9.0-b1 - 2026-11-19
 
 ### Added

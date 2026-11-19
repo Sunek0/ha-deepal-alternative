@@ -109,6 +109,7 @@ class DeepalChargeScheduleSwitch(DeepalEntity, SwitchEntity):
             enabled,
             ha_gmt_offset(self.hass),
             wait_for_plan=not enabled,
+            toggle_only=True,
         )
 
 
