@@ -15,7 +15,7 @@ The integration provides the connection, the telemetry and the remote controls; 
 
 ## Requirements
 
-- Home Assistant 2026.8.0.
+- Home Assistant 2026.11.0.
 - An international My Changan account (email or SMS login). The HACS metadata advertises the
   countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
   Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
