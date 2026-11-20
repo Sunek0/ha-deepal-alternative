@@ -1828,15 +1828,23 @@ class DeepalIntlClient:
         plans = charge.get("chargePlanList")
         if not isinstance(plans, list):
             plans = []
-        charge_plan = next(
-            (
-                plan
-                for plan in plans
-                if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
-            ),
-            plans[0] if plans and isinstance(plans[0], dict) else {},
+        # The car lists plans newest first and the official app shows only the
+        # first one, so follow it (older active plans must not keep the
+        # schedule "on" after the app turned the newest plan off).
+        charge_plan = (
+            plans[0]
+            if plans and isinstance(plans[0], dict)
+            else next(
+                (
+                    plan
+                    for plan in plans
+                    if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
+                ),
+                {},
+            )
         ) or {}
         plan_valid = _as_int(charge_plan.get("isValid"))
+        plan_times = {} if str(charge_plan.get("planId")) == "1" else charge_plan
 
         def _tenths(value: Any) -> Optional[float]:
             parsed = _as_float(value)
@@ -1935,14 +1943,16 @@ class DeepalIntlClient:
                 bool(plan_valid) if plan_valid is not None else None
             ),
             charge_plans=[plan for plan in plans if isinstance(plan, dict)],
+            # The placeholder plan (id 1) carries default times, not the user's:
+            # leave them unset so the last chosen times are kept.
             charge_schedule_start=(
-                str(charge_plan["startTime"])
-                if charge_plan.get("startTime") is not None
+                str(plan_times["startTime"])
+                if plan_times.get("startTime") is not None
                 else None
             ),
             charge_schedule_end=(
-                str(charge_plan["endTime"])
-                if charge_plan.get("endTime") is not None
+                str(plan_times["endTime"])
+                if plan_times.get("endTime") is not None
                 else None
             ),
             charge_plan_id=(

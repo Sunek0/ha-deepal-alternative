@@ -138,9 +138,10 @@ class DeepalChargeScheduleTime(DeepalEntity, TimeEntity):
         else:
             end = _format_hhmm(value)
 
-        enabled = (
-            cond.battery.charge_schedule_enabled if cond is not None else True
-        )
+        # None = keep whatever the car reports right now. The coordinator state
+        # can lag a few seconds behind an add/delete, and using it here turned a
+        # time edit right after "on" into an "off".
+        enabled = None
         if is_s05(self.vehicle) and not is_s05_phev(self.vehicle):
             # The BEV has no separate "store a disabled plan" command: a new
             # add-plan with the chosen times becomes active immediately.
