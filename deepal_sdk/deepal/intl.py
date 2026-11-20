@@ -1828,15 +1828,35 @@ class DeepalIntlClient:
         plans = charge.get("chargePlanList")
         if not isinstance(plans, list):
             plans = []
-        charge_plan = next(
-            (
-                plan
-                for plan in plans
-                if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
-            ),
-            plans[0] if plans and isinstance(plans[0], dict) else {},
-        ) or {}
+        # The S05 PHEV lists plans newest first, the official app shows only the
+        # first one, and the car always keeps a default plan with id "1". Follow
+        # that first plan so an older active plan cannot keep the schedule "on"
+        # after the app turned the newest one off. This is only known for the
+        # PHEV, so every other model keeps the "first valid plan" rule.
+        phev_plans = s05 and is_phev_model(model_code)
+        first_plan = plans[0] if plans and isinstance(plans[0], dict) else {}
+        if phev_plans:
+            charge_plan = first_plan
+        else:
+            charge_plan = (
+                next(
+                    (
+                        plan
+                        for plan in plans
+                        if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
+                    ),
+                    first_plan,
+                )
+                or {}
+            )
         plan_valid = _as_int(charge_plan.get("isValid"))
+        # The default plan carries placeholder times, not the user's: leave them
+        # unset so the last chosen times are kept.
+        plan_times = (
+            {}
+            if phev_plans and str(charge_plan.get("planId")) == "1"
+            else charge_plan
+        )
 
         def _tenths(value: Any) -> Optional[float]:
             parsed = _as_float(value)
@@ -1936,13 +1956,13 @@ class DeepalIntlClient:
             ),
             charge_plans=[plan for plan in plans if isinstance(plan, dict)],
             charge_schedule_start=(
-                str(charge_plan["startTime"])
-                if charge_plan.get("startTime") is not None
+                str(plan_times["startTime"])
+                if plan_times.get("startTime") is not None
                 else None
             ),
             charge_schedule_end=(
-                str(charge_plan["endTime"])
-                if charge_plan.get("endTime") is not None
+                str(plan_times["endTime"])
+                if plan_times.get("endTime") is not None
                 else None
             ),
             charge_plan_id=(

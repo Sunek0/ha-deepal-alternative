@@ -15,6 +15,18 @@ from .const import DOMAIN
 from .deepal import DeepalError
 from .vehicle_model import is_s05, is_s05_phev
 
+_LOGGER = logging.getLogger(__name__)
+# The car always lists a default plan with this id. Only observed on the S05
+# PHEV, so it is only interpreted for that model.
+_PLACEHOLDER_PLAN_ID = "1"
+# Seconds to wait before re-reading the plan list after a delete, and between
+# the delayed coordinator refreshes after an add/delete. Module level so the
+# tests can set them to 0.
+_DELETE_SETTLE_SECONDS = 4
+_REFRESH_DELAYS = (8, 10)
+# How many times the purge looks for the new plan before it gives up.
+_PURGE_WAIT_ATTEMPTS = 6
+
 
 def ha_gmt_offset(hass: HomeAssistant) -> str:
     """Return the current Home Assistant timezone as ``GMT+HH:MM``."""
@@ -115,23 +127,28 @@ async def _async_delete_plan(
     plan_id: Any,
     start: str,
     end: str,
+    *,
+    optimistic: bool = True,
 ) -> None:
-    """Delete one plan through the coordinator wake/command/refresh path."""
-    try:
-        await coordinator.async_execute_command(
-            car_id,
-            lambda: coordinator.client.control_charge_plan_delete(car_id, str(plan_id)),
-            optimistic_update=_optimistic_schedule(
-                start, end, False, keep_times=True
-            ),
-            wake_first=True,
-        )
-    except Exception as err:  # noqa: BLE001
-        raise
+    """Delete one plan through the coordinator wake/command/refresh path.
 
-
-_LOGGER = logging.getLogger(__name__)
-_PLACEHOLDER_PLAN_ID = "1"
+    ``optimistic=False`` leaves the published state alone. The purge of older
+    plans after an add must not mark the schedule as disabled: the new plan is
+    on, and the switch would flip to "off" until the next refresh.
+    """
+    await coordinator.async_execute_command(
+        car_id,
+        lambda: coordinator.client.control_charge_plan_delete(car_id, str(plan_id)),
+        optimistic_update=(
+            _optimistic_schedule(start, end, False, keep_times=True)
+            if optimistic
+            else None
+        ),
+        # Deletes share the plan list, so they run one at a time per vehicle
+        # even without an optimistic update.
+        serialize=True,
+        wake_first=True,
+    )
 
 
 def _stale_plan_ids(plans: list[dict[str, Any]], keep_id: Any) -> list[str]:
@@ -150,6 +167,29 @@ def _stale_plan_ids(plans: list[dict[str, Any]], keep_id: Any) -> list[str]:
     ][:25]
 
 
+def _plan_lock(coordinator: Any) -> asyncio.Lock:
+    """Return the per-coordinator lock that serializes plan deletes.
+
+    The coordinator class does not define it, so it is created on first use.
+    """
+    lock = getattr(coordinator, "_deepal_plan_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        coordinator._deepal_plan_lock = lock
+    return lock
+
+
+def _spawn(coordinator: Any, coro: Any, name: str) -> None:
+    """Run a follow-up coroutine tied to the config entry.
+
+    A background task of the entry is cancelled when the entry unloads, which a
+    plain ``hass.async_create_task`` would not do.
+    """
+    coordinator.config_entry.async_create_background_task(
+        coordinator.hass, coro, name
+    )
+
+
 async def _delete_plans_verified(
     coordinator: Any,
     vehicle: Any,
@@ -159,26 +199,25 @@ async def _delete_plans_verified(
     *,
     only_ids: set[str] | None = None,
     raise_errors: bool = False,
+    optimistic: bool = True,
 ) -> None:
     """Delete plans one command at a time and re-check what the car still lists.
 
     A delete sent a few seconds after an add can be ignored by the car, and two
     overlapping delete runs confuse it, so every run waits for the previous one.
     """
-    lock = getattr(coordinator, "_deepal_plan_lock", None)
-    if lock is None:
-        lock = asyncio.Lock()
-        try:
-            coordinator._deepal_plan_lock = lock
-        except AttributeError:
-            pass
-    async with lock:
+    async with _plan_lock(coordinator):
         ids = list(plan_ids)
         for attempt in range(3):
             for plan_id in ids:
                 try:
                     await _async_delete_plan(
-                        coordinator, vehicle.car_id, plan_id, start, end
+                        coordinator,
+                        vehicle.car_id,
+                        plan_id,
+                        start,
+                        end,
+                        optimistic=optimistic,
                     )
                 except (HomeAssistantError, DeepalError) as err:
                     if raise_errors and attempt == 0:
@@ -186,7 +225,7 @@ async def _delete_plans_verified(
                     _LOGGER.warning(
                         "Deepal could not delete the charge plan %s: %s", plan_id, err
                     )
-            await asyncio.sleep(4)
+            await asyncio.sleep(_DELETE_SETTLE_SECONDS)
             fresh = await _fresh_condition(coordinator, vehicle)
             if fresh is None:
                 return
@@ -195,6 +234,10 @@ async def _delete_plans_verified(
                 ids = [i for i in ids if i in only_ids]
             if not ids:
                 return
+        _LOGGER.warning(
+            "Deepal: the car still lists the charge plan(s) %s after 3 attempts",
+            ", ".join(ids),
+        )
 
 
 async def _refresh_later(coordinator: Any) -> None:
@@ -203,7 +246,7 @@ async def _refresh_later(coordinator: Any) -> None:
     The refresh right after a command still sees the old plan list, which made
     the switch show "off" until the next poll although the plan was on.
     """
-    for delay in (8, 10):
+    for delay in _REFRESH_DELAYS:
         await asyncio.sleep(delay)
         try:
             await coordinator.async_request_refresh()
@@ -223,15 +266,115 @@ def _purge_other_plans(
     stale = _stale_plan_ids(plans, keep_id)
     if not stale:
         return
-    coordinator.hass.async_create_task(
-        _delete_plans_verified(
-            coordinator, vehicle, stale, start, end, only_ids=set(stale)
-        ),
+    _spawn(
+        coordinator,
+        _purge_after_add(coordinator, vehicle, stale, start, end),
         "deepal_purge_charge_plans",
     )
 
 
-async def _async_set_charge_schedule(
+async def _purge_after_add(
+    coordinator: Any,
+    vehicle: Any,
+    stale: list[str],
+    start: str,
+    end: str,
+) -> None:
+    """Delete the older plans only once the car lists the new one.
+
+    The car applies the add a few seconds after it accepts the command. A delete
+    sent before that left the car with the default plan only: the switch fell to
+    "off" until the new plan showed up, and a lost add would have removed the
+    schedule altogether. So the older plans stay until a plan that is neither
+    one of them nor the default plan appears in the car's list.
+    """
+    old = set(stale)
+    for _ in range(_PURGE_WAIT_ATTEMPTS):
+        await asyncio.sleep(_DELETE_SETTLE_SECONDS)
+        fresh = await _fresh_condition(coordinator, vehicle)
+        if fresh is None:
+            continue
+        listed = {
+            str(plan["planId"])
+            for plan in _plans(fresh)
+            if plan.get("planId") is not None
+        }
+        if listed - old - {_PLACEHOLDER_PLAN_ID}:
+            await _delete_plans_verified(
+                coordinator,
+                vehicle,
+                stale,
+                start,
+                end,
+                only_ids=old,
+                optimistic=False,
+            )
+            return
+    _LOGGER.warning(
+        "Deepal: the car did not list the new charge plan, so the older plan(s) %s "
+        "were kept",
+        ", ".join(stale),
+    )
+
+
+async def _async_set_phev_schedule(
+    coordinator: Any,
+    vehicle: Any,
+    plans: list[dict[str, Any]],
+    start: str,
+    end: str,
+    enabled: bool,
+    command_time_zone: str,
+) -> str:
+    """Set or remove the charge reservation of an S05 PHEV.
+
+    The car rejects modify-plan and the plan on/off command, so a plan either
+    exists or it does not. On or a time change adds a plan with the times and
+    then removes the older real plans; off deletes every real plan. The
+    placeholder plan is never touched.
+    """
+    client = coordinator.client
+
+    if enabled:
+        await coordinator.async_execute_command(
+            vehicle.car_id,
+            lambda: client.control_charge_plan_add(
+                vehicle.car_id, start, end, 1, 1, 1, command_time_zone
+            ),
+            optimistic_update=_optimistic_schedule(
+                start, end, True, clear_plan=True
+            ),
+            wake_first=True,
+        )
+        _purge_other_plans(coordinator, vehicle, plans, None, start, end)
+        _spawn(coordinator, _refresh_later(coordinator), "deepal_refresh_after_plan")
+        return "add-plan"
+
+    real_ids = _stale_plan_ids(plans, None)
+    if not real_ids:
+        # Nothing to switch off. Keep the chosen times for the next "on"
+        # without sending a command to the car.
+        data = coordinator.data or {}
+        current = data.get(vehicle.car_id)
+        if current is not None:
+            _optimistic_schedule(start, end, False)(current)
+            coordinator.async_set_updated_data(data)
+        return "noop"
+    try:
+        await _delete_plans_verified(
+            coordinator, vehicle, real_ids, start, end, raise_errors=True
+        )
+    except (HomeAssistantError, DeepalError) as err:
+        # Never fall through to add-plan here: it would create an enabled plan
+        # instead of switching the schedule off.
+        raise HomeAssistantError(
+            f"Could not switch off the charge schedule: {err}"
+        ) from err
+    _spawn(coordinator, _refresh_later(coordinator), "deepal_refresh_after_plan")
+    return "delete-plan"
+
+
+async def async_set_charge_schedule(
     coordinator: Any,
     vehicle: Any,
     start: str,
@@ -246,8 +389,12 @@ async def _async_set_charge_schedule(
 
     Returns the strategy used and the effective command timezone. The plan's
     own ``timeZone`` wins; the Home Assistant zone is the fallback when the car
-    does not report one. ``modify-plan`` is used for the PHEV and other
-    international models, ``add-plan``/``delete-plan`` for the S05 BEV.
+    does not report one. The S05 PHEV uses ``add-plan``/``delete-plan`` (see
+    ``_async_set_phev_schedule``), other international models keep
+    ``modify-plan``, and the S05 BEV ``add-plan``/``delete-plan``.
+
+    ``enabled=None`` keeps the state the car reports: the newest real plan for
+    the PHEV, the coordinator state for the other models.
     """
     client = coordinator.client
     stored = (coordinator.data or {}).get(vehicle.car_id)
@@ -259,12 +406,20 @@ async def _async_set_charge_schedule(
         # the switch delete the previous plan instead of the new one.
         condition = fresh
     plans = _plans(condition) if condition is not None else []
+    phev = is_s05_phev(vehicle)
     if enabled is None:
-        newest = plans[0] if plans else {}
-        enabled = (
-            _as_int(newest.get("isValid")) == 1
-            and str(newest.get("planId")) != _PLACEHOLDER_PLAN_ID
-        )
+        if phev:
+            newest = plans[0] if plans else {}
+            enabled = (
+                _as_int(newest.get("isValid")) == 1
+                and str(newest.get("planId")) != _PLACEHOLDER_PLAN_ID
+            )
+        else:
+            enabled = bool(
+                condition.battery.charge_schedule_enabled
+                if condition is not None
+                else True
+            )
     plan_time_zone = (
         condition.battery.charge_plan_time_zone
         if condition is not None
@@ -272,14 +427,15 @@ async def _async_set_charge_schedule(
     )
     command_time_zone = plan_time_zone or time_zone
     try:
-        if is_s05_phev(vehicle) or not is_s05(vehicle):
-            phev = is_s05_phev(vehicle)
+        if phev:
+            strategy = await _async_set_phev_schedule(
+                coordinator, vehicle, plans, start, end, enabled, command_time_zone
+            )
+            return strategy, command_time_zone
+        if not is_s05(vehicle):
             plan_id = condition.battery.charge_plan_id if condition else None
             if not plan_id and stored is not None:
                 plan_id = stored.battery.charge_plan_id
-            if plan_id is not None and str(plan_id) == _PLACEHOLDER_PLAN_ID:
-                plan_id = None  # the placeholder is not a plan to switch or modify
-
             async def _add_plan() -> None:
                 await coordinator.async_execute_command(
                     vehicle.car_id,
@@ -298,9 +454,43 @@ async def _async_set_charge_schedule(
                     wake_first=True,
                 )
 
-            if not phev:
-                # Other international models: modify the plan, or add one.
-                if plan_id:
+            if plan_id and (toggle_only or not enabled):
+                # Local patch: the switch only flips the plan on or off, so use
+                # the dedicated validity command; fall back to modify/add below.
+                try:
+                    await coordinator.async_execute_command(
+                        vehicle.car_id,
+                        lambda: client.control_charge_plan_validity(
+                            vehicle.car_id, str(plan_id), enabled
+                        ),
+                        optimistic_update=_optimistic_schedule(start, end, enabled),
+                        wake_first=True,
+                    )
+                    return "plan-validity", command_time_zone
+                except (HomeAssistantError, DeepalError):
+                    pass
+                if not enabled:
+                    # The car ignores end-switch 0 on modify/add, so removing
+                    # the plan is the reliable way to switch it off.
+                    try:
+                        await _async_delete_plan(
+                            coordinator,
+                            vehicle.car_id,
+                            plan_id,
+                            start,
+                            end,
+                        )
+                        return "delete-plan", command_time_zone
+                    except (HomeAssistantError, DeepalError) as err:
+                        # Never fall through to add-plan here: it would create
+                        # an enabled plan instead of switching it off.
+                        raise HomeAssistantError(
+                            f"Could not switch off the charge schedule: {err}"
+                        ) from err
+
+            if plan_id:
+                strategy = "modify-plan"
+                try:
                     await coordinator.async_execute_command(
                         vehicle.car_id,
                         lambda: client.control_charge_schedule(
@@ -316,44 +506,16 @@ async def _async_set_charge_schedule(
                         optimistic_update=_optimistic_schedule(start, end, enabled),
                         wake_first=True,
                     )
-                    return "modify-plan", command_time_zone
-                if not enabled:
-                    # There is no plan to disable, and the car treats any added
-                    # plan as active: send nothing instead of turning it on.
-                    return "noop", command_time_zone
+                except (HomeAssistantError, DeepalError):
+                    # Local patch: some PHEVs only hold a placeholder plan
+                    # (no end time) that modify-plan rejects with
+                    # HW_1_1_01_001. Fall back to adding a plan.
+                    strategy = "add-plan"
+                    await _add_plan()
+            else:
+                strategy = "add-plan"
                 await _add_plan()
-                return "add-plan", command_time_zone
-
-            # S05 PHEV: the car rejects modify-plan and the plan on/off command,
-            # so a plan exists or it does not. On = add a plan with the times
-            # (then remove the older ones); off = delete the plan(s).
-            real_ids = _stale_plan_ids(plans, None)
-            if not enabled:
-                if not real_ids:
-                    # Nothing to switch off. Keep the chosen times for the next
-                    # "on" without sending a command to the car.
-                    try:
-                        data = coordinator.data or {}
-                        current = data.get(vehicle.car_id)
-                        if current is not None:
-                            _optimistic_schedule(start, end, False)(current)
-                            coordinator.async_set_updated_data(data)
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.debug("Deepal could not keep the chosen times")
-                    return "noop", command_time_zone
-                await _delete_plans_verified(
-                    coordinator, vehicle, real_ids, start, end, raise_errors=True
-                )
-                coordinator.hass.async_create_task(
-                    _refresh_later(coordinator), "deepal_refresh_after_plan"
-                )
-                return "delete-plan", command_time_zone
-            await _add_plan()
-            _purge_other_plans(coordinator, vehicle, plans, None, start, end)
-            coordinator.hass.async_create_task(
-                _refresh_later(coordinator), "deepal_refresh_after_plan"
-            )
-            return "add-plan", command_time_zone
+            return strategy, command_time_zone
 
         active_plan_ids = _active_plan_ids(condition, plans)
         if not active_plan_ids and not enabled and wait_for_plan:
@@ -419,31 +581,3 @@ async def _async_set_charge_schedule(
             translation_key="command_failed",
             translation_placeholders={"error": str(err)},
         ) from err
-
-
-async def async_set_charge_schedule(
-    coordinator: Any,
-    vehicle: Any,
-    start: str,
-    end: str,
-    enabled: bool | None,
-    time_zone: str,
-    *,
-    wait_for_plan: bool = False,
-    toggle_only: bool = False,
-) -> tuple[str, str]:
-    """Set the charge schedule and record the outcome in the plan log."""
-    try:
-        result = await _async_set_charge_schedule(
-            coordinator,
-            vehicle,
-            start,
-            end,
-            enabled,
-            time_zone,
-            wait_for_plan=wait_for_plan,
-            toggle_only=toggle_only,
-        )
-    except Exception as err:  # noqa: BLE001
-        raise
-    return result
