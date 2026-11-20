@@ -3,6 +3,10 @@
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
+# CA gateway codes that mean the account token must be refreshed before the
+# MQTT bootstrap can succeed.
+CA_TOKEN_ERROR_CODES = frozenset({"APIGW_-1_7_01_004", "APIGW_1_7_02_001"})
+
 
 class DeepalError(Exception):
     """Base exception for all Deepal SDK errors."""

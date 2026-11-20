@@ -522,3 +522,98 @@ def test_download_url_falls_back_when_signing_is_unavailable(monkeypatch):
     url = diagnostics_capture.async_download_url(hass, "entry-1")
 
     assert url == "/api/deepal/diagnostics/entry-1"
+
+
+@pytest.mark.asyncio
+async def test_capture_records_the_live_lifecycle_and_redacts_topics(tmp_path):
+    hass = _FakeHass(tmp_path)
+    entry = _FakeEntry()
+    entry.options["enable_diagnostics_capture"] = True
+    capture = DiagnosticsCapture(hass, entry, enabled=True)
+    await capture.async_start()
+
+    events = [
+        {
+            "kind": "mqtt",
+            "event": "session_open",
+            "host": "broker.example",
+            "topics": {
+                "login": "$vdp/device-did/loginout/req",
+                "subscriptions": ["$vdp/device-did/properties/report"],
+            },
+        },
+        {"kind": "mqtt", "event": "session_state", "state": "connecting"},
+        {"kind": "mqtt", "event": "session_state", "state": "connected"},
+        {
+            "kind": "mqtt",
+            "event": "receive",
+            "topic": "$vdp/device-did/properties/report",
+            "payload": {"did": "device-did", "rs": "ciphertext-blob"},
+            "params": {"soc": 71},
+        },
+        {
+            "kind": "mqtt",
+            "event": "timeout",
+            "stage": "live_keepalive",
+            "reason": "PINGRESP not received",
+        },
+        {
+            "kind": "mqtt",
+            "event": "session_state",
+            "state": "backoff",
+            "retry_in": 1.0,
+        },
+        {
+            "kind": "mqtt",
+            "event": "session_state",
+            "state": "connecting",
+            "attempt": 2,
+        },
+        {"kind": "mqtt", "event": "session_state", "state": "connected"},
+        {"kind": "mqtt", "event": "session_conflict", "short_lived": 3},
+        {"kind": "mqtt", "event": "session_close", "logout_sent": True},
+    ]
+    for event in events:
+        capture.record(event)
+    await capture.async_flush()
+    status = await capture.async_status()
+    await capture.async_stop()
+
+    path = Path(status["directory"]) / status["files"][0]["name"]
+    content = path.read_text(encoding="utf-8")
+    lines = [json.loads(line) for line in content.splitlines()]
+    received = [line for line in lines if line.get("type") != "header"]
+
+    assert [line["event"] for line in received] == [
+        "session_open",
+        "session_state",
+        "session_state",
+        "receive",
+        "timeout",
+        "session_state",
+        "session_state",
+        "session_state",
+        "session_conflict",
+        "session_close",
+    ]
+    assert received[4]["stage"] == "live_keepalive"
+    assert received[6]["attempt"] == 2
+    assert received[8]["short_lived"] == 3
+    assert "device-did" not in content
+    assert "ciphertext-blob" not in content
+    assert "$vdp/[redacted]" in content
+    assert received[3]["params"]["soc"] == 71
+
+
+@pytest.mark.asyncio
+async def test_capture_disabled_does_not_write_live_events(tmp_path):
+    hass = _FakeHass(tmp_path)
+    entry = _FakeEntry()
+    entry.options["enable_diagnostics_capture"] = False
+    capture = DiagnosticsCapture(hass, entry, enabled=False)
+    await capture.async_start()
+    capture.record({"kind": "mqtt", "event": "session_state", "state": "connected"})
+    await capture.async_flush()
+    await capture.async_stop()
+
+    assert list((tmp_path / "deepal_diagnostics" / "entry-1").glob("*.jsonl")) == []

@@ -57,9 +57,50 @@ if DeepalIntlClient.is_sda_mqtt_vehicle(vehicle):
 
 This path is **beta**: recovered from the app and verified read-only against a live vehicle, but
 SDA command publishing is not implemented yet. Details and endpoints are in the
-[SDA-MQTT section of the reference](../reference/mqtt-telemetry.md#8-sda-mqtt-telemetry-and-wake-beta).
+[SDA-MQTT section of the reference](../reference/mqtt-telemetry.md#9-sda-mqtt-telemetry-and-wake-beta).
 
-## 4. Wake a sleeping vehicle
+## 4. Keep a live session
+
+The one-shot call above is fine for a single snapshot. For live updates, open a supervised session
+and let it dispatch the car's unsolicited reports:
+
+```python
+def on_condition(vehicle_id: str, condition):
+    print(vehicle_id, condition.battery.soc_percentage, condition.doors.locked)
+
+def on_state(state: str, details: dict):
+    print("live MQTT:", state, details)
+
+session = client.create_mqtt_session(
+    [vehicle],
+    on_condition=on_condition,
+    on_state=on_state,
+)
+await session.start()
+try:
+    ...
+finally:
+    await session.stop()
+```
+
+The callbacks are synchronous and run in the event loop: do not declare them `async def` and keep
+them short (hand work off to a queue if it blocks). Always `stop()` the session before closing the
+client; the `finally` block above is required, not optional.
+
+- The session keeps one connection per broker identity, subscribes to the configured topics, logs
+  in once and reconnects with exponential backoff. If the broker accepts and immediately closes
+  several short connections in a row, the session enters a long `conflict` backoff instead of
+  retrying in a tight loop; `on_state` reports it.
+- It accumulates full snapshots and partial deltas per vehicle before parsing, so a two-field
+  window report does not reset the rest of the condition.
+- `request_condition()`, `wake()` and `wait_for_report()` use the open session. The one-shot methods
+  remain available as the fallback.
+- `session.stats()` exposes the state, connection/reconnect counters, received messages and last
+  error for diagnostics.
+- The session is read-only: it publishes the login, logout, condition requests, wake requests and
+  protocol acknowledgements only.
+
+## 5. Wake a sleeping vehicle
 
 ```python
 await client.wake_vehicle(vehicle.car_id)
@@ -72,7 +113,7 @@ cluster's telemetry `qos` so the broker can queue it for a sleeping vehicle; onl
 `maximum_qos` of 0 downgrades it. The wait is bounded by `mqtt_wake_timeout` (default
 `max(timeout, 20)` seconds).
 
-## 5. Options that matter
+## 6. Options that matter
 
 | Constructor option | Default | When to touch it |
 | --- | --- | --- |
@@ -91,21 +132,26 @@ CONNACK failures are not retried. `getConnConf` has no fallback endpoint: a fail
 its gateway code, and the coordinator refreshes the session and retries. A completed exchange
 publishes a `logout` before `DISCONNECT`; a logout failure never prevents the socket from closing.
 
-## 6. Reading the result
+## 7. Reading the result
 
 - The returned `VehicleCondition` is the same model as the REST path, so downstream code does not
   branch on the protocol.
 - `condition.condition_source` tells you which service produced the snapshot (`sda-mqtt`,
-  `sda-mqtt-signal-list`, `legacy-mqtt` or `rest`).
+  `sda-mqtt-signal-list`, `legacy-mqtt`, `mqtt-push` or `rest`). `mqtt-push` is only used for an
+  unsolicited live-session report; a matching response to a direct condition request on the live
+  session reports `legacy-mqtt` (an unsolicited report that satisfies a wait still reports
+  `mqtt-push`).
 - `condition.mqtt_raw_data` keeps the decrypted parameters, `mqtt_variants` every variant
   attempted and `sda_plan` the derived SDA plan; all three are diagnostics-only.
-- Sleeping modules report sentinel values: out-of-range comfort levels (for example seat level `6`)
-  map to `None` (unknown). Retain the last valid value in your application.
+- Sleeping modules report the sentinel `6` for seat levels; it maps to `0` (off), matching the
+  app. Other out-of-range comfort values map to `None` (unknown); retain the last valid value in
+  your application.
 
-## 7. Limitations
+## 8. Limitations
 
-- One connection/read/close cycle per call: there is no background session or automatic reconnect.
-  Poll at your own cadence.
+- The one-shot API keeps one connection/read/close cycle per call. Use the live session when you
+  need unsolicited reports and automatic reconnect; use the one-shot call for a single snapshot or
+  as a fallback.
 - The broker identity and topics come from the server configuration; the app templates are only a
   fallback.
 - The CA gateway can reject the account; the call fails and the REST condition remains available.

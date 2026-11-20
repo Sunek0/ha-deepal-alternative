@@ -203,15 +203,17 @@
           "control_pin": "PIN de controlo remoto",
           "enable_api_logging": "Registar tráfego da API",
           "wake": "Despertar o veículo quando necessário",
+          "mqtt_live_session": "Manter uma ligação MQTT ativa",
           "enable_location": "Obter a localização do veículo",
           "environment": "Ambiente regional"
         },
         "description": "Ajusta a consulta e o diagnóstico. O PIN de controlo ativa os comandos remotos assinados; as opções de diagnóstico alteram a forma como a API vê o cliente e só devem ser mexidas durante a resolução de problemas.\n\n{diagnostics_status}",
         "data_description": {
-          "scan_interval": "Com que frequência o Home Assistant consulta o veículo quando não há telemetria MQTT, em segundos (30-3600).",
+          "scan_interval": "Com que frequência o Home Assistant consulta o veículo e lê a condição da app, em segundos (30-3600). A sessão MQTT ativa continua a receber relatórios entretanto.",
           "control_pin": "PIN de controlo remoto da My Changan. Necessário para trancar/destrancar, mover os vidros ou abrir a bagageira.",
           "enable_api_logging": "Escreve todos os pedidos e respostas da API no log do Home Assistant, com tokens, chaves, VIN, email, telefone, PIN e número de série ocultos. Ativa apenas durante a resolução de problemas.",
           "wake": "Desperta um veículo MQTT adormecido antes de atualizar ou enviar um comando com PIN. Ativado por predefinição; desative para proteger a bateria de 12 V se atualizar com muita frequência.",
+          "mqtt_live_session": "Mantém uma ligação MQTT aberta para os veículos MQTT para que os relatórios cheguem ao Home Assistant em segundos. Ativado por predefinição; desative para voltar ao polling.",
           "enable_location": "Pede e expõe a posição do veículo. Atualmente os veículos europeus não a enviam, pelo que o rastreador pode ficar desconhecido; a opção destina-se a servidores que a exponham.",
           "environment": "Conjunto de gateways regionais usado para a API internacional. Europa por omissão."
         },

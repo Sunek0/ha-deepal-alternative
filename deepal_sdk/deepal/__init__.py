@@ -12,7 +12,10 @@ from deepal.intl import (
     SIGNING_POLICY_LEGACY,
     DeepalIntlClient,
 )
+from deepal.intl_mqtt import DeepalIntlMqttSession
+from deepal.mqtt import MqttSessionState, MqttSessionStats
 from deepal.exceptions import (
+    CA_TOKEN_ERROR_CODES,
     DeepalError,
     DeepalAuthError,
     DeepalAPIError,
@@ -48,6 +51,9 @@ __version__ = "0.1.0"
 __all__ = [
     "DeepalClient",
     "DeepalIntlClient",
+    "DeepalIntlMqttSession",
+    "MqttSessionState",
+    "MqttSessionStats",
     "APP_SIGN_EXCLUDED_KEYS",
     "FLASH_HONK_BEE",
     "FLASH_HONK_FLASH",
@@ -65,6 +71,7 @@ __all__ = [
     "DeepalCommandNotReady",
     "DeepalMqttAuthRejected",
     "DeepalSessionInvalidated",
+    "CA_TOKEN_ERROR_CODES",
     "AuthToken",
     "CommandResult",
     "CommandResultStatus",

@@ -249,7 +249,7 @@ Task guides (step-by-step walkthroughs):
 | [`docs/guides/authentication.md`](docs/guides/authentication.md) | Login flows, session persistence and restore, refresh and logout |
 | [`docs/guides/telemetry.md`](docs/guides/telemetry.md) | Vehicles, condition, capabilities, digital key and the REST/MQTT routing decision |
 | [`docs/guides/remote-commands.md`](docs/guides/remote-commands.md) | Control PIN, signing prerequisites, command families and result polling |
-| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies and the single-use condition exchange |
+| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies, the one-shot exchange and the live session |
 | [`docs/guides/errors-and-diagnostics.md`](docs/guides/errors-and-diagnostics.md) | Error taxonomy in practice and redacted API logging |
 
 Reference (protocol and models):
@@ -612,9 +612,9 @@ authorizations service is not deployed in every region (the European gateway ans
   when it does not move.
 - Comfort states are tri-state: `climate.power_on` is `None` when the report omits it, which means
   **unknown**, not off.
-- Sleeping modules report sentinel values (for example seat level `6`); out-of-range comfort levels
-  map to `None`, never to a made-up level. Keep the last valid value in your application until a
-  good report arrives.
+- Sleeping modules report the sentinel `6` for seat levels; it maps to `0` (off), matching the
+  app. Other out-of-range comfort levels map to `None`, never to a made-up level. Keep the last
+  valid value in your application until a good report arrives.
 - Mileage and charge fields follow the same rule: a missing or invalid value is `None` (or a model
   default), not an error.
 
@@ -869,9 +869,50 @@ if DeepalIntlClient.is_sda_mqtt_vehicle(vehicle):
 
 This path is **beta**: recovered from the app and verified read-only against a live vehicle, but
 SDA command publishing is not implemented yet. Details and endpoints are in the
-[SDA-MQTT section of the reference](../reference/mqtt-telemetry.md#8-sda-mqtt-telemetry-and-wake-beta).
+[SDA-MQTT section of the reference](../reference/mqtt-telemetry.md#9-sda-mqtt-telemetry-and-wake-beta).
 
-## 4. Wake a sleeping vehicle
+## 4. Keep a live session
+
+The one-shot call above is fine for a single snapshot. For live updates, open a supervised session
+and let it dispatch the car's unsolicited reports:
+
+```python
+def on_condition(vehicle_id: str, condition):
+    print(vehicle_id, condition.battery.soc_percentage, condition.doors.locked)
+
+def on_state(state: str, details: dict):
+    print("live MQTT:", state, details)
+
+session = client.create_mqtt_session(
+    [vehicle],
+    on_condition=on_condition,
+    on_state=on_state,
+)
+await session.start()
+try:
+    ...
+finally:
+    await session.stop()
+```
+
+The callbacks are synchronous and run in the event loop: do not declare them `async def` and keep
+them short (hand work off to a queue if it blocks). Always `stop()` the session before closing the
+client; the `finally` block above is required, not optional.
+
+- The session keeps one connection per broker identity, subscribes to the configured topics, logs
+  in once and reconnects with exponential backoff. If the broker accepts and immediately closes
+  several short connections in a row, the session enters a long `conflict` backoff instead of
+  retrying in a tight loop; `on_state` reports it.
+- It accumulates full snapshots and partial deltas per vehicle before parsing, so a two-field
+  window report does not reset the rest of the condition.
+- `request_condition()`, `wake()` and `wait_for_report()` use the open session. The one-shot methods
+  remain available as the fallback.
+- `session.stats()` exposes the state, connection/reconnect counters, received messages and last
+  error for diagnostics.
+- The session is read-only: it publishes the login, logout, condition requests, wake requests and
+  protocol acknowledgements only.
+
+## 5. Wake a sleeping vehicle
 
 ```python
 await client.wake_vehicle(vehicle.car_id)
@@ -884,7 +925,7 @@ cluster's telemetry `qos` so the broker can queue it for a sleeping vehicle; onl
 `maximum_qos` of 0 downgrades it. The wait is bounded by `mqtt_wake_timeout` (default
 `max(timeout, 20)` seconds).
 
-## 5. Options that matter
+## 6. Options that matter
 
 | Constructor option | Default | When to touch it |
 | --- | --- | --- |
@@ -903,21 +944,26 @@ CONNACK failures are not retried. `getConnConf` has no fallback endpoint: a fail
 its gateway code, and the coordinator refreshes the session and retries. A completed exchange
 publishes a `logout` before `DISCONNECT`; a logout failure never prevents the socket from closing.
 
-## 6. Reading the result
+## 7. Reading the result
 
 - The returned `VehicleCondition` is the same model as the REST path, so downstream code does not
   branch on the protocol.
 - `condition.condition_source` tells you which service produced the snapshot (`sda-mqtt`,
-  `sda-mqtt-signal-list`, `legacy-mqtt` or `rest`).
+  `sda-mqtt-signal-list`, `legacy-mqtt`, `mqtt-push` or `rest`). `mqtt-push` is only used for an
+  unsolicited live-session report; a matching response to a direct condition request on the live
+  session reports `legacy-mqtt` (an unsolicited report that satisfies a wait still reports
+  `mqtt-push`).
 - `condition.mqtt_raw_data` keeps the decrypted parameters, `mqtt_variants` every variant
   attempted and `sda_plan` the derived SDA plan; all three are diagnostics-only.
-- Sleeping modules report sentinel values: out-of-range comfort levels (for example seat level `6`)
-  map to `None` (unknown). Retain the last valid value in your application.
+- Sleeping modules report the sentinel `6` for seat levels; it maps to `0` (off), matching the
+  app. Other out-of-range comfort values map to `None` (unknown); retain the last valid value in
+  your application.
 
-## 7. Limitations
+## 8. Limitations
 
-- One connection/read/close cycle per call: there is no background session or automatic reconnect.
-  Poll at your own cadence.
+- The one-shot API keeps one connection/read/close cycle per call. Use the live session when you
+  need unsolicited reports and automatic reconnect; use the one-shot call for a single snapshot or
+  as a fallback.
 - The broker identity and topics come from the server configuration; the app templates are only a
   fallback.
 - The CA gateway can reject the account; the call fails and the REST condition remains available.
@@ -1688,7 +1734,8 @@ Vehicles and telemetry:
 | `is_sda_mqtt_vehicle(vehicle)` | Static: whether the vehicle uses the SDA `SDA-MQTT` protocol |
 | `get_mqtt_config(vehicle_id)` | CA MQTT connection configuration |
 | `get_mqtt_token(force=False)` | MQTT auth token, reused within `mqtt_token_ttl` |
-| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service); an authentication CONNACK rejection is retried once with fresh bootstrap material |
+| `create_mqtt_session(vehicles, **options)` | Create a supervised live MQTT session for `MQTT` vehicles; see [Live session](mqtt-telemetry.md#8-live-session) |
+| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service); the live session is used when connected, otherwise one-shot with a single authentication retry |
 | `get_sda_broker_config(vehicle_id)` | SDA broker configuration (SDA-MQTT, beta) |
 | `get_sda_auth_token()` | SDA `vot-auth` broker token (SDA-MQTT, beta) |
 | `open_sda_session(vehicle_id, *, device_ids=None, topics=None, seconds=10.0, login=False)` | Read-only SDA broker session (SDA-MQTT, beta) |
@@ -1911,11 +1958,11 @@ rejects the request. Do not rely on them without testing against the target acco
 
 Vehicles whose API reports `protocolType: MQTT` (for example the S05) do not refresh their state
 over REST: the REST condition returns a frozen snapshot. The app keeps a foreground MQTT session
-with the CA gateway, and the SDK replicates the same one-shot exchange to fetch a live condition.
+with the CA gateway; the SDK replicates the one-shot exchange and can keep a supervised live session.
 
 `SDA-MQTT` vehicles (for example the E07) share the broker but read the condition through the
 SDA/VOT services instead; that path is documented in
-[SDA-MQTT telemetry and wake](#8-sda-mqtt-telemetry-and-wake-beta) and is still in **beta**.
+[SDA-MQTT telemetry and wake](#9-sda-mqtt-telemetry-and-wake-beta) and is still in **beta**.
 
 ## Contents
 
@@ -1926,8 +1973,9 @@ SDA/VOT services instead; that path is documented in
 5. [Parameter mapping](#5-parameter-mapping)
 6. [Unknown and sleep semantics](#6-unknown-and-sleep-semantics)
 7. [Methods](#7-methods)
-8. [SDA-MQTT telemetry and wake (beta)](#8-sda-mqtt-telemetry-and-wake-beta)
-9. [Limitations](#9-limitations)
+8. [Live session](#8-live-session)
+9. [SDA-MQTT telemetry and wake (beta)](#9-sda-mqtt-telemetry-and-wake-beta)
+10. [Limitations](#10-limitations)
 
 ## 1. Requirements
 
@@ -2095,18 +2143,21 @@ MQTT payload nor the REST condition carries `maxSocPercent` (2026-10-26 diagnost
 Assistant integration therefore does not create the charge-limit sensor or number for that model
 until a readable source is verified.
 
-`steeringWheelHeating` is intentionally **not mapped**: it reads `1` even with the wheel heater
-off. The real steering-wheel heater switch and level come from the REST condition
-(`vehicleStatus.steeringWheelHeater` / `steeringWheelHeaterLevel`).
+`steeringWheelHeating` uses **`2` = on and `1` = off** (verified live on 2026-11-20 with the app
+and the physical wheel). It is mapped to `vehicleStatus.steeringWheelHeater` and takes priority
+when the MQTT payload carries it; the REST condition (`steeringWheelHeater` /
+`steeringWheelHeaterLevel`) is only the fallback for a snapshot that omits the field. This matters
+for app-originated changes: the REST field can stay `0` while the wheel is physically on.
 
 Every S05 parameter not listed above is currently unmapped. Debug logging of unmapped keys is
 available through `logging.getLogger("deepal_sdk")` at `DEBUG` level.
 
 ## 6. Unknown and sleep semantics
 
-Seat heating and ventilation levels are only trusted in the `0-3` range. A sleeping module reports
-the sentinel `6`, and out-of-range values are mapped to `None` (unknown) instead of a level;
-callers that keep state should retain the last valid level until a good report arrives. The same
+Seat heating and ventilation levels are only trusted in the `0-3` range. The sleeping-module
+sentinel `6` maps to `0` (off), matching the app; other out-of-range values are mapped to `None`
+(unknown), and callers that keep state should retain the last valid level until a good report
+arrives. The same
 applies to `climate.defrost_on`, `steering_wheel_heater_on` and `steering_wheel_heater_level`,
 which are exposed as unknown when the report omits them.
 
@@ -2119,14 +2170,77 @@ which are exposed as unknown when the report omits them.
 | `get_mqtt_config(vehicle_id)` | CA connection configuration (no fallback) |
 | `get_mqtt_token(force=False)` | MQTT auth token from the account user id: reused within `mqtt_token_ttl` (one minute by default), `force` bypasses the cache after a rejection |
 | `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Full single-use exchange returning a `VehicleCondition`; `sda=True` selects the SDA `Get_CarCondition` service |
-| `wake_vehicle(vehicle_id)` | Wake a sleeping MQTT-backed vehicle (see [SDA-MQTT telemetry and wake](#8-sda-mqtt-telemetry-and-wake-beta)) |
+| `wake_vehicle(vehicle_id)` | Wake a sleeping MQTT-backed vehicle (see [SDA-MQTT telemetry and wake](#9-sda-mqtt-telemetry-and-wake-beta)) |
 
 Errors: a refused CONNACK, missing topics, a missing `authToken`, and timeouts/EOF/TLS failures
 surface as `DeepalAPIError`; an authentication rejection (`0x86`, `0x87` or `0x8C`) surfaces as
 `DeepalMqttAuthRejected` after one retry. Transport errors on the CA requests use the standard
 taxonomy (`DeepalConnectionError`, `DeepalAuthError`, `DeepalRateLimitError`).
 
-## 8. SDA-MQTT telemetry and wake (beta)
+## 8. Live session
+
+`DeepalIntlClient.create_mqtt_session(vehicles, **options)` creates a supervised session for the
+`protocolType: MQTT` vehicles of one broker identity (typically one S05). `SDA-MQTT` vehicles are
+ignored. The caller owns its lifecycle:
+
+```python
+session = client.create_mqtt_session(
+    [vehicle],
+    on_condition=on_condition,
+    on_event=on_event,
+    on_state=on_state,
+)
+await session.start()
+try:
+    ...
+finally:
+    await session.stop()
+```
+
+Methods and properties:
+
+| Member | Purpose |
+| --- | --- |
+| `start()` / `stop()` | Start the supervisor or close it with logout + DISCONNECT. Idempotent. |
+| `is_connected` / `is_active` / `is_connecting` / `state` | Connection state (`connecting`, `connected`, `backoff`, `conflict`, `stopped`). |
+| `wait_connected(timeout)` | Wait for an in-flight connection attempt; returns whether it connected. |
+| `supports(vehicle_id)` | Whether the session covers a vehicle. |
+| `request_condition(vehicle_id, timeout=..., require_timestamp=False)` | Condition request on the open session. |
+| `wake(vehicle_id, timeout=...)` | Wake request on the open session. |
+| `wait_for_report(vehicle_id, previous_timestamp=..., interval=..., timeout=...)` | Wait for a newer report, using pushes and condition probes. |
+| `stats()` | `MqttSessionStats` with state, connects, reconnects, messages, reports, events, drops and last error. |
+
+The session accumulates each vehicle's raw parameters before parsing. The car publishes full
+snapshots (about 68-113 parameters) and small deltas (often 2-3 fields); a delta updates only its
+keys, so the rest of the condition is preserved. Reports older than the last accepted report are
+dropped; a same-second fragment is still merged because the car splits one snapshot into several
+messages, while an exact duplicate does not emit another condition. Unsolicited reports use
+`condition_source = "mqtt-push"`; a response to the caller's own condition request resolves that
+call with `condition_source = "legacy-mqtt"` and is not re-emitted as a push.
+
+The connection uses the identity resolved from `getConnConf` (explicit `clientId`/`userName` or the
+login DID), clean start and the cluster/CONNACK limits. A keepalive task sends `PINGREQ` and closes
+the socket when `PINGRESP` is missing. Reconnects use exponential backoff with jitter; a rejected
+authentication triggers one session refresh and retry; repeated short-lived connections enter a
+conflict backoff instead of a tight loop. The transport lock is held only while connecting; once
+connected, a one-shot call acquires the lock, sees the live session and delegates to it. While a
+connection attempt is in flight the one-shot waits briefly, then either delegates or proceeds when
+the session is in backoff.
+
+Limitations:
+
+- The Home Assistant integration covers the vehicles that resolve the same broker endpoint and
+  client identity. A second identity group stays on the one-shot/REST path; an SDK caller that
+  needs both live can use a separate client per group.
+- On an account with both `MQTT` and `SDA-MQTT` vehicles, the SDA condition path tries REST first
+  and may still open a CA-broker exchange as its fallback. Verify the broker identity before relying
+  on the live session and that fallback at the same time.
+- The charge plan (`chargePlanList`) is REST-only; the live session does not carry it.
+- Clean start is used, so there is no broker offline queue or message replay.
+- The session does not publish control commands; only the login, logout, condition request, wake
+  request and protocol acknowledgements.
+
+## 9. SDA-MQTT telemetry and wake (beta)
 
 > The SDA-MQTT path is recovered from the 1.12.0 app and was verified read-only against a live E07
 > (bootstrap, connect, subscribe and login exchange); publishing SDA control commands is not
@@ -2168,10 +2282,11 @@ publishes fresh data within a few seconds and the caller reads the condition aga
 caps QoS at 0, the wake is published at QoS 0 and the SDK logs that it cannot be queued offline. The
 wait is bounded by `mqtt_wake_timeout` (default `max(timeout, 20)` seconds).
 
-## 9. Limitations
+## 10. Limitations
 
-- One connection/read/close cycle per call; there is no background session or reconnect. Callers
-  poll at their own cadence.
+- The one-shot API uses one connection/read/close cycle per call. The live session keeps a
+  supervised connection with automatic reconnect; callers that do not need unsolicited reports can
+  keep using the one-shot call.
 - The REST condition of a legacy `MQTT` vehicle is a frozen snapshot; only the MQTT exchange
   reflects live state. The SDA REST condition of an `SDA-MQTT` vehicle is also a snapshot.
 - The CA gateway can reject the account (TSP/VCS headers); the call fails and the REST condition
@@ -2194,7 +2309,8 @@ parsed into these models and never returned directly (except where a method docu
 result). Unknown fields in a response are ignored, and absent fields keep their documented default,
 so a partial payload is always a valid model.
 
-All models listed here are importable from the `deepal` package and from `deepal.models`.
+All models listed here are importable from the `deepal` package; the telemetry and command models
+are also importable from `deepal.models`, while the MQTT session stats live in `deepal.mqtt`.
 
 ## Contents
 
@@ -2204,6 +2320,7 @@ All models listed here are importable from the `deepal` package and from `deepal
 4. [Commands](#4-commands)
 5. [Digital key](#5-digital-key)
 6. [Module constants](#6-module-constants)
+7. [MQTT session](#7-mqtt-session)
 
 ## 1. Authentication
 
@@ -2303,7 +2420,7 @@ Full telemetry snapshot shared by the REST and MQTT paths.
 | `last_updated_timestamp` | `int?` | `None` | Report time, Unix seconds |
 | `raw_data` | `dict?` | `None` | Normalized payload for diagnostics |
 | `mqtt_raw_data` | `dict?` | `None` | Original decrypted MQTT parameters |
-| `condition_source` | `str?` | `None` | Service that produced the snapshot: `sda-mqtt`, `sda-mqtt-signal-list`, `legacy-mqtt` or `rest` |
+| `condition_source` | `str?` | `None` | Service that produced the snapshot: `sda-mqtt`, `sda-mqtt-signal-list`, `legacy-mqtt`, `mqtt-push` or `rest` |
 | `mqtt_variants` | `dict?` | `None` | Raw parameters of every MQTT condition variant attempted in the last exchange (diagnostics) |
 | `sda_plan` | `dict?` | `None` | SDA condition plan derived from the function tree: device DID, service/command codes and probe codes |
 
@@ -2354,7 +2471,7 @@ A BEV reports no fuel block and every field stays `None`.
 ### `SeatStatus` and `SeatsCondition`
 
 `SeatStatus` holds `heating_level` and `ventilation_level`, both `int?` in the `0-3` range; `None`
-means unknown (missing or out-of-range, including the sleep sentinel `6`). `SeatsCondition` has the
+means unknown (missing or another out-of-range value). The sleep sentinel `6` maps to `0` (off). `SeatsCondition` has the
 four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
 
 ### `ClimateCondition`
@@ -2435,5 +2552,30 @@ because the service contract is inferred (it is not deployed in every region).
 | `SEAT_VENT_FUNCTION_CODES` | position to function code | Seat ventilation capabilities |
 | `DIGITAL_KEY_FUNCTION_CODE` | `"DigitalKey"` | Digital key authorization code |
 | `PHONE_SUPPORT_CA_KEY` / `PHONE_SUPPORT_ICCE_KEY` / `PHONE_SUPPORT_HONOR_KEY` | `0` / `1` / `2` | Digital key `flag` values |
+
+
+## 7. MQTT session
+
+### `MqttSessionStats`
+
+Snapshot returned by `DeepalIntlMqttSession.stats()`; importable from `deepal` (the MQTT helper
+module) and exposed for diagnostics.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `state` | `str` | `"stopped"` | `stopped`, `connecting`, `connected`, `backoff` or `conflict` |
+| `connects` | `int` | `0` | Successful connections in this session object |
+| `reconnects` | `int` | `0` | Connections after the first one |
+| `messages` | `int` | `0` | Received MQTT PUBLISH packets |
+| `reports` | `int` | `0` | Messages that carried condition parameters |
+| `events` | `int` | `0` | Event/strategy messages |
+| `dropped` | `int` | `0` | Messages ignored as stale, duplicate or undecodable |
+| `last_error` | `str?` | `None` | Last transport/auth/keepalive error |
+| `last_message_at` | `float?` | `None` | Unix timestamp of the last received message |
+| `connected_since` | `float?` | `None` | Unix timestamp of the current connection |
+| `subscriptions` | `tuple[str, ...]` | `()` | Subscribed topics (redacted by diagnostics) |
+
+`as_dict()` returns a diagnostics-safe dictionary with the same fields and `subscriptions` as a
+list.
 
 ---

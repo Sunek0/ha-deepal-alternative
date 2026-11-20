@@ -5,7 +5,8 @@ parsed into these models and never returned directly (except where a method docu
 result). Unknown fields in a response are ignored, and absent fields keep their documented default,
 so a partial payload is always a valid model.
 
-All models listed here are importable from the `deepal` package and from `deepal.models`.
+All models listed here are importable from the `deepal` package; the telemetry and command models
+are also importable from `deepal.models`, while the MQTT session stats live in `deepal.mqtt`.
 
 ## Contents
 
@@ -15,6 +16,7 @@ All models listed here are importable from the `deepal` package and from `deepal
 4. [Commands](#4-commands)
 5. [Digital key](#5-digital-key)
 6. [Module constants](#6-module-constants)
+7. [MQTT session](#7-mqtt-session)
 
 ## 1. Authentication
 
@@ -114,7 +116,7 @@ Full telemetry snapshot shared by the REST and MQTT paths.
 | `last_updated_timestamp` | `int?` | `None` | Report time, Unix seconds |
 | `raw_data` | `dict?` | `None` | Normalized payload for diagnostics |
 | `mqtt_raw_data` | `dict?` | `None` | Original decrypted MQTT parameters |
-| `condition_source` | `str?` | `None` | Service that produced the snapshot: `sda-mqtt`, `sda-mqtt-signal-list`, `legacy-mqtt` or `rest` |
+| `condition_source` | `str?` | `None` | Service that produced the snapshot: `sda-mqtt`, `sda-mqtt-signal-list`, `legacy-mqtt`, `mqtt-push` or `rest` |
 | `mqtt_variants` | `dict?` | `None` | Raw parameters of every MQTT condition variant attempted in the last exchange (diagnostics) |
 | `sda_plan` | `dict?` | `None` | SDA condition plan derived from the function tree: device DID, service/command codes and probe codes |
 
@@ -165,7 +167,7 @@ A BEV reports no fuel block and every field stays `None`.
 ### `SeatStatus` and `SeatsCondition`
 
 `SeatStatus` holds `heating_level` and `ventilation_level`, both `int?` in the `0-3` range; `None`
-means unknown (missing or out-of-range, including the sleep sentinel `6`). `SeatsCondition` has the
+means unknown (missing or another out-of-range value). The sleep sentinel `6` maps to `0` (off). `SeatsCondition` has the
 four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
 
 ### `ClimateCondition`
@@ -246,3 +248,28 @@ because the service contract is inferred (it is not deployed in every region).
 | `SEAT_VENT_FUNCTION_CODES` | position to function code | Seat ventilation capabilities |
 | `DIGITAL_KEY_FUNCTION_CODE` | `"DigitalKey"` | Digital key authorization code |
 | `PHONE_SUPPORT_CA_KEY` / `PHONE_SUPPORT_ICCE_KEY` / `PHONE_SUPPORT_HONOR_KEY` | `0` / `1` / `2` | Digital key `flag` values |
+
+
+## 7. MQTT session
+
+### `MqttSessionStats`
+
+Snapshot returned by `DeepalIntlMqttSession.stats()`; importable from `deepal` (the MQTT helper
+module) and exposed for diagnostics.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `state` | `str` | `"stopped"` | `stopped`, `connecting`, `connected`, `backoff` or `conflict` |
+| `connects` | `int` | `0` | Successful connections in this session object |
+| `reconnects` | `int` | `0` | Connections after the first one |
+| `messages` | `int` | `0` | Received MQTT PUBLISH packets |
+| `reports` | `int` | `0` | Messages that carried condition parameters |
+| `events` | `int` | `0` | Event/strategy messages |
+| `dropped` | `int` | `0` | Messages ignored as stale, duplicate or undecodable |
+| `last_error` | `str?` | `None` | Last transport/auth/keepalive error |
+| `last_message_at` | `float?` | `None` | Unix timestamp of the last received message |
+| `connected_since` | `float?` | `None` | Unix timestamp of the current connection |
+| `subscriptions` | `tuple[str, ...]` | `()` | Subscribed topics (redacted by diagnostics) |
+
+`as_dict()` returns a diagnostics-safe dictionary with the same fields and `subscriptions` as a
+list.

@@ -13,7 +13,7 @@ Start with the README for installation and a runnable quickstart. Each guide is 
 - [Authentication](docs/guides/authentication.md): login flows, session persistence and restore, refresh and logout
 - [Telemetry](docs/guides/telemetry.md): vehicles, condition, capabilities, digital key and REST/MQTT routing
 - [Remote commands](docs/guides/remote-commands.md): control PIN and token, signing, every command family and result polling
-- [MQTT telemetry](docs/guides/mqtt-telemetry.md): when MQTT applies and the single-use condition exchange
+- [MQTT telemetry](docs/guides/mqtt-telemetry.md): when MQTT applies, the one-shot exchange and the live session
 - [Errors and diagnostics](docs/guides/errors-and-diagnostics.md): exception taxonomy in practice and redacted API logging
 
 ## Reference

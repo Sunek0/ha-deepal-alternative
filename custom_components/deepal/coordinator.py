@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .charging import ChargingSessionManager, charging_flag
 from .deepal import (
+    CA_TOKEN_ERROR_CODES,
     CommandResult,
     CommandResultStatus,
     DeepalAPIError,
@@ -40,6 +41,7 @@ from .snapshot import (
 )
 from .vehicle_model import uses_s05_charge_enum
 from .deepal.mqtt import (
+    REST_SUBSYSTEM_WARNING_KEYS,
     S05_CHARGE_GUN_KEYS,
     S05_DC_GUN_KEYS,
     is_s05_model,
@@ -53,7 +55,9 @@ from .const import (
     CONF_REFRESH_TOKEN,
     CONF_CAC_TOKEN,
     CONF_USER_ID,
+    CONF_MQTT_LIVE_SESSION,
     DEFAULT_ENABLE_LOCATION,
+    DEFAULT_MQTT_LIVE_SESSION,
     WAKE_BEFORE_COMMAND_TIMEOUT,
     WAKE_COOLDOWN,
     WAKE_REPORT_TIMEOUT,
@@ -77,13 +81,22 @@ _CHARGING_READ_INTERVAL = 600.0
 # longer depends on the JWT expiry. This coarser per-entry cap keeps that
 # trigger at one attempt per hour, as ha-intl-platform requires.
 _CA_REFRESH_MIN_INTERVAL = 3600.0
-_CA_TOKEN_ERROR_CODES = {"APIGW_-1_7_01_004", "APIGW_1_7_02_001"}
 # Home Assistant's statistics code treats a total_increasing drop below this
 # fraction of the previous value as a meter reset; smaller drops are precision
 # dips that trigger a warning and subtract the delta from the long-term sum.
 _ODOMETER_RESET_RATIO = 0.9
 # The last published condition is written at most this often (seconds).
 _SNAPSHOT_SAVE_DELAY = 30.0
+# Pushed conditions are coalesced per vehicle to absorb the car's delta bursts.
+# REST-only fields are refreshed by the periodic scan, not by a per-push overlay.
+_PUSH_COALESCE_SECONDS = 0.5
+# A non-zero S05 subsystem register is only a fault once the car has been
+# continuously ready beyond the dashboard bulb check. A waking car also reports
+# power status 2 with the airbag register at 1 for a few seconds (owner report
+# 2026-11-20), so the first ready report after sleep must not raise a fault.
+_S05_WARNING_SETTLE_SECONDS = 60.0
+#: The S05 lights sourced from the REST subsystem registers.
+_S05_SUBSYSTEM_WARNING_FIELDS = frozenset(REST_SUBSYSTEM_WARNING_KEYS)
 
 
 class WakeResult(StrEnum):
@@ -445,6 +458,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         client: DeepalClient | DeepalIntlClient,
         update_interval: timedelta = timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         wake_enabled: bool = True,
+        live_session_enabled: bool = True,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -457,6 +471,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.entry = entry
         self.client = client
         self.wake_enabled = wake_enabled
+        self.live_session_enabled = live_session_enabled
+        self._mqtt_session: Any = None
+        self._mqtt_session_state: dict[str, Any] | None = None
+        self._live_session_stopping = False
+        # Incremented per vehicle on every pushed/overlaid publication so the
+        # periodic poll can detect a push that landed while it was in flight,
+        # even when both conditions share the car's one-second report timestamp.
+        self._vehicle_generation: dict[str, int] = {}
+        self._push_pending: dict[str, VehicleCondition] = {}
+        self._push_tasks: dict[str, asyncio.Task[None]] = {}
         self.vehicles: list[Vehicle] = []
         self._last_vehicle_refresh: float = 0.0
         self._last_ca_refresh_at: float | None = None
@@ -466,6 +490,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._optimistic_pending: dict[str, set[str]] = {}
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
         self._last_steering_wheel: dict[str, tuple[bool, int | None]] = {}
+        # Per-vehicle ready window and last app-condition report timestamp. The
+        # S05 subsystem lights are only faults after a settled ready state and a
+        # fresh REST block; both are memory-only, so a restart starts unconfirmed.
+        self._ready_since: dict[str, float] = {}
+        self._last_app_report_ts: dict[str, int | None] = {}
         self._last_wake_at: dict[str, float] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
@@ -476,7 +505,16 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self.charging: ChargingSessionManager | None = None
         self._charging_read_task: asyncio.Task[None] | None = None
         self._charging_read_stop: asyncio.Event | None = None
-        self._charging_read_interval = _CHARGING_READ_INTERVAL
+        scan_seconds = (
+            update_interval.total_seconds()
+            if update_interval is not None
+            else float(DEFAULT_SCAN_INTERVAL)
+        )
+        # While charging, read the charging vehicles every two main polls and
+        # force a wake, with a 10-minute floor for short scan intervals.
+        self._charging_read_interval = max(
+            _CHARGING_READ_INTERVAL, 2.0 * scan_seconds
+        )
         # Last conditions stored before the restart; only the previous state of
         # the merge rules until the first poll of this run has been published.
         self._store: Store[dict[str, Any]] = Store(
@@ -492,6 +530,148 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     def wake_result(self, vehicle_id: str) -> dict[str, Any] | None:
         """Return the last wake outcome for diagnostics."""
         return self._last_wake_result.get(vehicle_id)
+
+    def mqtt_session_stats(self) -> dict[str, Any] | None:
+        """Return the live MQTT session state for diagnostics."""
+        session = self._mqtt_session
+        if session is None:
+            return None
+        stats = session.stats().as_dict()
+        stats["enabled"] = self.live_session_enabled
+        stats["details"] = self._mqtt_session_state
+        return stats
+
+    async def async_start_mqtt_session(self) -> None:
+        """Start the live MQTT session for the international MQTT vehicles."""
+        if not self.live_session_enabled or self._mqtt_session is not None:
+            return
+        if not isinstance(self.client, DeepalIntlClient) or not self.client.user_id:
+            return
+        self._live_session_stopping = False
+        vehicles = [
+            vehicle
+            for vehicle in self.vehicles
+            if self.client.is_mqtt_vehicle(vehicle)
+            and not self.client.is_sda_mqtt_vehicle(vehicle)
+        ]
+        if not vehicles:
+            return
+        try:
+            session = self.client.create_mqtt_session(
+                vehicles,
+                on_condition=self._on_live_condition,
+                on_state=self._on_live_state,
+                refresh_session=self._async_refresh_live_session,
+            )
+            self._mqtt_session = session
+            await session.start()
+        except Exception as err:  # noqa: BLE001 - a failed session must not break setup
+            self._mqtt_session = None
+            _LOGGER.warning(
+                "Deepal live MQTT session could not start: %s", err
+            )
+
+    async def async_stop_mqtt_session(self) -> None:
+        """Stop the live session and wait for its pending publication tasks."""
+        self._live_session_stopping = True
+        tasks = [
+            task
+            for task in list(self._push_tasks.values())
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        self._push_tasks.clear()
+        self._push_pending.clear()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        session = self._mqtt_session
+        self._mqtt_session = None
+        if getattr(self.client, "mqtt_session", None) is session:
+            self.client.mqtt_session = None
+        if session is not None:
+            try:
+                await session.stop()
+            except Exception as err:  # noqa: BLE001 - unload must continue
+                _LOGGER.debug("Deepal live MQTT session stop failed: %s", err)
+
+    def _on_live_condition(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Queue a pushed condition for a short per-vehicle coalescing window."""
+        if self._live_session_stopping:
+            return
+        self._push_pending[vehicle_id] = condition
+        task = self._push_tasks.get(vehicle_id)
+        if task is not None and not task.done():
+            return
+        self._push_tasks[vehicle_id] = self.entry.async_create_background_task(
+            self.hass,
+            self._async_publish_push_later(vehicle_id),
+            f"{DOMAIN} live push {vehicle_id}",
+        )
+
+    async def _async_publish_push_later(self, vehicle_id: str) -> None:
+        """Wait for the coalescing window and publish the latest push."""
+        try:
+            await asyncio.sleep(_PUSH_COALESCE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        self._push_tasks.pop(vehicle_id, None)
+        condition = self._push_pending.pop(vehicle_id, None)
+        if condition is None:
+            return
+        await self._async_publish_push_condition(vehicle_id, condition)
+
+    async def _async_publish_push_condition(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Merge and publish one pushed condition without waiting for REST."""
+        if self._live_session_stopping:
+            return
+        current = (self.data or {}).get(vehicle_id)
+        if self._is_older_condition(current, condition):
+            return
+        try:
+            condition = self._merge_condition(vehicle_id, condition)
+            # A push does not carry the REST registers. Force the three S05
+            # subsystem lights through the same gate so the glitchy MQTT bits
+            # never reach the published condition.
+            self._guard_subsystem_warnings(vehicle_id, condition)
+            condition = self._apply_optimistic_hold(vehicle_id, condition)
+            self._update_ready_window(vehicle_id, condition)
+            data = dict(self.data or {})
+            data[vehicle_id] = condition
+            self._track_charging(data)
+            self._sync_charging_read(data)
+            self._vehicle_generation[vehicle_id] = (
+                self._vehicle_generation.get(vehicle_id, 0) + 1
+            )
+            self.async_set_updated_data(data)
+            store = getattr(self, "_store", None)
+            if store is not None:
+                store.async_delay_save(self._snapshot_payload, _SNAPSHOT_SAVE_DELAY)
+        except Exception:  # noqa: BLE001 - a bad push must not kill the session
+            _LOGGER.exception("Deepal live MQTT push publication failed")
+
+    def _on_live_state(self, state: str, details: dict[str, Any]) -> None:
+        """Keep the last session state for diagnostics and warn on conflicts."""
+        self._mqtt_session_state = {
+            "state": state,
+            "details": details,
+            "at": time.time(),
+        }
+        if state == "conflict":
+            _LOGGER.warning(
+                "Deepal live MQTT session is in conflict; backing off: %s",
+                details,
+            )
+
+    async def _async_refresh_live_session(self, reason: str) -> bool:
+        """Refresh the account session for a rejected live-session bootstrap."""
+        return await self._async_refresh_session_for_mqtt(
+            DeepalAPIError(reason)
+        )
 
     async def _async_maybe_refresh_vehicles(self) -> None:
         """Refresh the account vehicle list and reload when it changed.
@@ -612,28 +792,166 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition.climate.steering_wheel_heater_level = remembered[1]
 
     def _apply_rest_subsystem_warnings(
-        self, vehicle: Vehicle, condition: VehicleCondition, status: Any
+        self,
+        vehicle: Vehicle,
+        condition: VehicleCondition,
+        status: Any,
+        *,
+        report_ts: int | None = None,
     ) -> None:
         """Set the S05 airbag, ABS and power steering lights from REST registers.
 
         The REST overlay runs after the condition merge, so it is the place
-        that can leave these three lights unknown on a sleeping car. The
-        last-known retention is applied again here, after the registers are
-        resolved, so a value confirmed while ready survives the sleep cycle
-        instead of being replaced by the overlay's unknown.
+        that can leave these three lights unknown on a sleeping car. A register
+        is only trusted as a fault once the ready window was already established
+        and the app report is fresh: the wake/self-check also reports ready with
+        the airbag register at 1 for a few seconds (owner report 2026-11-20).
+        Healthy values keep the last-known behavior, but an unconfirmed fault is
+        never revived from the previous condition or the stored snapshot.
         """
-        if not (is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)):
+        if not self._is_s05(vehicle):
             return
-        for field, value in rest_subsystem_warnings(
-            status, condition.power_status
-        ).items():
-            setattr(condition.warnings, field, value)
+        established = self._ready_is_established(vehicle.car_id, condition)
+        fresh = True
+        if report_ts is not None:
+            fresh = self._consume_app_report(vehicle.car_id, report_ts)
+        previous = self._previous_condition(vehicle.car_id)
+        self._resolve_subsystem_warnings(
+            condition,
+            previous,
+            rest_subsystem_warnings(status, condition.power_status),
+            established=established,
+            fresh=fresh,
+        )
         self._retain_unknown_warnings(
-            condition, self._previous_condition(vehicle.car_id)
+            condition,
+            previous,
+            skip=_S05_SUBSYSTEM_WARNING_FIELDS,
         )
 
+    @staticmethod
+    def _is_s05(vehicle: Vehicle) -> bool:
+        """Return whether the vehicle uses the S05 REST subsystem registers."""
+        return is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)
+
+    @staticmethod
+    def _resolve_subsystem_warnings(
+        condition: VehicleCondition,
+        previous: VehicleCondition | None,
+        registers: dict[str, bool | None],
+        *,
+        established: bool,
+        fresh: bool,
+    ) -> None:
+        """Publish the S05 subsystem lights under the ready/freshness rule.
+
+        A non-zero register is a fault only while the ready window is settled
+        and the app report advanced. Healthy values keep the last-known
+        behavior; an unconfirmed fault is never revived from the previous
+        condition or the stored snapshot.
+        """
+        for field in _S05_SUBSYSTEM_WARNING_FIELDS:
+            value = registers.get(field)
+            if value is True and not (established and fresh):
+                value = None
+            if value is None:
+                retained = (
+                    getattr(previous.warnings, field)
+                    if previous is not None
+                    else None
+                )
+                if retained is True:
+                    value = True if established else None
+                elif retained is False:
+                    value = False
+            setattr(condition.warnings, field, value)
+
+    def _guard_subsystem_warnings(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Keep the glitchy S05 bits out of non-REST publications.
+
+        A live push or a command confirmation does not carry the REST
+        registers, so it must never publish the MQTT airbag/ABS/EPS bits. A
+        known non-S05 vehicle keeps its normal behavior; when the vehicle list
+        is not loaded yet, the three diagnostic fields are resolved from the
+        previous condition instead of exposing a possible false airbag light.
+        """
+        vehicle = self._vehicle(vehicle_id)
+        if vehicle is not None and not self._is_s05(vehicle):
+            return
+        previous = self._previous_condition(vehicle_id)
+        self._resolve_subsystem_warnings(
+            condition,
+            previous,
+            rest_subsystem_warnings(None, condition.power_status),
+            established=self._ready_is_established(vehicle_id, condition),
+            fresh=True,
+        )
+
+    def _ready_is_established(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> bool:
+        """Return whether ready was already established before this report.
+
+        A report without a power state carries no new ready/off information, so
+        it keeps the current window instead of dropping a confirmed fault.
+        """
+        if condition.power_status not in (None, 2):
+            return False
+        since = self._ready_since.get(vehicle_id)
+        return (
+            since is not None
+            and time.monotonic() - since >= _S05_WARNING_SETTLE_SECONDS
+        )
+
+    def _update_ready_window(
+        self, vehicle_id: str, condition: VehicleCondition
+    ) -> None:
+        """Open or close the per-vehicle ready window from a published state."""
+        vehicle = self._vehicle(vehicle_id)
+        if vehicle is not None and not self._is_s05(vehicle):
+            # The window only feeds the S05 subsystem warning rule.
+            return
+        if condition.power_status is None:
+            # A partial push without the power state says nothing about ready.
+            return
+        if condition.power_status != 2:
+            self._ready_since.pop(vehicle_id, None)
+            # A new ready window must not inherit a stale app timestamp; a
+            # backward clock would otherwise suppress every later report.
+            self._last_app_report_ts.pop(vehicle_id, None)
+            return
+        if vehicle_id not in self._ready_since:
+            self._ready_since[vehicle_id] = time.monotonic()
+
+    def _consume_app_report(
+        self, vehicle_id: str, report_ts: int | None
+    ) -> bool:
+        """Record the app report timestamp and return whether it advanced.
+
+        The server can keep the last ``vehicleStatus`` block after the car
+        sleeps. Reusing the same report timestamp means the block was not read
+        again, so it must not raise a new fault. A missing timestamp falls back
+        to the ready-window rule. Recording happens here so a later call in the
+        same cycle sees the report as already consumed. The comparison is
+        strict: two reports with the same second-resolution timestamp count as
+        one read, which only matters inside a burst (the scan is minutes apart).
+        """
+        if report_ts is None:
+            return True
+        previous = self._last_app_report_ts.get(vehicle_id)
+        if previous is not None and report_ts <= previous:
+            return False
+        self._last_app_report_ts[vehicle_id] = report_ts
+        return True
+
     async def _overlay_app_comfort(
-        self, vehicle: Vehicle, condition: VehicleCondition
+        self,
+        vehicle: Vehicle,
+        condition: VehicleCondition,
+        *,
+        app_condition: VehicleCondition | None = None,
     ) -> VehicleCondition:
         """Overlay the app's seat, steering and charge state onto an MQTT snapshot.
 
@@ -665,20 +983,27 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         # car, so for an S05 they are taken from the REST subsystem registers
         # only: unknown until the app condition confirms them.
         self._apply_rest_subsystem_warnings(vehicle, condition, None)
-        try:
-            app_condition = await self.client.get_vehicle_condition(
-                vehicle.car_id,
-                vin=vehicle.vin,
-                model_code=vehicle.model_code,
-            )
-        except DeepalError as err:
-            _LOGGER.debug(
-                "Deepal app condition overlay failed for %s: %s", vehicle.car_id, err
-            )
-            self._apply_steering_wheel_state(vehicle, condition)
-            return condition
+        if app_condition is None:
+            try:
+                app_condition = await self.client.get_vehicle_condition(
+                    vehicle.car_id,
+                    vin=vehicle.vin,
+                    model_code=vehicle.model_code,
+                )
+            except DeepalError as err:
+                _LOGGER.debug(
+                    "Deepal app condition overlay failed for %s: %s",
+                    vehicle.car_id,
+                    err,
+                )
+                self._apply_steering_wheel_state(vehicle, condition)
+                return condition
+        assert app_condition is not None
         self._apply_rest_subsystem_warnings(
-            vehicle, condition, (app_condition.raw_data or {}).get("vehicleStatus")
+            vehicle,
+            condition,
+            (app_condition.raw_data or {}).get("vehicleStatus"),
+            report_ts=app_condition.last_updated_timestamp,
         )
         mqtt_ts = condition.last_updated_timestamp
         app_ts = app_condition.last_updated_timestamp
@@ -718,10 +1043,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             mqtt_ts is not None and app_ts is not None and app_ts < mqtt_ts
         )
         raw = app_condition.raw_data or {}
-        # The MQTT steering wheel field never follows the real switch: the
-        # server condition authors it whenever it carries the value, and the
-        # last server-authored state is remembered so a later failed or
-        # field-less overlay never exposes the unreliable MQTT value.
+        # The MQTT enum is the reliable source for app-originated changes
+        # (2 = on, 1 = off, verified 2026-11-20); the REST field can stay 0
+        # while the wheel is physically on. Keep the server value remembered
+        # only as the fallback for a snapshot that omits the MQTT field.
         steering_on = app_condition.climate.steering_wheel_heater_on
         if (
             (raw.get("vehicleStatus") or {}).get("steeringWheelHeater") is not None
@@ -731,7 +1056,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 steering_on,
                 app_condition.climate.steering_wheel_heater_level,
             )
-        self._apply_steering_wheel_state(vehicle, condition)
+        if "steeringWheelHeating" not in (condition.mqtt_raw_data or {}):
+            self._apply_steering_wheel_state(vehicle, condition)
         if (raw.get("hvac") or {}).get("defrostStatus") is not None:
             condition.climate.defrost_on = app_condition.climate.defrost_on
         if app_is_older:
@@ -874,7 +1200,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 self._mqtt_attempts.pop(vehicle_id, None)
                 return self._merge_condition(vehicle_id, condition)
             except DeepalAPIError as err:
-                if getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES and (
+                if getattr(err, "code", None) in CA_TOKEN_ERROR_CODES and (
                     await self._async_refresh_session_for_mqtt(err)
                 ):
                     try:
@@ -903,7 +1229,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         else:
             condition = await self.client.get_vehicle_condition(vehicle_id, vin=vin)
         condition.condition_source = "rest"
-        return self._merge_condition(vehicle_id, condition)
+        condition = self._merge_condition(vehicle_id, condition)
+        if vehicle is not None and self._is_s05(vehicle):
+            # The MQTT overlay is not available on this path (REST-only vehicle
+            # or MQTT fallback), so apply the REST subsystem rule here too.
+            self._apply_rest_subsystem_warnings(
+                vehicle,
+                condition,
+                (condition.raw_data or {}).get("vehicleStatus"),
+                report_ts=condition.last_updated_timestamp,
+            )
+        return condition
 
     def _record_mqtt_failure(self, vehicle_id: str, err: DeepalError) -> None:
         """Keep the failed MQTT exchange for diagnostics and log the fallback."""
@@ -976,22 +1312,115 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
     @staticmethod
     def _retain_unknown_warnings(
-        condition: VehicleCondition, previous: VehicleCondition | None
+        condition: VehicleCondition,
+        previous: VehicleCondition | None,
+        *,
+        skip: frozenset[str] = frozenset(),
     ) -> None:
         """Fill the warning lights a condition did not report from the last one.
 
         Only unknown fields are filled, so a warning value reported by the
-        current condition always wins. The power-state gate guarantees the
-        retained value came from a report with the vehicle on.
+        current condition always wins. ``skip`` lets the S05 subsystem overlay
+        apply its own ready/freshness rule instead of this blind retention.
         """
         if previous is None:
             return
         for field in type(condition.warnings).model_fields:
+            if field in skip:
+                continue
             if getattr(condition.warnings, field) is not None:
                 continue
             retained = getattr(previous.warnings, field)
             if retained is not None:
                 setattr(condition.warnings, field, retained)
+
+    @staticmethod
+    def _is_older_condition(
+        current: VehicleCondition | None, incoming: VehicleCondition
+    ) -> bool:
+        """Return whether an incoming condition is older than the published one.
+
+        A live push can arrive while the periodic poll is still in flight. The
+        poll result must not replace a condition with a newer report
+        timestamp; an incoming condition without a timestamp keeps the
+        timestamped one and only contributes its REST-only fields.
+        """
+        if current is None or current.last_updated_timestamp is None:
+            return False
+        if incoming.last_updated_timestamp is None:
+            # A report without a timestamp cannot be proven newer than a
+            # timestamped pushed condition; keep the newer telemetry and only
+            # merge its REST-only fields.
+            return True
+        return incoming.last_updated_timestamp < current.last_updated_timestamp
+
+    @staticmethod
+    def _is_newer_condition(
+        current: VehicleCondition, incoming: VehicleCondition
+    ) -> bool:
+        """Return whether the incoming condition is strictly newer."""
+        return (
+            incoming.last_updated_timestamp is not None
+            and (
+                current.last_updated_timestamp is None
+                or incoming.last_updated_timestamp
+                > current.last_updated_timestamp
+            )
+        )
+
+    @staticmethod
+    def _merge_rest_only_fields(
+        current: VehicleCondition, polled: VehicleCondition
+    ) -> VehicleCondition:
+        """Keep the newer pushed telemetry and take the REST-only fields.
+
+        The poll can be older than a push that arrived while it was in flight.
+        Its MQTT fields must not replace the push, but the charge plan,
+        static fuel values, charge limit, steering wheel and defrost come from
+        the app condition and would otherwise wait another scan interval.
+        """
+        merged = current.model_copy(deep=True)
+        source = polled.battery
+        target = merged.battery
+        if (
+            source.charge_plan_id is not None
+            or source.charge_schedule_start is not None
+            or source.charge_plans
+        ):
+            for field in (
+                "charge_plan_id",
+                "charge_plan_type",
+                "charge_plan_time_format",
+                "charge_plan_time_zone",
+                "charge_plan_valid",
+                "charge_schedule_start",
+                "charge_schedule_end",
+                "charge_schedule_enabled",
+            ):
+                setattr(target, field, getattr(source, field))
+            if source.charge_plans:
+                target.charge_plans = list(source.charge_plans)
+        if target.charge_limit_percent is None:
+            target.charge_limit_percent = source.charge_limit_percent
+        _copy_missing_fields(merged.fuel, polled.fuel, _FUEL_STATIC_FIELDS)
+        if polled.climate.steering_wheel_heater_on is not None:
+            merged.climate.steering_wheel_heater_on = (
+                polled.climate.steering_wheel_heater_on
+            )
+            merged.climate.steering_wheel_heater_level = (
+                polled.climate.steering_wheel_heater_level
+            )
+        if polled.climate.defrost_on is not None:
+            merged.climate.defrost_on = polled.climate.defrost_on
+        # The S05 subsystem lights are REST-only too. Keep a value the poll just
+        # confirmed even when a push replaced the base while it was in flight;
+        # a poll that could not resolve them (None) must not erase the push's
+        # retained value.
+        for field in _S05_SUBSYSTEM_WARNING_FIELDS:
+            value = getattr(polled.warnings, field)
+            if value is not None:
+                setattr(merged.warnings, field, value)
+        return merged
 
     def _merge_condition(
         self, vehicle_id: str, condition: VehicleCondition
@@ -1010,9 +1439,11 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         known position is also kept, so the location tracker does not flap when
         the car reports no coordinates. The dashboard warning lights reported as
         unknown (vehicle off, asleep or a REST fallback) keep their last known
-        values as well; the SDK power-state gate guarantees those came from a
-        report with the vehicle on. PHEV fuel and the AC charge limit also keep
-        their last known values; an unconfirmed optimistic charge limit expires
+        values as well. The S05 airbag, ABS and power-steering lights are the
+        exception: their overlay applies its own ready/freshness rule after this
+        merge, so an unconfirmed fault is not revived here. PHEV fuel and the
+        AC charge limit also keep their last known values; an unconfirmed
+        optimistic charge limit expires
         instead of being retained. The odometer keeps the previous value on a
         missing field, a stale lower report or a precision dip, so the
         ``total_increasing`` sensor only moves forward or resets. A partial
@@ -1284,7 +1715,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             )
         except DeepalAPIError as err:
             if (
-                getattr(err, "code", None) in _CA_TOKEN_ERROR_CODES
+                getattr(err, "code", None) in CA_TOKEN_ERROR_CODES
                 and await self._async_refresh_session_for_mqtt(err)
             ):
                 await self._async_with_session_retry(
@@ -1339,11 +1770,41 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self, vehicle_id: str, condition: VehicleCondition
     ) -> None:
         """Merge and publish one fresh vehicle condition."""
+        current = (self.data or {}).get(vehicle_id)
+        if current is not None and self._is_older_condition(current, condition):
+            return
         condition = self._merge_condition(vehicle_id, condition)
         vehicle = self._vehicle(vehicle_id)
         if vehicle is not None:
             condition = await self._overlay_app_comfort(vehicle, condition)
+        else:
+            # Without the vehicle we cannot run the REST overlay; keep the
+            # glitchy S05 bits out of the published condition.
+            self._guard_subsystem_warnings(vehicle_id, condition)
         condition = self._apply_optimistic_hold(vehicle_id, condition)
+        latest = (self.data or {}).get(vehicle_id)
+        if latest is not None and latest is not current:
+            # A push replaced the base while the REST overlay was in flight.
+            # Equal timestamps are common inside a one-second burst, so the
+            # push that arrived later wins unless the fetched condition is
+            # strictly newer.
+            if (
+                latest.last_updated_timestamp is None
+                or condition.last_updated_timestamp is None
+                or latest.last_updated_timestamp
+                >= condition.last_updated_timestamp
+            ):
+                # Keep the push's newer MQTT fields but take the REST-only
+                # fields, including a subsystem light the poll just confirmed.
+                merged = self._merge_rest_only_fields(latest, condition)
+                self._update_ready_window(vehicle_id, merged)
+                data = dict(self.data or {})
+                data[vehicle_id] = merged
+                self._track_charging(data)
+                self._sync_charging_read(data)
+                self.async_set_updated_data(data)
+                return
+        self._update_ready_window(vehicle_id, condition)
         data = dict(self.data or {})
         data[vehicle_id] = condition
         self._track_charging(data)
@@ -1444,8 +1905,13 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 vehicle_id, timeout=WAKE_BEFORE_COMMAND_TIMEOUT
             )
 
-    async def async_refresh_vehicle(self, vehicle_id: str) -> WakeResult:
+    async def async_refresh_vehicle(
+        self, vehicle_id: str, *, force_wake: bool = False
+    ) -> WakeResult:
         """Refresh one vehicle, waking it first when its report is stale.
+
+        ``force_wake`` is used by the charging loop to wake the charging
+        vehicle every two main polls even when its last report is still fresh.
 
         MQTT vehicles are woken through the app's ``TxWakeup`` service when the
         last report is older than the stale threshold and the per-vehicle wake
@@ -1465,19 +1931,24 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # is not implemented for the SDA architecture, so the refresh
                 # falls through to the normal SDA condition update.
                 return WakeResult.NOT_NEEDED
-            reason = self._wake_block_reason(vehicle_id, previous)
-            if reason is not None:
-                self._record_wake_result(
-                    vehicle_id, reason, wake_sent=False
-                )
-                return reason
-            async with self._vehicle_wake_lock(vehicle_id):
+            if force_wake:
+                if not self.wake_enabled:
+                    return WakeResult.NOT_NEEDED
+            else:
                 reason = self._wake_block_reason(vehicle_id, previous)
                 if reason is not None:
                     self._record_wake_result(
                         vehicle_id, reason, wake_sent=False
                     )
                     return reason
+            async with self._vehicle_wake_lock(vehicle_id):
+                if not force_wake:
+                    reason = self._wake_block_reason(vehicle_id, previous)
+                    if reason is not None:
+                        self._record_wake_result(
+                            vehicle_id, reason, wake_sent=False
+                        )
+                        return reason
                 return await self._async_wake_and_wait(
                     vehicle_id, wait_when_unconfirmed=True
                 )
@@ -1540,6 +2011,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     async def _async_update_data(self) -> dict[str, VehicleCondition]:
         """Fetch data from Changan Deepal API."""
         await self._async_load_snapshot()
+        generations = dict(self._vehicle_generation)
         try:
             await self._async_maybe_refresh_tokens()
             data = await self._async_fetch()
@@ -1572,6 +2044,28 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         except DeepalError as err:
             _LOGGER.error("Error communicating with Deepal API: %s", err)
             raise UpdateFailed(f"Error fetching Deepal data: {err}") from err
+        for car_id, condition in list(data.items()):
+            current = (self.data or {}).get(car_id)
+            vehicle = self._vehicle(car_id)
+            if (
+                current is not None
+                and vehicle is not None
+                and self._uses_mqtt(vehicle)
+                and (
+                    self._is_older_condition(current, condition)
+                    or (
+                        self._vehicle_generation.get(car_id, 0)
+                        != generations.get(car_id, 0)
+                        and not self._is_newer_condition(current, condition)
+                    )
+                )
+            ):
+                # A push landed while the poll was in flight (possibly with the
+                # same one-second timestamp): keep its MQTT fields and take the
+                # poll's REST-only fields.
+                data[car_id] = self._merge_rest_only_fields(current, condition)
+        for car_id, condition in data.items():
+            self._update_ready_window(car_id, condition)
         self._track_charging(data)
         self._sync_charging_read(data)
         # From now on the in-memory data is the previous state. A vehicle that
@@ -1718,7 +2212,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
 
     async def _async_read_charging_vehicle(self, vehicle_id: str) -> None:
         """Read one charging vehicle without polling the parked ones."""
-        result = await self.async_refresh_vehicle(vehicle_id)
+        result = await self.async_refresh_vehicle(vehicle_id, force_wake=True)
         if result is WakeResult.FRESH:
             return
         condition = await self._async_fetch_condition(vehicle_id)
@@ -2031,10 +2525,14 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 vehicle = self._vehicle(vehicle_id)
                 if vehicle is not None:
                     self._apply_steering_wheel_state(vehicle, condition)
+                # The confirmation fetch has no REST subsystem registers, so
+                # keep the glitchy MQTT bits out of the published condition.
+                self._guard_subsystem_warnings(vehicle_id, condition)
                 condition = self._apply_optimistic_hold(vehicle_id, condition)
                 next_condition_at = now + condition_interval
                 current = (self.data or {}).get(vehicle_id)
                 if self._condition_is_fresh(condition, current):
+                    self._update_ready_window(vehicle_id, condition)
                     data = dict(self.data or {})
                     data[vehicle_id] = condition
                     self.async_set_updated_data(data)

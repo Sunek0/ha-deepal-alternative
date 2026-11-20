@@ -598,7 +598,8 @@ Vehicles and telemetry:
 | `is_sda_mqtt_vehicle(vehicle)` | Static: whether the vehicle uses the SDA `SDA-MQTT` protocol |
 | `get_mqtt_config(vehicle_id)` | CA MQTT connection configuration |
 | `get_mqtt_token(force=False)` | MQTT auth token, reused within `mqtt_token_ttl` |
-| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service); an authentication CONNACK rejection is retried once with fresh bootstrap material |
+| `create_mqtt_session(vehicles, **options)` | Create a supervised live MQTT session for `MQTT` vehicles; see [Live session](mqtt-telemetry.md#8-live-session) |
+| `s05_mqtt_condition(vehicle_id, vin=None, *, sda=False)` | Live MQTT condition snapshot (`sda=True` uses the SDA service); the live session is used when connected, otherwise one-shot with a single authentication retry |
 | `get_sda_broker_config(vehicle_id)` | SDA broker configuration (SDA-MQTT, beta) |
 | `get_sda_auth_token()` | SDA `vot-auth` broker token (SDA-MQTT, beta) |
 | `open_sda_session(vehicle_id, *, device_ids=None, topics=None, seconds=10.0, login=False)` | Read-only SDA broker session (SDA-MQTT, beta) |

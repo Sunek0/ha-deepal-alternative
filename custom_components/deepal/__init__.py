@@ -43,10 +43,12 @@ from .const import (
     CONF_ENABLE_API_LOGGING,
     CONF_ENABLE_LOCATION,
     CONF_WAKE,
+    CONF_MQTT_LIVE_SESSION,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
+    DEFAULT_MQTT_LIVE_SESSION,
     DEFAULT_ENABLE_LOCATION,
 )
 from .coordinator import DeepalDataUpdateCoordinator
@@ -395,6 +397,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
             seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         ),
         wake_enabled=bool(entry.options.get(CONF_WAKE, DEFAULT_WAKE)),
+        live_session_enabled=bool(
+            entry.options.get(
+                CONF_MQTT_LIVE_SESSION, DEFAULT_MQTT_LIVE_SESSION
+            )
+        ),
     )
 
     charging = ChargingSessionManager(_charging_store(hass, entry))
@@ -473,6 +480,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> bo
         "Deepal setting up platforms: %s", [platform.value for platform in platforms]
     )
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    await coordinator.async_start_mqtt_session()
     return True
 
 
@@ -484,15 +492,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: DeepalConfigEntry) -> b
         platforms = _platforms(entry)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 
-    if unload_ok:
-        await async_shutdown_capture(hass, entry)
-
     if unload_ok and runtime_data is not None:
         manager = getattr(runtime_data, "model_assets", None)
         if manager is not None:
             await manager.async_shutdown()
             runtime_data.coordinator.model_assets = None
+        stop_session = getattr(
+            runtime_data.coordinator, "async_stop_mqtt_session", None
+        )
+        if callable(stop_session):
+            await stop_session()
         await runtime_data.client.close()
+
+    if unload_ok:
+        await async_shutdown_capture(hass, entry)
 
     return unload_ok
 

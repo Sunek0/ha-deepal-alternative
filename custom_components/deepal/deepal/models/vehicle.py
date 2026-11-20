@@ -320,7 +320,7 @@ class VehicleCondition(BaseModel):
         default=None,
         description=(
             "Service that produced the snapshot: sda-mqtt, sda-mqtt-signal-list, "
-            "legacy-mqtt or rest"
+            "legacy-mqtt, mqtt-push or rest"
         ),
     )
     mqtt_variants: Optional[dict[str, Any]] = Field(

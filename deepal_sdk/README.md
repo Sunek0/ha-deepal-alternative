@@ -237,7 +237,7 @@ Task guides (step-by-step walkthroughs):
 | [`docs/guides/authentication.md`](docs/guides/authentication.md) | Login flows, session persistence and restore, refresh and logout |
 | [`docs/guides/telemetry.md`](docs/guides/telemetry.md) | Vehicles, condition, capabilities, digital key and the REST/MQTT routing decision |
 | [`docs/guides/remote-commands.md`](docs/guides/remote-commands.md) | Control PIN, signing prerequisites, command families and result polling |
-| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies and the single-use condition exchange |
+| [`docs/guides/mqtt-telemetry.md`](docs/guides/mqtt-telemetry.md) | When MQTT applies, the one-shot exchange and the live session |
 | [`docs/guides/errors-and-diagnostics.md`](docs/guides/errors-and-diagnostics.md) | Error taxonomy in practice and redacted API logging |
 
 Reference (protocol and models):

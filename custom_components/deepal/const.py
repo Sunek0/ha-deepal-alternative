@@ -50,11 +50,13 @@ CONF_DIAGNOSTICS_ACTION = "diagnostics_action"
 CONF_DIAGNOSTICS_CONFIRM_DELETE = "diagnostics_confirm_delete"
 CONF_ENABLE_LOCATION = "enable_location"
 CONF_WAKE = "wake"
+CONF_MQTT_LIVE_SESSION = "mqtt_live_session"
 
 DEFAULT_COUNTRY = "ES"
 DEFAULT_SCAN_INTERVAL = 300  # seconds (5 minutes)
 DEFAULT_ENVIRONMENT = "release_eu"
 DEFAULT_WAKE = True
+DEFAULT_MQTT_LIVE_SESSION = True
 
 # Vehicle location: opt-in and off by default (European vehicles currently do
 # not report a position; the option targets servers that expose it).

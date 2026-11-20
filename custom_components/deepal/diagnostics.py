@@ -99,6 +99,8 @@ async def async_get_config_entry_diagnostics(
     last_exchange = getattr(
         getattr(coordinator, "client", None), "last_mqtt_exchange", None
     )
+    live_session_lookup = getattr(coordinator, "mqtt_session_stats", None)
+    live_session = live_session_lookup() if callable(live_session_lookup) else None
 
     report = {
         "vehicles": [_vehicle_data(vehicle) for vehicle in coordinator.vehicles],
@@ -163,6 +165,7 @@ async def async_get_config_entry_diagnostics(
             if last_exchange is not None
             else None
         ),
+        "mqtt_live_session": live_session,
         "wake_results": wake_results,
         "unmapped_mqtt_keys": {
             car_id: sorted(unmapped_s05_keys(condition.mqtt_raw_data or {}))

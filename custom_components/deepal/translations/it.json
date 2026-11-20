@@ -203,15 +203,17 @@
           "control_pin": "PIN di controllo remoto",
           "enable_api_logging": "Registra il traffico API",
           "wake": "Sveglia il veicolo quando serve",
+          "mqtt_live_session": "Mantieni una connessione MQTT attiva",
           "enable_location": "Recupera la posizione del veicolo",
           "environment": "Ambiente regionale"
         },
         "description": "Regola il polling e la diagnostica. Il PIN di controllo abilita i comandi remoti firmati; le opzioni di diagnostica cambiano il modo in cui l'API vede il client e vanno toccate solo durante la risoluzione dei problemi.\n\n{diagnostics_status}",
         "data_description": {
-          "scan_interval": "Ogni quanto Home Assistant interroga il veicolo quando non è disponibile la telemetria MQTT, in secondi (30-3600).",
+          "scan_interval": "Ogni quanto Home Assistant interroga il veicolo e legge la condizione dell'app, in secondi (30-3600). La sessione MQTT attiva continua a ricevere i report nel frattempo.",
           "control_pin": "PIN di controllo remoto di My Changan. Necessario per bloccare/sbloccare, muovere i finestrini o aprire il bagagliaio.",
           "enable_api_logging": "Scrive ogni richiesta e risposta API nel log di Home Assistant, con token, chiavi, VIN, email, telefono, PIN e numero di serie nascosti. Abilitalo solo durante la risoluzione dei problemi.",
           "wake": "Sveglia un veicolo MQTT addormentato prima di aggiornare o inviare un comando con PIN. Attivo per impostazione predefinita; disattivalo per preservare la batteria a 12 V se aggiorni molto spesso.",
+          "mqtt_live_session": "Mantiene una connessione MQTT aperta per i veicoli MQTT così i loro report arrivano in Home Assistant in pochi secondi. Attivo per impostazione predefinita; disattivalo per tornare al polling.",
           "enable_location": "Richiede ed espone la posizione del veicolo. Attualmente i veicoli europei non la inviano, quindi il tracker può restare sconosciuto; l'opzione è pensata per i server che la espongono.",
           "environment": "Insieme di gateway regionali usato per l'API internazionale. Europa per impostazione predefinita."
         },

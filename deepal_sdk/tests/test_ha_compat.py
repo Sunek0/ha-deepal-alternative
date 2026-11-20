@@ -1394,9 +1394,13 @@ def test_uses_s05_charge_enum_is_scoped_to_the_ca_broker_s05_conditions() -> Non
     mqtt = VehicleCondition(
         car_id="car-1", vin="", condition_source="legacy-mqtt"
     )
+    push = VehicleCondition(
+        car_id="car-1", vin="", condition_source="mqtt-push"
+    )
     rest = VehicleCondition(car_id="car-1", vin="", condition_source="rest")
 
     assert uses_s05_charge_enum(s05, mqtt) is True
+    assert uses_s05_charge_enum(s05, push) is True
     assert uses_s05_charge_enum(s05, rest) is False
     assert uses_s05_charge_enum(s07, mqtt) is False
     assert uses_s05_charge_enum(None, mqtt) is False
@@ -2883,6 +2887,24 @@ def test_options_schema_exposes_the_wake_toggle() -> None:
     assert schema({CONF_WAKE: False})[CONF_WAKE] is False
 
 
+def test_options_schema_exposes_the_live_session_toggle() -> None:
+    from custom_components.deepal.const import (
+        CONF_ENVIRONMENT,
+        CONF_MQTT_LIVE_SESSION,
+        DEFAULT_MQTT_LIVE_SESSION,
+    )
+
+    flow = _options_flow(international=True)
+    schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
+
+    live_keys = [
+        key for key in schema.schema if key.schema == CONF_MQTT_LIVE_SESSION
+    ]
+    assert len(live_keys) == 1
+    assert live_keys[0].default() == DEFAULT_MQTT_LIVE_SESSION
+    assert schema({CONF_MQTT_LIVE_SESSION: False})[CONF_MQTT_LIVE_SESSION] is False
+
+
 def test_options_schema_exposes_the_location_toggle() -> None:
     from custom_components.deepal.const import (
         CONF_ENABLE_LOCATION,
@@ -3644,3 +3666,69 @@ async def test_bev_schedule_controls_use_the_model_aware_helper(monkeypatch) -> 
     )
     await schedule_time.async_set_value(dt_time(1, 30))
     assert calls[-1] == ("0130", "0100", True, "GMT+01:00", False)
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_includes_the_live_mqtt_session() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN-REAL-1", protocol_type="MQTT")
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
+    )
+    coordinator.client = SimpleNamespace(last_mqtt_exchange=None)
+    coordinator.mqtt_session_stats = lambda: {
+        "enabled": True,
+        "state": "connected",
+        "connects": 2,
+        "reconnects": 1,
+        "messages": 10,
+        "reports": 8,
+        "events": 1,
+        "dropped": 1,
+        "last_error": None,
+        "last_message_at": 1795000000.0,
+        "connected_since": 1794999000.0,
+        "subscriptions": ["$vdp/device-did/properties/report"],
+        "details": {"state": "connected"},
+    }
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    live = report["mqtt_live_session"]
+    assert live["enabled"] is True
+    assert live["state"] == "connected"
+    assert live["connects"] == 2
+    assert live["subscriptions"] == [f"$vdp/{REDACTED}/properties/report"]
+
+
+@pytest.mark.asyncio
+async def test_diagnostics_report_includes_a_conflict_live_session() -> None:
+    vehicle = Vehicle(car_id="car-1", vin="VIN-REAL-1", protocol_type="MQTT")
+    coordinator = _DiagnosticsCoordinator(
+        [vehicle], {"car-1": _mqtt_condition()}, {"car-1": None}
+    )
+    coordinator.client = SimpleNamespace(last_mqtt_exchange=None)
+    coordinator.mqtt_session_stats = lambda: {
+        "enabled": True,
+        "state": "conflict",
+        "connects": 4,
+        "reconnects": 3,
+        "messages": 2,
+        "reports": 1,
+        "events": 0,
+        "dropped": 1,
+        "last_error": "DeepalAPIError: closed",
+        "last_message_at": 1795000000.0,
+        "connected_since": None,
+        "subscriptions": [],
+        "details": {"state": "conflict"},
+    }
+
+    report = await diagnostics.async_get_config_entry_diagnostics(
+        None, _diagnostics_entry(coordinator)
+    )
+
+    live = report["mqtt_live_session"]
+    assert live["state"] == "conflict"
+    assert live["last_error"] == "DeepalAPIError: closed"

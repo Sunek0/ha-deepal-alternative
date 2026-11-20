@@ -15,6 +15,9 @@ from deepal.mqtt import (
     MAPPED_S05_KEYS,
     ConnackInfo,
     MqttBrokerSettings,
+    MqttKeepalive,
+    MqttSessionState,
+    MqttSessionStats,
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_connect_packet,
@@ -43,8 +46,10 @@ from deepal.mqtt import (
     parse_publish,
     parse_sda_broker_config,
     parse_suback,
+    read_packet,
     read_packet_with_keepalive,
     resolve_mqtt_topics,
+    s05_report_timestamp,
     sda_broker_session,
     sda_condition_plan,
     sda_condition_request_payload,
@@ -925,7 +930,7 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["vehicleStatus"]["totalMileage"] == 18300
     assert condition["vehicleStatus"]["totalMeterYesterday"] == 42.5
     assert condition["vehicleStatus"]["igniteCumulativeMileage"] == 12.25
-    assert condition["vehicleStatus"]["steeringWheelHeater"] == 1
+    assert condition["vehicleStatus"]["steeringWheelHeater"] == 0
     assert condition["hvac"]["acStatus"] == 1
     assert condition["hvac"]["remoteTemp"] == 225
     assert condition["charge"]["chargeStatus"] == 3
@@ -1475,7 +1480,7 @@ def test_normalize_s05_params_maps_seat_sides_and_scales():
     )
     assert condition["seat"]["leftFront"]["heatStatus"] == 2
     assert condition["seat"]["leftFront"]["ventStatus"] == 3
-    assert condition["seat"]["rightFront"]["heatStatus"] is None
+    assert condition["seat"]["rightFront"]["heatStatus"] == 0
     assert condition["seat"]["rightFront"]["ventStatus"] == 1
     assert condition["seat"]["leftBack"]["heatStatus"] == 0
     assert condition["seat"]["rightBack"]["heatStatus"] is None
@@ -2077,3 +2082,115 @@ def test_rest_subsystem_warnings_are_unknown_unless_the_live_power_state_is_read
         "abs": None,
         "eps": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_read_packet_rejects_a_packet_above_the_broker_maximum():
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"\x30\x0a" + b"0" * 10)
+
+    with pytest.raises(ValueError):
+        await read_packet(reader, max_size=5)
+
+
+def test_session_stats_serialize_without_secrets():
+    stats = MqttSessionStats(
+        state=MqttSessionState.CONNECTED.value,
+        connects=2,
+        reconnects=1,
+        messages=10,
+        reports=8,
+        events=1,
+        dropped=1,
+        subscriptions=("$vdp/device-did/properties/report",),
+    )
+
+    payload = stats.as_dict()
+
+    assert payload["state"] == "connected"
+    assert payload["connects"] == 2
+    assert payload["subscriptions"] == ["$vdp/device-did/properties/report"]
+
+
+def test_parse_connack_info_reads_maximum_packet_size():
+    info = parse_connack_info(0x20, b"\x00\x00\x05\x27\x00\x00\x10\x00")
+
+    assert info is not None
+    assert info.properties["maximum_packet_size"] == 4096
+    settings = MqttBrokerSettings(qos=1, keepalive=60).with_connack(info)
+    assert settings.maximum_packet_size == 4096
+
+
+@pytest.mark.asyncio
+async def test_read_packet_raises_on_a_truncated_packet():
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"\x30\x0a123")
+    reader.feed_eof()
+
+    with pytest.raises(asyncio.IncompleteReadError):
+        await read_packet(reader)
+
+
+def test_s05_report_timestamp_accepts_numeric_strings():
+    assert s05_report_timestamp({"lastUpdatedAt": "1794412842000"}) == 1794412842
+    assert s05_report_timestamp({"latestDate": "2026-11-19T22:00:00Z"}) == 1795125600
+
+
+
+@pytest.mark.asyncio
+async def test_keepalive_accepts_a_pingresp_during_drain():
+    loop = asyncio.get_running_loop()
+    timeouts: list[str] = []
+    keepalive = None
+
+    class Writer:
+        def write(self, data: bytes) -> None:
+            assert data[:1] == b"\xc0"
+
+        async def drain(self) -> None:
+            assert keepalive is not None
+            keepalive.note_pingresp()
+            await asyncio.sleep(0)
+
+    async def on_timeout(reason: str) -> None:
+        timeouts.append(reason)
+
+    keepalive = MqttKeepalive(
+        Writer(), asyncio.Lock(), 1.0, on_timeout=on_timeout
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(keepalive.run(stop))
+    await asyncio.sleep(0.2)
+    stop.set()
+    await task
+
+    assert timeouts == []
+    assert keepalive._awaiting_pong is False
+    assert loop.time() > 0
+
+
+
+def test_steering_wheel_heating_two_means_on_and_one_means_off():
+    off = normalize_s05_params({"steeringWheelHeating": 1})
+    on = normalize_s05_params({"steeringWheelHeating": 2})
+    zero = normalize_s05_params({"steeringWheelHeating": 0})
+
+    assert off["vehicleStatus"]["steeringWheelHeater"] == 0
+    assert on["vehicleStatus"]["steeringWheelHeater"] == 1
+    assert zero["vehicleStatus"]["steeringWheelHeater"] == 0
+
+
+def test_seat_sleep_sentinel_six_maps_to_off():
+    condition = normalize_s05_params(
+        {
+            "driverSeatAirStatus": 6,
+            "passengerSeatAirStatus": 6,
+            "driverSeatHeatStatus": 6,
+            "passengerSeatHeatStatus": 6,
+        }
+    )
+
+    assert condition["seat"]["leftFront"]["ventStatus"] == 0
+    assert condition["seat"]["rightFront"]["ventStatus"] == 0
+    assert condition["seat"]["leftFront"]["heatStatus"] == 0
+    assert condition["seat"]["rightFront"]["heatStatus"] == 0

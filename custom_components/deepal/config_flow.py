@@ -50,10 +50,12 @@ from .const import (
     CONF_DIAGNOSTICS_CONFIRM_DELETE,
     CONF_ENABLE_LOCATION,
     CONF_WAKE,
+    CONF_MQTT_LIVE_SESSION,
     DEFAULT_COUNTRY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_ENVIRONMENT,
     DEFAULT_WAKE,
+    DEFAULT_MQTT_LIVE_SESSION,
     DEFAULT_ENABLE_LOCATION,
     DIAGNOSTICS_ACTION_DELETE,
     DIAGNOSTICS_ACTION_DOWNLOAD,
@@ -1062,6 +1064,14 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     CONF_ENABLE_LOCATION,
                     default=options.get(
                         CONF_ENABLE_LOCATION, DEFAULT_ENABLE_LOCATION
+                    ),
+                )
+            ] = bool
+            fields[
+                vol.Optional(
+                    CONF_MQTT_LIVE_SESSION,
+                    default=options.get(
+                        CONF_MQTT_LIVE_SESSION, DEFAULT_MQTT_LIVE_SESSION
                     ),
                 )
             ] = bool

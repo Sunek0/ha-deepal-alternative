@@ -13,7 +13,7 @@ import secrets
 import socket
 import ssl
 import time
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -171,6 +171,9 @@ from .mqtt import (
 
 logger = logging.getLogger("deepal_sdk")
 
+if TYPE_CHECKING:
+    from .intl_mqtt import DeepalIntlMqttSession
+
 # Charge keys the debug discovery log prints on every S05 report so a session
 # can be diagnosed from a log without downloading the diagnostics.
 S05_CHARGE_DEBUG_KEYS = (
@@ -253,6 +256,11 @@ WAKE_OK_CODES = frozenset({"000000", "0", "00000"})
 #: raising the HTTP bound never extends a telemetry or wake exchange.
 MQTT_SOCKET_TIMEOUT = 15.0
 MQTT_EXCHANGE_TIMEOUT = 20.0
+
+#: How long a one-shot call waits for an in-flight live-session connection
+#: before falling back to its own exchange. The live session is the only
+#: transport while it is connected; this wait only covers the transition.
+MQTT_LIVE_FALLBACK_WAIT = 5.0
 
 
 @dataclass(frozen=True)
@@ -611,6 +619,11 @@ class DeepalIntlClient:
         self._client_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
         self._mqtt_lock = asyncio.Lock()
+        # Serializes live-session connection setup with one-shot exchanges.
+        # The live session releases it once connected; a one-shot acquires it,
+        # checks the session and delegates instead of opening a second socket.
+        self._live_mqtt_lock = asyncio.Lock()
+        self.mqtt_session: Optional[Any] = None
         self._mqtt_ssl_context_cached: Optional[ssl.SSLContext] = None
         self._mqtt_ssl_context_insecure: Optional[bool] = None
         self._mqtt_ssl_context_lock = asyncio.Lock()
@@ -643,7 +656,14 @@ class DeepalIntlClient:
         return self._client
 
     async def close(self) -> None:
-        """Close the underlying HTTP client if managed internally."""
+        """Stop the live MQTT session and close the managed HTTP client."""
+        session = self.mqtt_session
+        self.mqtt_session = None
+        if session is not None:
+            try:
+                await session.stop()
+            except Exception as err:  # noqa: BLE001 - close must continue
+                logger.debug("Deepal live MQTT session stop failed: %s", err)
         if self._external_client or self._client is None:
             return
         if not self._client.is_closed:
@@ -2388,6 +2408,48 @@ class DeepalIntlClient:
             )
             return await action()
 
+    def create_mqtt_session(
+        self,
+        vehicles: Sequence[Vehicle],
+        **kwargs: Any,
+    ) -> "DeepalIntlMqttSession":
+        """Create the supervised live session for the given MQTT vehicles.
+
+        The caller owns the lifecycle: ``await session.start()`` after setup
+        and ``await session.stop()`` before closing the client. The client
+        stores the last created session and stops it on :meth:`close` as a
+        safety net. ``SDA-MQTT`` vehicles are ignored when the session
+        bootstraps; only ``protocolType: MQTT`` vehicles are covered.
+        """
+        from .intl_mqtt import DeepalIntlMqttSession
+
+        if kwargs.get("refresh_session") is None:
+
+            async def _refresh_session(reason: str) -> bool:
+                try:
+                    await self.refresh_tokens(force=True)
+                    return True
+                except Exception as err:  # noqa: BLE001 - the session will back off
+                    logger.warning(
+                        "Deepal live MQTT session refresh failed: %s", err
+                    )
+                    return False
+
+            kwargs["refresh_session"] = _refresh_session
+        session = DeepalIntlMqttSession(self, vehicles, **kwargs)
+        self.mqtt_session = session
+        return session
+
+    async def _acquire_live_mqtt_lock(self, timeout: float) -> bool:
+        """Acquire the transport lock without exceeding the caller's budget."""
+        try:
+            await asyncio.wait_for(
+                self._live_mqtt_lock.acquire(), timeout=max(0.05, timeout)
+            )
+        except asyncio.TimeoutError:
+            return False
+        return True
+
     async def s05_mqtt_condition(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
     ) -> VehicleCondition:
@@ -2398,14 +2460,58 @@ class DeepalIntlClient:
         remains the default and the last fallback probe. Sessions are
         serialized per client because all vehicles of an account share the
         broker client identity. An authentication rejection is retried once
-        with fresh bootstrap material.
+        with fresh bootstrap material. When a live session covers the vehicle,
+        the read is delegated to it instead of opening a second connection.
+        While the live session is connecting, the call waits briefly for that
+        transition; a session in backoff leaves the one-shot exchange free.
         """
-        async with self._mqtt_lock:
-            return await self._retry_mqtt_auth(
-                lambda: self._s05_mqtt_condition_locked(
-                    vehicle_id, vin=vin, sda=sda
+        session = self.mqtt_session
+        if not sda and session is not None and session.supports(vehicle_id):
+            if session.is_connected:
+                return await session.request_condition(
+                    vehicle_id,
+                    timeout=self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT,
                 )
+            if session.is_connecting:
+                await session.wait_connected(
+                    timeout=min(
+                        MQTT_LIVE_FALLBACK_WAIT,
+                        self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT,
+                    )
+                )
+                if session.is_connected:
+                    return await session.request_condition(
+                        vehicle_id,
+                        timeout=self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT,
+                    )
+        if not await self._acquire_live_mqtt_lock(MQTT_LIVE_FALLBACK_WAIT):
+            raise DeepalAPIError(
+                "The live MQTT session is still connecting; try again later."
             )
+        try:
+            session = self.mqtt_session
+            if not (
+                not sda
+                and session is not None
+                and session.supports(vehicle_id)
+                and session.is_connected
+            ):
+                async with self._mqtt_lock:
+                    return await self._retry_mqtt_auth(
+                        lambda: self._s05_mqtt_condition_locked(
+                            vehicle_id, vin=vin, sda=sda
+                        )
+                    )
+        finally:
+            self._live_mqtt_lock.release()
+        # Delegate outside the transport lock so a slow response does not block
+        # a reconnect; the session's own reader resolves or fails the future.
+        if session is None:
+            raise DeepalAPIError("The live MQTT session is not available.")
+        return await session.request_condition(
+            vehicle_id,
+            timeout=self.mqtt_exchange_timeout or MQTT_EXCHANGE_TIMEOUT,
+        )
 
     async def _s05_mqtt_condition_locked(
         self, vehicle_id: str, vin: Optional[str] = None, *, sda: bool = False
@@ -3372,6 +3478,74 @@ class DeepalIntlClient:
         timeout: float = 60.0,
         vin: Optional[str] = None,
     ) -> Optional[VehicleCondition]:
+        """Wait for a newer report, using the live session when connected."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.05, timeout)
+        session = self.mqtt_session
+        if session is not None and session.supports(vehicle_id):
+            if session.is_connected:
+                return await session.wait_for_report(
+                    vehicle_id,
+                    previous_timestamp=previous_timestamp,
+                    interval=interval,
+                    timeout=max(0.05, deadline - loop.time()),
+                )
+            if session.is_connecting:
+                await session.wait_connected(
+                    timeout=min(
+                        MQTT_LIVE_FALLBACK_WAIT,
+                        max(0.0, deadline - loop.time()),
+                    )
+                )
+                if session.is_connected:
+                    return await session.wait_for_report(
+                        vehicle_id,
+                        previous_timestamp=previous_timestamp,
+                        interval=interval,
+                        timeout=max(0.05, deadline - loop.time()),
+                    )
+        if not await self._acquire_live_mqtt_lock(
+            max(0.05, deadline - loop.time())
+        ):
+            raise DeepalAPIError(
+                "The live MQTT session did not become available in time."
+            )
+        try:
+            session = self.mqtt_session
+            if not (
+                session is not None
+                and session.supports(vehicle_id)
+                and session.is_connected
+            ):
+                return await self._s05_wait_for_report_oneshot(
+                    vehicle_id,
+                    previous_timestamp=previous_timestamp,
+                    interval=interval,
+                    timeout=max(0.05, deadline - loop.time()),
+                    vin=vin,
+                )
+        finally:
+            self._live_mqtt_lock.release()
+        # The long wait must not hold the transport lock: a reconnect has to be
+        # able to close the socket and fail the pending request.
+        if session is None:
+            raise DeepalAPIError("The live MQTT session is not available.")
+        return await session.wait_for_report(
+            vehicle_id,
+            previous_timestamp=previous_timestamp,
+            interval=interval,
+            timeout=max(0.05, deadline - loop.time()),
+        )
+
+    async def _s05_wait_for_report_oneshot(
+        self,
+        vehicle_id: str,
+        *,
+        previous_timestamp: Optional[int] = None,
+        interval: float = 5.0,
+        timeout: float = 60.0,
+        vin: Optional[str] = None,
+    ) -> Optional[VehicleCondition]:
         """Wait for a newer S05 report over one bounded MQTT exchange.
 
         Opens a single session and re-publishes the condition request every
@@ -3643,7 +3817,54 @@ class DeepalIntlClient:
         return condition
 
     async def wake_vehicle(self, vehicle_id: str) -> None:
-        """Wake an MQTT-backed vehicle so it publishes fresh condition data.
+        """Wake an MQTT-backed vehicle, using the live session when connected."""
+        session = self.mqtt_session
+        if session is not None and session.supports(vehicle_id):
+            if session.is_connected:
+                await session.wake(
+                    vehicle_id,
+                    timeout=self.mqtt_wake_timeout or MQTT_EXCHANGE_TIMEOUT,
+                )
+                return
+            if session.is_connecting:
+                await session.wait_connected(
+                    timeout=min(
+                        MQTT_LIVE_FALLBACK_WAIT,
+                        self.mqtt_wake_timeout or MQTT_EXCHANGE_TIMEOUT,
+                    )
+                )
+                if session.is_connected:
+                    await session.wake(
+                        vehicle_id,
+                        timeout=(
+                            self.mqtt_wake_timeout or MQTT_EXCHANGE_TIMEOUT
+                        ),
+                    )
+                    return
+        if not await self._acquire_live_mqtt_lock(MQTT_LIVE_FALLBACK_WAIT):
+            raise DeepalAPIError(
+                "The live MQTT session is still connecting; try again later."
+            )
+        try:
+            session = self.mqtt_session
+            if not (
+                session is not None
+                and session.supports(vehicle_id)
+                and session.is_connected
+            ):
+                await self._wake_vehicle_oneshot(vehicle_id)
+                return
+        finally:
+            self._live_mqtt_lock.release()
+        if session is None:
+            raise DeepalAPIError("The live MQTT session is not available.")
+        await session.wake(
+            vehicle_id,
+            timeout=self.mqtt_wake_timeout or MQTT_EXCHANGE_TIMEOUT,
+        )
+
+    async def _wake_vehicle_oneshot(self, vehicle_id: str) -> None:
+        """Wake a vehicle through a one-shot MQTT exchange.
 
         Publishes the app's ``TxWakeup``/``Cnr_ReWakeup`` service on the
         ``properties/set/req`` topic and returns once the gateway acknowledges

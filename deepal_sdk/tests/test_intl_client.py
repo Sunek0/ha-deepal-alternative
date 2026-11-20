@@ -22,9 +22,12 @@ from deepal import (
     DeepalCommandNotReady,
     DeepalConnectionError,
     DeepalIntlClient,
+    DeepalIntlMqttSession,
     DeepalMqttAuthRejected,
     DeepalRateLimitError,
     DeepalSessionInvalidated,
+    MqttSessionState,
+    MqttSessionStats,
     SeatCapabilities,
     Vehicle,
     VehicleCapabilities,
@@ -153,6 +156,7 @@ class _FakeMqttBroker:
         service_code: str = "car_condition",
         condition_sequence: Optional[list[Optional[dict[str, Any]]]] = None,
         wake_reply: bool = True,
+        reply_pingresp: bool = False,
         suback_packet: Optional[bytes] = None,
         connack_packet: Optional[bytes] = None,
         connack_reason_codes: Optional[list[int]] = None,
@@ -173,6 +177,7 @@ class _FakeMqttBroker:
         self.wake_code = "200"
         self.wake_success = True
         self.wake_reply = wake_reply
+        self.reply_pingresp = reply_pingresp
         self.suback_packet = suback_packet
         self.connack_packet = connack_packet
         self.connack_reason_codes = (
@@ -217,6 +222,8 @@ class _FakeMqttBroker:
             self._on_publish(first, body)
         elif first == 0xC0:
             self.pings += 1
+            if self.reply_pingresp:
+                self.reader.feed_data(b"\xd0\x00")
             if (
                 not self._condition_sent
                 and self.condition_payload is not None
@@ -2953,7 +2960,7 @@ async def test_s05_mqtt_condition_uses_normalized_params():
 
 @pytest.mark.parametrize(
     ("raw_value", "expected"),
-    [(1, True), (0, False), (None, None)],
+    [(2, True), (1, False), (0, False), (None, None)],
 )
 @pytest.mark.asyncio
 async def test_s05_mqtt_condition_maps_the_steering_fallback(raw_value, expected):
@@ -7384,3 +7391,847 @@ def test_parse_condition_ignores_the_s05_rest_charge_connection():
         model_code="SC6460AAAA7HEV",
     )
     assert unknown_dc.battery.charger_connected is True
+
+
+# ---------------------------------------------------------------------------
+# Live MQTT session
+# ---------------------------------------------------------------------------
+
+
+async def _wait_until(predicate, timeout: float = 2.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not reached before the timeout")
+
+
+def _feed_live_report(
+    broker: Any,
+    *,
+    car_id: str,
+    request_id: str,
+    params: dict[str, Any],
+) -> None:
+    encrypted = aes_cbc_encrypt(
+        [{"service_code": "car_condition", "params": params}],
+        broker.secret_key,
+        request_id,
+    )
+    broker.reader.feed_data(
+        build_publish_packet(
+            "$vdp/device-did/properties/report",
+            {
+                "r": request_id,
+                "b": {"cid": car_id},
+                "rs": encrypted,
+            },
+        )
+    )
+
+
+def _live_vehicle() -> Vehicle:
+    return Vehicle(
+        car_id="car-1",
+        vin="VIN-PLACEHOLDER-1",
+        series_name="S05",
+        model_code="SC6464AAKBEV",
+        protocol_type="MQTT",
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_session_accumulates_partial_reports(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    events: list[dict[str, Any]] = []
+    client.on_exchange = events.append
+    received: list[tuple[str, Any]] = []
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_condition=lambda vehicle_id, condition: received.append(
+            (vehicle_id, condition)
+        ),
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+    # The transport lock is released once the reader loop runs, so a one-shot
+    # can acquire it and delegate instead of blocking for the whole session.
+    assert client._live_mqtt_lock.locked() is False
+
+    full = {
+        **S05_BROKER_PARAMS,
+        "latestDate": "2026-11-19T22:00:00Z",
+        "soc": 71,
+        "driverDoor": 0,
+        "leftAnteriorWindowDegree": 0,
+    }
+    _feed_live_report(
+        broker, car_id="car-1", request_id="report-1", params=full
+    )
+    await _wait_until(lambda: len(received) >= 1)
+    assert received[-1][0] == "car-1"
+    assert received[-1][1].battery.soc_percentage == 71
+    assert received[-1][1].window_openings.front_left == 0
+
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-2",
+        params={
+            "latestDate": "2026-11-19T22:00:01Z",
+            "leftAnteriorWindowDegree": 42,
+        },
+    )
+    await _wait_until(lambda: len(received) >= 2)
+    condition = received[-1][1]
+    assert condition.window_openings.front_left == 42
+    assert condition.battery.soc_percentage == 71
+    assert condition.doors.driver_door_open is False
+
+    assert any(
+        event.get("event") == "session_state" for event in events
+    )
+
+    await session.stop()
+    await client.close()
+    assert session.state == "stopped"
+    names = [event.get("event") for event in events]
+    assert "session_open" in names
+    assert "receive" in names
+    assert "session_close" in names
+
+
+@pytest.mark.asyncio
+async def test_live_session_condition_and_wake_correlation(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    condition = await session.request_condition("car-1", timeout=1.0)
+    assert condition.battery.soc_percentage == 71
+    assert condition.condition_source == "legacy-mqtt"
+
+    await session.wake("car-1", timeout=1.0)
+
+    await session.stop()
+    await client.close()
+    assert broker.logout_payload is not None
+    assert session._task is None
+    assert session._writer is None
+    assert session._keepalive_task is None
+
+
+@pytest.mark.asyncio
+async def test_live_session_keepalive_pings_without_traffic(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.mqtt_keepalive = 0.1
+    events: list[dict[str, Any]] = []
+    client.on_exchange = events.append
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        backoff_initial=0.01,
+        backoff_max=0.02,
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+    await asyncio.sleep(2.0)
+    assert broker.pings >= 1
+    assert broker.close_count >= 1
+    assert "PINGRESP" in (session.stats().last_error or "")
+    assert any(
+        event.get("event") == "timeout"
+        and event.get("stage") == "live_keepalive"
+        for event in events
+    )
+    assert any(
+        event.get("event") == "session_state"
+        and event.get("state") in ("backoff", "connecting")
+        for event in events
+    )
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_accepts_a_pingresp(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, reply_pingresp=True)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.mqtt_keepalive = 0.1
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+    await asyncio.sleep(0.5)
+
+    assert broker.pings >= 1
+    assert session.is_connected is True
+    assert session.stats().last_error is None
+    assert broker.close_count == 0
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_conflict_backoff(monkeypatch):
+    from deepal.intl_mqtt import _SessionOutcome
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    states: list[str] = []
+    events: list[dict[str, Any]] = []
+    client.on_exchange = events.append
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_state=lambda state, details: states.append(state),
+        backoff_initial=0.01,
+        backoff_max=0.02,
+        conflict_window=10.0,
+        conflict_threshold=2,
+        conflict_delay=0.05,
+    )
+
+    async def fake_connect():
+        return _SessionOutcome(
+            error=DeepalAPIError("closed"), duration=0.1, connected=True
+        )
+
+    monkeypatch.setattr(session, "_connect_once", fake_connect)
+    await session.start()
+    await _wait_until(lambda: "conflict" in states, timeout=2.0)
+    assert states.count("conflict") >= 1
+    assert any(
+        event.get("event") == "session_conflict" for event in events
+    )
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_delegates_condition_wake_and_wait():
+    from deepal import VehicleCondition
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    condition = VehicleCondition(car_id="car-1", vin="VIN-PLACEHOLDER-1")
+
+    class FakeSession:
+        is_connected = True
+        is_active = True
+
+        def __init__(self):
+            self.called: list[str] = []
+            self.stopped = False
+
+        def supports(self, vehicle_id):
+            return vehicle_id == "car-1"
+
+        async def request_condition(self, vehicle_id, **kwargs):
+            self.called.append("condition")
+            return condition
+
+        async def wake(self, vehicle_id, **kwargs):
+            self.called.append("wake")
+
+        async def wait_for_report(self, vehicle_id, **kwargs):
+            self.called.append("wait")
+            return condition
+
+        async def stop(self):
+            self.stopped = True
+
+    session = FakeSession()
+    client.mqtt_session = session
+
+    assert await client.s05_mqtt_condition("car-1") is condition
+    await client.wake_vehicle("car-1")
+    assert await client.s05_wait_for_report("car-1") is condition
+    assert session.called == ["condition", "wake", "wait"]
+
+    await client.close()
+    assert session.stopped is True
+    assert client.mqtt_session is None
+
+
+@pytest.mark.asyncio
+async def test_live_session_refreshes_once_after_authentication_rejection(monkeypatch):
+    from deepal.intl_mqtt import _SessionOutcome
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    calls: list[int] = []
+    refreshes: list[str] = []
+
+    async def fake_connect():
+        calls.append(1)
+        if len(calls) == 1:
+            raise DeepalMqttAuthRejected("rejected", reason_code=0x86)
+        return _SessionOutcome(
+            error=DeepalAPIError("closed"), duration=0.1, connected=True
+        )
+
+    async def fake_refresh(reason: str) -> bool:
+        refreshes.append(reason)
+        return True
+
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        refresh_session=fake_refresh,
+        backoff_initial=0.01,
+        backoff_max=0.02,
+    )
+    monkeypatch.setattr(session, "_connect_once", fake_connect)
+    await session.start()
+    await _wait_until(lambda: len(refreshes) == 1 and len(calls) >= 2)
+    assert len(refreshes) == 1
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_covers_two_mqtt_vehicles_and_skips_sda(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    vehicles = [
+        _live_vehicle(),
+        Vehicle(
+            car_id="car-2",
+            vin="VIN-PLACEHOLDER-2",
+            series_name="S05",
+            model_code="SC6464AAKBEV",
+            protocol_type="MQTT",
+        ),
+        Vehicle(
+            car_id="car-3",
+            vin="VIN-PLACEHOLDER-3",
+            series_name="E07",
+            protocol_type="SDA-MQTT",
+        ),
+    ]
+    received: list[tuple[str, Any]] = []
+    session = client.create_mqtt_session(
+        vehicles,
+        on_condition=lambda vehicle_id, condition: received.append(
+            (vehicle_id, condition)
+        ),
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    assert session.supports("car-1") is True
+    assert session.supports("car-2") is True
+    assert session.supports("car-3") is False
+
+    _feed_live_report(
+        broker,
+        car_id="car-2",
+        request_id="report-car-2",
+        params={
+            "latestDate": "2026-11-19T22:00:00Z",
+            "soc": 55,
+        },
+    )
+    await _wait_until(lambda: any(vehicle_id == "car-2" for vehicle_id, _ in received))
+    assert received[-1][0] == "car-2"
+    assert received[-1][1].battery.soc_percentage == 55
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_condition_request_resolves_with_an_async_report(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, condition_sequence=[])
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    pending = asyncio.create_task(
+        session.request_condition("car-1", timeout=2.0)
+    )
+    await asyncio.sleep(0.1)
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="async-report",
+        params={
+            "latestDate": "2026-11-19T22:00:00Z",
+            "soc": 66,
+        },
+    )
+    condition = await pending
+    assert condition.battery.soc_percentage == 66
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_second_authentication_rejection_does_not_refresh_again(
+    monkeypatch,
+):
+    from deepal.intl_mqtt import _SessionOutcome
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    calls: list[int] = []
+    refreshes: list[str] = []
+
+    async def fake_connect():
+        calls.append(1)
+        raise DeepalMqttAuthRejected("rejected", reason_code=0x87)
+
+    async def fake_refresh(reason: str) -> bool:
+        refreshes.append(reason)
+        return True
+
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        refresh_session=fake_refresh,
+        backoff_initial=0.01,
+        backoff_max=0.02,
+    )
+    monkeypatch.setattr(session, "_connect_once", fake_connect)
+    await session.start()
+    await _wait_until(lambda: len(refreshes) == 1 and len(calls) >= 2)
+    await asyncio.sleep(0.05)
+    assert len(refreshes) == 1
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_refreshes_on_ca_gateway_token_rejection(monkeypatch):
+    from deepal.intl_mqtt import _SessionOutcome
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    calls: list[int] = []
+    refreshes: list[str] = []
+
+    async def fake_connect():
+        calls.append(1)
+        if len(calls) == 1:
+            raise DeepalAPIError(
+                "rejected", code="APIGW_-1_7_01_004"
+            )
+        return _SessionOutcome(
+            error=DeepalAPIError("closed"), duration=0.1, connected=True
+        )
+
+    async def fake_refresh(reason: str) -> bool:
+        refreshes.append(reason)
+        return True
+
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        refresh_session=fake_refresh,
+        backoff_initial=0.01,
+        backoff_max=0.02,
+    )
+    monkeypatch.setattr(session, "_connect_once", fake_connect)
+    await session.start()
+    await _wait_until(lambda: len(refreshes) == 1 and len(calls) >= 2)
+    assert len(refreshes) == 1
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_drops_a_stale_report(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    received: list[Any] = []
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_condition=lambda vehicle_id, condition: received.append(condition),
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-new",
+        params={
+            **S05_BROKER_PARAMS,
+            "latestDate": "2026-11-19T22:00:00Z",
+            "soc": 71,
+        },
+    )
+    await _wait_until(lambda: len(received) == 1)
+    assert received[0].condition_source == "mqtt-push"
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-stale",
+        params={
+            "latestDate": "2026-11-19T21:00:00Z",
+            "soc": 10,
+        },
+    )
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+    assert received[0].battery.soc_percentage == 71
+
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-newer",
+        params={
+            "latestDate": "2026-11-19T23:00:00Z",
+            "soc": 72,
+        },
+    )
+    await _wait_until(lambda: len(received) == 2)
+    assert received[-1].battery.soc_percentage == 72
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_does_not_publish_a_solicited_condition(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    received: list[Any] = []
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_condition=lambda vehicle_id, condition: received.append(condition),
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    condition = await session.request_condition("car-1", timeout=1.0)
+
+    assert condition.condition_source == "legacy-mqtt"
+    assert received == []
+    assert session.stats().reports == 1
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_without_a_login_secret_never_reports_connected(
+    monkeypatch,
+):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, secret_key="")
+    _install_fake_broker(monkeypatch, broker)
+    monkeypatch.setattr(intl_module, "MQTT_EXCHANGE_TIMEOUT", 0.2)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        backoff_initial=0.01,
+        backoff_max=0.02,
+    )
+    await session.start()
+    await _wait_until(lambda: session.stats().last_error is not None)
+    await asyncio.sleep(0.1)
+    assert session.is_connected is False
+    assert session.stats().connects == 0
+    assert "secret key" in (session.stats().last_error or "")
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_condition_falls_back_to_one_shot_when_the_session_is_in_backoff():
+    from deepal import VehicleCondition
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    expected = VehicleCondition(car_id="car-1", vin="VIN-PLACEHOLDER-1")
+
+    class BackoffSession:
+        is_connected = False
+        is_connecting = False
+        is_active = True
+        state = "backoff"
+
+        @staticmethod
+        def supports(vehicle_id: str) -> bool:
+            return vehicle_id == "car-1"
+
+        async def wait_connected(self, timeout: float) -> bool:
+            return False
+
+        async def request_condition(self, vehicle_id: str, **kwargs: Any) -> Any:
+            raise AssertionError("a reconnecting session must not be used")
+
+    client.mqtt_session = BackoffSession()
+
+    async def fake_locked(vehicle_id: str, vin: Any = None, *, sda: bool = False):
+        assert sda is False
+        return expected
+
+    client._s05_mqtt_condition_locked = fake_locked
+    assert await client.s05_mqtt_condition("car-1") is expected
+
+
+@pytest.mark.asyncio
+async def test_condition_waits_for_a_connecting_session_and_delegates():
+    from deepal import VehicleCondition
+
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    expected = VehicleCondition(car_id="car-1", vin="VIN-PLACEHOLDER-1")
+    calls: list[str] = []
+
+    class ConnectingSession:
+        is_connected = False
+        is_connecting = True
+        is_active = True
+        state = "connecting"
+
+        @staticmethod
+        def supports(vehicle_id: str) -> bool:
+            return vehicle_id == "car-1"
+
+        async def wait_connected(self, timeout: float) -> bool:
+            self.is_connected = True
+            self.is_connecting = False
+            return True
+
+        async def request_condition(self, vehicle_id: str, **kwargs: Any) -> Any:
+            calls.append(vehicle_id)
+            return expected
+
+    client.mqtt_session = ConnectingSession()
+    assert await client.s05_mqtt_condition("car-1") is expected
+    assert calls == ["car-1"]
+
+
+@pytest.mark.asyncio
+async def test_live_session_filters_duplicates_and_routes_events_and_unknown_vehicles(
+    monkeypatch,
+):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    events: list[dict[str, Any]] = []
+    received: list[Any] = []
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_condition=lambda vehicle_id, condition: received.append(condition),
+        on_event=lambda vehicle_id, event: events.append(event),
+    )
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    full = {
+        **S05_BROKER_PARAMS,
+        "latestDate": "2026-11-19T22:00:00Z",
+        "soc": 71,
+    }
+    _feed_live_report(
+        broker, car_id="car-1", request_id="report-1", params=full
+    )
+    await _wait_until(lambda: len(received) == 1)
+
+    # Same timestamp and the same parameters: an exact duplicate is ignored.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-2",
+        params=dict(full),
+    )
+    await asyncio.sleep(0.05)
+    assert len(received) == 1
+
+    # Same timestamp but a new fragment: the car splits a snapshot into
+    # several messages that share one second, so it must be merged.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="report-2b",
+        params={"latestDate": "2026-11-19T22:00:00Z", "passengerDoor": 1},
+    )
+    await _wait_until(lambda: len(received) == 2)
+    assert received[-1].doors.passenger_door_open is True
+
+    # Unknown vehicle: counted as dropped, never emitted.
+    _feed_live_report(
+        broker,
+        car_id="car-unknown",
+        request_id="report-3",
+        params={"latestDate": "2026-11-19T23:00:00Z", "soc": 50},
+    )
+    await asyncio.sleep(0.05)
+    assert all(condition.car_id == "car-1" for condition in received)
+
+    # An event topic reaches the event callback.
+    encrypted = aes_cbc_encrypt(
+        [{"service_code": "event", "params": {"kind": "test"}}],
+        broker.secret_key,
+        "event-1",
+    )
+    broker.reader.feed_data(
+        build_publish_packet(
+            "$vdp/device-did/events/up",
+            {"r": "event-1", "b": {"cid": "car-1"}, "rs": encrypted},
+        )
+    )
+    await _wait_until(lambda: len(events) == 1)
+
+    # The configuration fallback topic also reaches the event callback.
+    encrypted_server = aes_cbc_encrypt(
+        [{"service_code": "event", "params": {"kind": "server"}}],
+        broker.secret_key,
+        "event-2",
+    )
+    broker.reader.feed_data(
+        build_publish_packet(
+            "$vdp/device-did/server/event",
+            {"r": "event-2", "b": {"cid": "car-1"}, "rs": encrypted_server},
+        )
+    )
+    await _wait_until(lambda: len(events) == 2)
+
+    # An undecryptable report is dropped, not raised.
+    broker.reader.feed_data(
+        build_publish_packet(
+            "$vdp/device-did/properties/report",
+            {"r": "broken", "b": {"cid": "car-1"}, "rs": "not-base64"},
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert session.stats().dropped >= 2
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_condition_timeout_clears_the_pending_request(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, condition_sequence=[])
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    with pytest.raises(DeepalAPIError):
+        await session.request_condition("car-1", timeout=0.05)
+
+    assert session._pending == {}
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_wait_ignores_a_response_without_a_timestamp(monkeypatch):
+    broker = _FakeMqttBroker(
+        S05_BROKER_PARAMS,
+        condition_sequence=[
+            {"service_code": "car_condition", "params": {"soc": 55}}
+        ],
+    )
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    result = await session.wait_for_report(
+        "car-1", previous_timestamp=1000, interval=0.01, timeout=0.15
+    )
+
+    assert result is None
+    await session.stop()
+    await client.close()
+
+
+def test_live_session_types_are_public():
+    assert DeepalIntlMqttSession.__name__ == "DeepalIntlMqttSession"
+    assert MqttSessionState.CONNECTED.value == "connected"
+    assert MqttSessionStats().state == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_live_session_stop_fails_a_pending_condition_request(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS, condition_sequence=[])
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    pending = asyncio.create_task(
+        session.request_condition("car-1", timeout=5.0)
+    )
+    await asyncio.sleep(0.05)
+    await session.stop()
+
+    with pytest.raises(DeepalAPIError):
+        await pending
+    assert session._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_live_session_translates_a_write_failure(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    session = client.create_mqtt_session([_live_vehicle()])
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    async def fail_write(data: bytes) -> None:
+        raise ConnectionResetError("peer reset")
+
+    monkeypatch.setattr(session, "_write", fail_write)
+    with pytest.raises(DeepalAPIError):
+        await session.request_condition("car-1", timeout=1.0)
+
+    await session.stop()
+    await client.close()

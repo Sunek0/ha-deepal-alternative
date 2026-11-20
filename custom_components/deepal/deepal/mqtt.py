@@ -17,9 +17,10 @@ import logging
 import math
 import ssl
 import struct
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any, Optional
 
 from cryptography.hazmat.primitives import padding as symmetric_padding
@@ -209,7 +210,9 @@ def build_disconnect_packet(reason_code: int = 0x00) -> bytes:
     return bytes([0xE0, 0x02, reason_code & 0xFF, 0x00])
 
 
-async def read_packet(reader: asyncio.StreamReader) -> tuple[int, bytes]:
+async def read_packet(
+    reader: asyncio.StreamReader, *, max_size: Optional[int] = None
+) -> tuple[int, bytes]:
     """Read one MQTT control packet and return its first byte and body."""
     first = (await reader.readexactly(1))[0]
     multiplier = 1
@@ -220,6 +223,11 @@ async def read_packet(reader: asyncio.StreamReader) -> tuple[int, bytes]:
         if not byte & 0x80:
             break
         multiplier *= 128
+    if max_size is not None and remaining > max_size:
+        raise ValueError(
+            f"MQTT packet of {remaining} bytes exceeds the broker maximum of "
+            f"{max_size} bytes."
+        )
     return first, await reader.readexactly(remaining)
 
 
@@ -228,13 +236,15 @@ async def read_packet_with_keepalive(
     writer: asyncio.StreamWriter,
     timeout: float,
     keepalive: Optional[float] = None,
+    *,
+    max_size: Optional[int] = None,
 ) -> tuple[int, bytes]:
     """Read one packet, sending PINGREQ when the keepalive elapses while waiting."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     interval = float(keepalive) if keepalive and keepalive > 0 else None
     next_ping = loop.time() + interval if interval else None
-    task = asyncio.ensure_future(read_packet(reader))
+    task = asyncio.ensure_future(read_packet(reader, max_size=max_size))
     try:
         while True:
             now = loop.time()
@@ -744,6 +754,115 @@ def _first_setting(source: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
+class MqttSessionState(str, Enum):
+    """Lifecycle state of the supervised live MQTT session."""
+
+    STOPPED = "stopped"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    BACKOFF = "backoff"
+    CONFLICT = "conflict"
+
+
+@dataclass
+class MqttSessionStats:
+    """Observable counters of one live MQTT session."""
+
+    state: str = MqttSessionState.STOPPED.value
+    connects: int = 0
+    reconnects: int = 0
+    messages: int = 0
+    reports: int = 0
+    events: int = 0
+    dropped: int = 0
+    last_error: Optional[str] = None
+    last_message_at: Optional[float] = None
+    connected_since: Optional[float] = None
+    subscriptions: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a diagnostics-safe dictionary."""
+        return {
+            "state": self.state,
+            "connects": self.connects,
+            "reconnects": self.reconnects,
+            "messages": self.messages,
+            "reports": self.reports,
+            "events": self.events,
+            "dropped": self.dropped,
+            "last_error": self.last_error,
+            "last_message_at": self.last_message_at,
+            "connected_since": self.connected_since,
+            "subscriptions": list(self.subscriptions),
+        }
+
+
+class MqttKeepalive:
+    """Send PINGREQ while the live session is idle and detect a missing PINGRESP."""
+
+    def __init__(
+        self,
+        writer: Any,
+        write_lock: asyncio.Lock,
+        keepalive: float,
+        *,
+        on_timeout: Callable[[str], Awaitable[None]],
+        interval_factor: float = 0.5,
+    ) -> None:
+        self._writer = writer
+        self._write_lock = write_lock
+        self._keepalive = max(1.0, float(keepalive))
+        self._on_timeout = on_timeout
+        self._interval = max(0.05, self._keepalive * interval_factor)
+        self._loop = asyncio.get_running_loop()
+        self._last_send = self._loop.time()
+        self._awaiting_pong = False
+        self._ping_sent_at = 0.0
+
+    def note_send(self) -> None:
+        """Record client-to-broker traffic so an idle ping is not needed yet."""
+        self._last_send = self._loop.time()
+
+    def note_pingresp(self) -> None:
+        """Clear the outstanding ping after a PINGRESP."""
+        self._awaiting_pong = False
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        """Maintain the keepalive until stopped or the broker stops answering."""
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(), timeout=min(self._interval, 1.0)
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            now = self._loop.time()
+            if self._awaiting_pong:
+                if now - self._ping_sent_at > self._keepalive:
+                    await self._on_timeout(
+                        "PINGRESP not received within the keepalive"
+                    )
+                    return
+                continue
+            if now - self._last_send < self._interval:
+                continue
+            # Mark the ping outstanding before draining: the reader can process
+            # the PINGRESP while drain() yields, and setting the flag afterwards
+            # would miss it and trigger a false keepalive timeout.
+            self._awaiting_pong = True
+            self._ping_sent_at = now
+            try:
+                async with self._write_lock:
+                    self._writer.write(build_pingreq_packet())
+                    await self._writer.drain()
+            except (ConnectionError, OSError, RuntimeError) as exc:
+                self._awaiting_pong = False
+                await self._on_timeout(f"PINGREQ failed: {type(exc).__name__}")
+                return
+            self._last_send = now
+
+
 @dataclass(frozen=True)
 class MqttBrokerSettings:
     """Broker limits and connection options from the CA ``clusterInfos`` block."""
@@ -755,6 +874,7 @@ class MqttBrokerSettings:
     keepalive: float = MQTT_DEFAULT_KEEPALIVE
     server_keep_alive: Optional[int] = None
     maximum_qos: Optional[int] = None
+    maximum_packet_size: Optional[int] = None
 
     @property
     def usable(self) -> bool:
@@ -778,10 +898,17 @@ class MqttBrokerSettings:
 
     def with_connack(self, info: ConnackInfo) -> MqttBrokerSettings:
         """Return the settings with the broker-provided CONNACK limits applied."""
+        maximum_packet_size = _optional_int(
+            info.properties.get("maximum_packet_size")
+        )
         return replace(
             self,
             server_keep_alive=_optional_int(info.properties.get("server_keep_alive")),
             maximum_qos=_optional_int(info.properties.get("maximum_qos")),
+            maximum_packet_size=(
+                maximum_packet_size if maximum_packet_size and maximum_packet_size > 0
+                else None
+            ),
         )
 
 
@@ -1711,6 +1838,20 @@ def _as_int(value: Any) -> Optional[int]:
     return None if number is None else int(number)
 
 
+def _steering_wheel_heater_state(value: Any) -> Optional[int]:
+    """Map the MQTT steering-wheel enum to the REST 0/1 field.
+
+    Confirmed on 2026-11-20 with the app and the physical wheel: ``2`` means
+    on and ``1`` means off; ``0`` is also off. The old mapping treated any
+    nonzero value as on, so the constant ``1`` reports made the Home Assistant
+    switch flap while the heater was off.
+    """
+    parsed = _as_int(value)
+    if parsed is None:
+        return None
+    return 1 if parsed >= 2 else 0
+
+
 # The app reports 8191 in chargDeltMins when it has no remaining-time estimate.
 CHARGE_TIME_SENTINEL = 8191
 
@@ -1862,12 +2003,15 @@ def _first(params: dict[str, Any], *keys: str) -> Any:
 def _seat_level(value: Any) -> Optional[int]:
     """Return a seat heating or ventilation level, or None when it is unknown.
 
-    The vehicle reports both functions 1:1 with the app's 0-3 levels, and it
-    sends 6 while the seat module is asleep. The sleep sentinel and any other
-    out-of-range value mean the level is unknown, not a level, so callers can
-    keep the last valid value instead of exposing a made-up one.
+    The vehicle reports both functions 1:1 with the app's 0-3 levels. The
+    value 6 is the sleep sentinel: the app shows the function off, so it maps
+    to 0 (verified live on 2026-11-20 after turning seat ventilation off; the
+    car went 1 → 6 and the app showed 0). Any other out-of-range value means
+    the level is unknown, so callers can keep the last valid value.
     """
     parsed = _as_int(value)
+    if parsed == 6:
+        return 0
     if parsed is None or not 0 <= parsed <= 3:
         return None
     return parsed
@@ -2090,14 +2234,44 @@ def _to_millis(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     if isinstance(value, str) and value:
+        text = value.strip()
         try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return int(text)
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
             return int(datetime.now(UTC).timestamp() * 1000)
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
         return int(parsed.timestamp() * 1000)
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def s05_report_timestamp(params: Mapping[str, Any]) -> Optional[int]:
+    """Return the report timestamp in seconds, or ``None`` when it is absent.
+
+    Unlike :func:`_to_millis`, an absent or unparseable timestamp stays
+    ``None``: a partial delta without a timestamp must not look like the
+    current time and defeat the stale-report filter. Numeric timestamps are
+    milliseconds, matching :func:`normalize_s05_params`.
+    """
+    latest = _first(params, "lastUpdatedTime", "lastUpdatedAt", "latestDate")
+    if latest is None or latest == "":
+        return None
+    if isinstance(latest, (int, float)):
+        return int(latest) // 1000
+    text = str(latest).strip()
+    if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+        return int(text) // 1000
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.timestamp())
 
 
 def normalize_s05_params(
@@ -2148,10 +2322,10 @@ def normalize_s05_params(
             "connectStatus": 1,
             "powerStatus": power_status,
             "epbSts": _as_int(params.get("electronichandbrakeStatus")),
-            # Fallback only: with the heater off the car can still report 1
-            # here; the app condition overlay keeps priority (see
-            # docs/intl-api.md).
-            "steeringWheelHeater": _as_int(params.get("steeringWheelHeating")),
+            # 2 = on, 1 = off (verified live 2026-11-20); see docs/intl-api.md.
+            "steeringWheelHeater": _steering_wheel_heater_state(
+                params.get("steeringWheelHeating")
+            ),
         },
         "hvac": {
             "insideTemp": _as_float(params.get("vehicleTemperature")) * 10

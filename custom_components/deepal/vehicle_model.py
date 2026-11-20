@@ -131,7 +131,10 @@ def uses_s05_charge_enum(vehicle: Any, condition: Any) -> bool:
     """
     if vehicle is None or not is_s05(vehicle):
         return False
-    return (getattr(condition, "condition_source", None) or "") == "legacy-mqtt"
+    return (getattr(condition, "condition_source", None) or "") in (
+        "legacy-mqtt",
+        "mqtt-push",
+    )
 
 
 def supports_charge_limit(vehicle: Any, capabilities: Any) -> bool:

@@ -125,9 +125,9 @@ authorizations service is not deployed in every region (the European gateway ans
   when it does not move.
 - Comfort states are tri-state: `climate.power_on` is `None` when the report omits it, which means
   **unknown**, not off.
-- Sleeping modules report sentinel values (for example seat level `6`); out-of-range comfort levels
-  map to `None`, never to a made-up level. Keep the last valid value in your application until a
-  good report arrives.
+- Sleeping modules report the sentinel `6` for seat levels; it maps to `0` (off), matching the
+  app. Other out-of-range comfort levels map to `None`, never to a made-up level. Keep the last
+  valid value in your application until a good report arrives.
 - Mileage and charge fields follow the same rule: a missing or invalid value is `None` (or a model
   default), not an error.
 

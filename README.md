@@ -39,7 +39,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   reauthentication flow. If a verification code does not arrive, the login step can resend it or
   correct the destination; Changan is currently not delivering SMS codes, so the email method is
   recommended.
-- Integration options for the scan interval, API logging and the regional environment.
+- Integration options for the scan interval, API logging, the regional environment, the vehicle
+  wake and the live MQTT session.
 
 ### Telemetry
 
@@ -50,6 +51,11 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
   brakes, power steering, power limit, power system, traction battery low and coolant
   temperature), the key fob battery, the air recirculation state and the rear fog lamp.
+- **Live MQTT session**: Home Assistant keeps one MQTT connection open for MQTT vehicles, so the
+  car's unsolicited reports (doors, windows, climate, odometer, charge state) reach the entities in
+  seconds instead of waiting for the next poll. It is enabled by default for `protocolType: MQTT`
+  vehicles and can be disabled in the options. The periodic poll and the REST condition remain in
+  place; the charge schedule is a REST-only field and refreshes with the periodic scan.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
 - Climate target temperature, outside temperature (when the vehicle reports it; the S05 does not),
@@ -67,8 +73,9 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   sleeping vehicle with the same service the official app uses and waits for a fresh report; wakes
   are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
   never wakes the car.
-- While a charging session is open, the integration reads only the charging vehicles every 10
-  minutes and stops as soon as the session closes.
+- While a charging session is open, every two main polls (10 minutes with the default 300 s
+  scan) the integration wakes the charging vehicle and reads only it, and stops as soon as the
+  session closes.
 - Waking the vehicle can take up to 20 seconds before it reports again.
 - REST-backed and `SDA-MQTT` vehicles keep using the signed condition request; the MQTT wake is only
   available for CA/MQTT vehicles.
@@ -281,6 +288,13 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
+- **Live MQTT session**: keep one MQTT connection open for MQTT vehicles so their reports arrive in
+  seconds. Enabled by default; disable it to return to the one-shot polling behavior. The phone app
+  and Home Assistant can normally stay connected at the same time because each installation gets
+  its own MQTT identity; if the app disconnects while the live session is on, disable the option.
+  The live connection itself only listens and does not wake the car; the existing refresh and
+  command wake behavior is unchanged. Pushed reports do not trigger REST calls. The charge
+  schedule remains a REST-only field and refreshes with the periodic scan.
 - **Scan interval**, **API logging**, **full diagnostics capture** and **regional environment**:
   polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging. Every
   cycle reads each vehicle over MQTT plus the app condition, so an account with several cars can

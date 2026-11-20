@@ -4,6 +4,28 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b4 - 2026-11-20
+
+### Added
+
+- Live MQTT telemetry for international MQTT entries (S05 family): one supervised connection
+  receives the vehicle's unsolicited reports in seconds, accumulates partial deltas and publishes
+  them to Home Assistant with burst coalescing. The live session is enabled by default and can be
+  disabled in the options; the one-shot exchange remains the fallback. REST-only fields (charge
+  plan, seats while asleep, steering wheel, defrost and static fuel values) keep refreshing with the
+  periodic scan.
+- A read-only MQTT live probe under `tools/mqtt-live-probe/` to validate topics, identity,
+  coexistence with the phone app and message latency.
+
+### Fixed
+
+- The S05 airbag, ABS and power-steering warning lights no longer report a false `Problem` after a
+  wake or a Home Assistant restart. A non-zero REST subsystem register is only trusted after a
+  settled ready window and a fresh app report; healthy last values survive sleep and restart, but an
+  unconfirmed fault is not revived. Live pushes and command confirmations go through the same rule,
+  and a confirmed fault is kept when a push wins the poll.
+- A REST-only S05, or an MQTT vehicle that falls back to REST, follows the same warning rule.
+
 ## 1.9.0-b3 - 2026-11-19
 
 ### Changed
