@@ -259,12 +259,6 @@
       "total_odometer": {
         "name": "Contachilometri totale"
       },
-      "mileage_yesterday": {
-        "name": "Contachilometri ieri"
-      },
-      "trip_mileage": {
-        "name": "Contachilometri viaggio"
-      },
       "tire_pressure_front_left": {
         "name": "Pressione pneumatico anteriore sinistro"
       },
@@ -312,6 +306,9 @@
       },
       "cabin_humidity": {
         "name": "Clima umidità dell'abitacolo"
+      },
+      "absolute_humidity": {
+        "name": "Clima umidità assoluta"
       },
       "inside_pm25": {
         "name": "Clima PM2.5 interno"

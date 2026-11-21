@@ -35,6 +35,7 @@ from deepal import (
     FLASH_HONK_FLASH,
     FLASH_HONK_FLASH_BEE,
     FLASH_HONK_OFF,
+    relative_humidity_from_absolute,
 )
 from deepal.mqtt import (
     SDA_CONDITION_SECTIONS,
@@ -1660,27 +1661,6 @@ async def test_get_vehicle_condition_without_raw_vin_uses_parameter():
 
 
 @pytest.mark.asyncio
-async def test_get_vehicle_condition_maps_mqtt_mileage_fields():
-    payload = {
-        "vehicleStatus": {
-            "totalMeterYesterday": 42.5,
-            "igniteCumulativeMileage": 12.25,
-        }
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"success": True, "code": "0", "data": payload})
-
-    client = _client(handler)
-    client.access_token = "test_token_123"
-    condition = await client.get_vehicle_condition("test-car-1")
-    await client.close()
-
-    assert condition.mileage_yesterday_km == 42.5
-    assert condition.trip_mileage_km == 12.25
-
-
-@pytest.mark.asyncio
 async def test_get_vehicle_condition_defaults_for_missing_groups():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"success": True, "code": "0", "data": {}})
@@ -1703,8 +1683,6 @@ async def test_get_vehicle_condition_defaults_for_missing_groups():
     assert condition.seats.front_right.ventilation_level is None
     assert condition.tires.front_left.pressure_bar is None
     assert condition.tires.rear_right.alarm is False
-    assert condition.mileage_yesterday_km is None
-    assert condition.trip_mileage_km is None
 
 
 @pytest.mark.asyncio
@@ -4835,7 +4813,7 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
         "hvac": {
             "insideTemp": 215,
             "outsideTemp": 180,
-            "insideHumidity": 445,
+            "insideHumidity": 84,
             "insidePm25": 12,
             "insideAirQualityLevel": 3,
             "defrostStatus": 1,
@@ -4883,7 +4861,8 @@ async def test_get_vehicle_condition_maps_extended_status_groups():
     assert condition.connected is True
     assert condition.climate.inside_temperature_c == 21.5
     assert condition.climate.outside_temperature_c == 18.0
-    assert condition.climate.humidity == 44.5
+    assert condition.climate.absolute_humidity == 8.4
+    assert condition.climate.relative_humidity == 44.6
     assert condition.climate.inside_pm25 == 12
     assert condition.climate.air_quality_level == 3
     assert condition.climate.defrost_on is True
@@ -5159,7 +5138,21 @@ def test_parse_condition_converts_the_humidity_fixed_point_scale(raw, expected):
 
     condition = client.parse_condition({"hvac": {"insideHumidity": raw}}, "car-1")
 
-    assert condition.climate.humidity == expected
+    assert condition.climate.absolute_humidity == expected
+    # Without a cabin temperature the percentage cannot be derived.
+    assert condition.climate.relative_humidity is None
+
+
+def test_relative_humidity_requires_both_inputs():
+    assert relative_humidity_from_absolute(None, 20.0) is None
+    assert relative_humidity_from_absolute(11.1, None) is None
+    assert relative_humidity_from_absolute(0, 20.0) is None
+
+
+def test_relative_humidity_is_rounded_and_clamped():
+    assert relative_humidity_from_absolute(11.1, 26.0) == 45.7
+    assert relative_humidity_from_absolute(14.4, 23.0) == 70.2
+    assert relative_humidity_from_absolute(100.0, 20.0) == 100.0
 
 
 def test_parse_condition_converts_mqtt_humidity_exactly_once():
@@ -5170,7 +5163,7 @@ def test_parse_condition_converts_mqtt_humidity_exactly_once():
             normalize_s05_params({"innerHumidity": raw}), "car-1"
         )
 
-        assert condition.climate.humidity == expected
+        assert condition.climate.absolute_humidity == expected
 
 
 def test_parse_condition_maps_the_vehicle_location():

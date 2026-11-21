@@ -57,6 +57,7 @@ from .const import (
     CONF_USER_ID,
     CONF_MQTT_LIVE_SESSION,
     DEFAULT_ENABLE_LOCATION,
+    CORNER_POSITIONS,
     DEFAULT_MQTT_LIVE_SESSION,
     WAKE_BEFORE_COMMAND_TIMEOUT,
     WAKE_COOLDOWN,
@@ -95,6 +96,10 @@ _PUSH_COALESCE_SECONDS = 0.5
 # power status 2 with the airbag register at 1 for a few seconds (owner report
 # 2026-11-20), so the first ready report after sleep must not raise a fault.
 _S05_WARNING_SETTLE_SECONDS = 60.0
+# The S05 publishes 0.0 kPa on the four wheels in the module-init burst that
+# follows a wake (live capture 2026-11-21: three times, always ~2 s). A zero is
+# only published once it has persisted this long, so a real puncture still shows.
+_TIRE_ZERO_SETTLE_SECONDS = 60.0
 #: The S05 lights sourced from the REST subsystem registers.
 _S05_SUBSYSTEM_WARNING_FIELDS = frozenset(REST_SUBSYSTEM_WARNING_KEYS)
 
@@ -205,7 +210,6 @@ def _path_set(obj: Any, path: str, value: Any) -> None:
     setattr(obj, parts[-1], value)
 
 
-_SEAT_POSITIONS = ("front_left", "front_right", "rear_left", "rear_right")
 _SEAT_LEVEL_FIELDS = ("heating_level", "ventilation_level")
 
 
@@ -215,7 +219,7 @@ def _overlay_seat_levels(source: Any, target: Any) -> None:
     Fields the source does not know (``None``) are left alone, so a partial
     app condition cannot wipe a level the MQTT snapshot did report.
     """
-    for position in _SEAT_POSITIONS:
+    for position in CORNER_POSITIONS:
         source_seat = getattr(source, position)
         target_seat = getattr(target, position)
         for field in _SEAT_LEVEL_FIELDS:
@@ -234,7 +238,7 @@ def _retain_seat_levels(
     whose last written value came from an unconfirmed optimistic update are not
     retained (``pending``): they expire instead of staying frozen.
     """
-    for position in _SEAT_POSITIONS:
+    for position in CORNER_POSITIONS:
         previous_seat = getattr(previous, position)
         seat = getattr(condition, position)
         for field in _SEAT_LEVEL_FIELDS:
@@ -495,6 +499,12 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         # fresh REST block; both are memory-only, so a restart starts unconfirmed.
         self._ready_since: dict[str, float] = {}
         self._last_app_report_ts: dict[str, int | None] = {}
+        # Per-vehicle, per-tire start of a zero-pressure reading, used to tell a
+        # module-init glitch from a real puncture, plus the condition object
+        # already guarded so a double merge does not process the same report
+        # twice.
+        self._tire_zero_since: dict[str, dict[str, float]] = {}
+        self._tire_guard_condition: dict[str, VehicleCondition] = {}
         self._last_wake_at: dict[str, float] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._wake_poll_interval = _WAKE_POLL_INTERVAL
@@ -1457,6 +1467,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return pending is None or path not in pending
 
         previous = self._previous_condition(vehicle_id)
+        self._retain_valid_tire_pressures(vehicle_id, previous, condition)
         if previous is not None:
             if condition.latitude is None:
                 condition.latitude = previous.latitude
@@ -1514,6 +1525,68 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 condition.climate.defrost_on = previous.climate.defrost_on
             _retain_seat_levels(previous.seats, condition.seats, pending)
         return condition
+
+    def _retain_valid_tire_pressures(
+        self,
+        vehicle_id: str,
+        previous: VehicleCondition | None,
+        condition: VehicleCondition,
+        *,
+        now: float | None = None,
+    ) -> None:
+        """Keep the last valid pressure while a zero is a wake-burst glitch.
+
+        The car publishes ``0.0`` on the four wheels in the module-init burst
+        that follows a wake (live S05 BEV, 2026-11-21: three times, always about
+        two seconds after a valid snapshot and followed by the real values).
+        Publishing that zero would make Home Assistant report four flat tires,
+        so a zero keeps the last confirmed pressure until it has persisted for
+        ``_TIRE_ZERO_SETTLE_SECONDS``; from then on it is published, because a
+        real puncture must stay visible. A positive reading clears the timer.
+
+        The poll path merges a fetched condition twice (the fetch merges it and
+        the apply merges it again). The second pass carries the value we just
+        restored, so it must not be mistaken for a fresh positive reading and
+        clear the timer: each report object is guarded once.
+
+        ``now`` is injectable so the 60-second window can be exercised without
+        waiting; production always uses the monotonic clock.
+        """
+        if not _group_was_reported(condition, "tires"):
+            # A delta without tire keys says nothing about the tires; the group
+            # retention copies the last published values afterwards.
+            return
+        if self._tire_guard_condition.get(vehicle_id) is condition:
+            # The poll path merges the same condition twice. Reports are
+            # distinct objects even when two of them share a one-second
+            # timestamp, so identity is the right dedupe key.
+            return
+        current_time = time.monotonic() if now is None else now
+        zeros = self._tire_zero_since.setdefault(vehicle_id, {})
+        for position in CORNER_POSITIONS:
+            tire = getattr(condition.tires, position, None)
+            if tire is None or tire.pressure_bar is None:
+                continue
+            if tire.pressure_bar > 0:
+                zeros.pop(position, None)
+                continue
+            started = zeros.setdefault(position, current_time)
+            if current_time - started >= _TIRE_ZERO_SETTLE_SECONDS:
+                continue
+            previous_tire = (
+                getattr(previous.tires, position, None)
+                if previous is not None
+                else None
+            )
+            tire.pressure_bar = (
+                previous_tire.pressure_bar if previous_tire is not None else None
+            )
+            _LOGGER.debug(
+                "Deepal %s: ignoring an invalid 0.0 bar reading on %s",
+                vehicle_id,
+                position,
+            )
+        self._tire_guard_condition[vehicle_id] = condition
 
     @staticmethod
     def _condition_is_fresh(
@@ -1905,13 +1978,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 vehicle_id, timeout=WAKE_BEFORE_COMMAND_TIMEOUT
             )
 
-    async def async_refresh_vehicle(
-        self, vehicle_id: str, *, force_wake: bool = False
-    ) -> WakeResult:
+    async def async_refresh_vehicle(self, vehicle_id: str) -> WakeResult:
         """Refresh one vehicle, waking it first when its report is stale.
-
-        ``force_wake`` is used by the charging loop to wake the charging
-        vehicle every two main polls even when its last report is still fresh.
 
         MQTT vehicles are woken through the app's ``TxWakeup`` service when the
         last report is older than the stale threshold and the per-vehicle wake
@@ -1920,6 +1988,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         Concurrent refreshes share the per-vehicle wake lock, so a single wake
         is published per cooldown window. REST vehicles keep the signed
         condition-inquiry request.
+
+        The charging loop does not use this path for MQTT vehicles: the live
+        session already streams their charge telemetry, so it reads them without
+        a wake (see :meth:`_async_read_charging_vehicle`).
         """
         vehicle = self._vehicle(vehicle_id)
         current = (self.data or {}).get(vehicle_id)
@@ -1931,24 +2003,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 # is not implemented for the SDA architecture, so the refresh
                 # falls through to the normal SDA condition update.
                 return WakeResult.NOT_NEEDED
-            if force_wake:
-                if not self.wake_enabled:
-                    return WakeResult.NOT_NEEDED
-            else:
+            reason = self._wake_block_reason(vehicle_id, previous)
+            if reason is not None:
+                self._record_wake_result(vehicle_id, reason, wake_sent=False)
+                return reason
+            async with self._vehicle_wake_lock(vehicle_id):
                 reason = self._wake_block_reason(vehicle_id, previous)
                 if reason is not None:
                     self._record_wake_result(
                         vehicle_id, reason, wake_sent=False
                     )
                     return reason
-            async with self._vehicle_wake_lock(vehicle_id):
-                if not force_wake:
-                    reason = self._wake_block_reason(vehicle_id, previous)
-                    if reason is not None:
-                        self._record_wake_result(
-                            vehicle_id, reason, wake_sent=False
-                        )
-                        return reason
                 return await self._async_wake_and_wait(
                     vehicle_id, wait_when_unconfirmed=True
                 )
@@ -2211,11 +2276,23 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 self._charging_read_stop = None
 
     async def _async_read_charging_vehicle(self, vehicle_id: str) -> None:
-        """Read one charging vehicle without polling the parked ones."""
-        result = await self.async_refresh_vehicle(vehicle_id, force_wake=True)
-        if result is WakeResult.FRESH:
-            return
-        condition = await self._async_fetch_condition(vehicle_id)
+        """Read one charging vehicle without polling the parked ones.
+
+        An MQTT vehicle reports its charge telemetry through the live session
+        every ~25 s while charging (live S05 BEV, 2026-11-21), so the loop reads
+        it without waking it: the request goes over the already open session and
+        the app-condition overlay still refreshes the REST-only charge plan.
+        Waking it every ten minutes only cost 12 V and API quota. A vehicle
+        without MQTT telemetry keeps the wake policy and the inquiry path.
+        """
+        vehicle = self._vehicle(vehicle_id)
+        if vehicle is not None and self._uses_mqtt(vehicle):
+            condition = await self._async_fetch_condition(vehicle_id)
+        else:
+            result = await self.async_refresh_vehicle(vehicle_id)
+            if result is WakeResult.FRESH:
+                return
+            condition = await self._async_fetch_condition(vehicle_id)
         await self._async_apply_condition(vehicle_id, condition)
 
     def _vehicle_command_lock(self, vehicle_id: str) -> asyncio.Lock:

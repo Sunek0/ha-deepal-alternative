@@ -259,12 +259,6 @@
       "total_odometer": {
         "name": "Kilometraje total"
       },
-      "mileage_yesterday": {
-        "name": "Kilometraje ayer"
-      },
-      "trip_mileage": {
-        "name": "Kilometraje trayecto"
-      },
       "tire_pressure_front_left": {
         "name": "Presión neumático delantero izquierdo"
       },
@@ -312,6 +306,9 @@
       },
       "cabin_humidity": {
         "name": "Humedad del habitáculo"
+      },
+      "absolute_humidity": {
+        "name": "Humedad absoluta del habitáculo"
       },
       "inside_pm25": {
         "name": "PM2.5 interior"

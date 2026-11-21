@@ -1912,6 +1912,19 @@ MAX_CHARGE_CURRENT_A = 600.0
 # S05 BEV, whose real peak is above it.
 MAX_PHEV_CHARGE_CURRENT_A = 250.0
 
+# DC current the S05 publishes while its modules initialise: every wake of the
+# live capture (2026-11-21) carried ``-400.0`` with no charging state, always
+# about two seconds after a valid full snapshot. A real 400 A DC current only
+# happens while DC charging (state 4), so the sentinel is dropped only when no
+# charging state is recognised.
+WAKE_DC_CURRENT_SENTINEL_A = 400.0
+
+# Cabin target-temperature range the gateway accepts (18.0-32.0 °C). The car
+# cannot hold a setpoint outside it, so an out-of-range sample is a module-init
+# default: the same capture published ``17.5`` on every wake.
+CABIN_TARGET_MIN_C = 18.0
+CABIN_TARGET_MAX_C = 32.0
+
 # S05 charge-connection aliases: the app's AC gun name plus the DC gun names the
 # mapping still accepts (the app writes "dcDhargeGun..." with the typo).
 S05_CHARGE_GUN_KEYS = (
@@ -1932,6 +1945,49 @@ def _as_charge_time(value: Any) -> Optional[int]:
     if minutes == CHARGE_TIME_SENTINEL:
         return None
     return minutes
+
+
+def _remaining_charge_time(value: Any, state_value: Any) -> Optional[int]:
+    """Return the S05 remaining charge time, dropping the wake-burst zero.
+
+    ``8191`` is the app sentinel for "no estimate". ``0`` is only meaningful
+    while the car is actively charging (states 3/4); a parked car reports a
+    ``0.0`` module default when it wakes (live S05 BEV, 2026-11-21), which would
+    otherwise reach Home Assistant as "0 min left".
+    """
+    minutes = _as_charge_time(value)
+    if minutes != 0:
+        return minutes
+    state = _as_int(state_value)
+    if state in CHARGING_STATES:
+        return minutes
+    logger.debug(
+        "S05 chargDeltMins=0 dropped: no active charging state (ChrgSts=%r)",
+        state_value,
+    )
+    return None
+
+
+def _cabin_target_tenths(value: Any) -> Optional[float]:
+    """Return the reported cabin target in tenths, or None when impossible.
+
+    The API carries the target in tenths of a degree and the gateway accepts
+    18.0-32.0 °C, so the car cannot hold a setpoint outside that range. An
+    out-of-range sample is the HVAC module default the car publishes while it
+    wakes (``17.5`` on the live S05 BEV, 2026-11-21) and must not reach the
+    climate entity.
+    """
+    target = _as_float(value)
+    if target is None or not CABIN_TARGET_MIN_C <= target <= CABIN_TARGET_MAX_C:
+        if target is not None:
+            logger.debug(
+                "S05 airConditioningSetTemperature=%r dropped: outside %g-%g °C",
+                value,
+                CABIN_TARGET_MIN_C,
+                CABIN_TARGET_MAX_C,
+            )
+        return None
+    return target * 10
 
 
 def _as_bool(value: Any) -> Optional[bool]:
@@ -2102,7 +2158,9 @@ def charge_currents(
     instead of a stale value or the post-session sentinel. An unrecognized state
     keeps the sanitized readings, preferring a non-zero one. ``max_current`` is
     the model-specific plausibility ceiling; the S05 PHEV passes the tighter
-    bound.
+    bound. With no recognized state a DC reading at or above
+    :data:`WAKE_DC_CURRENT_SENTINEL_A` is the module-init sentinel and becomes
+    unknown instead of a made-up current.
     """
     state = charge_state(state_value)
     ac_reported = _as_float(ac_value) is not None
@@ -2113,6 +2171,16 @@ def charge_currents(
     dc = clean_charge_current_magnitude(
         dc_value, "BattDCChrgInCurr", max_current=max_current
     )
+    if state is None and dc is not None and dc >= WAKE_DC_CURRENT_SENTINEL_A:
+        # The module-init burst reports -400.0 A with no charging state; a real
+        # 400 A DC current only happens while DC charging (state 4), where the
+        # state branch below decides the current.
+        logger.debug(
+            "S05 BattDCChrgInCurr=%r dropped: module-init sentinel without a "
+            "charging state",
+            dc_value,
+        )
+        dc = None
 
     if state == CHARGE_STATE_DC_CHARGING:
         return (0.0 if ac_reported else None), dc, dc
@@ -2314,10 +2382,6 @@ def normalize_s05_params(
                 _first(params, "remainedPowerMile", "totalResidualMileage")
             ),
             "totalMileage": _as_float(params.get("totalOdometer")),
-            "totalMeterYesterday": _as_float(params.get("totalMeterYesterday")),
-            "igniteCumulativeMileage": _as_float(
-                params.get("igniteCumulativeMileage")
-            ),
             "engineSts": _as_int(params.get("engineStatus")),
             "connectStatus": 1,
             "powerStatus": power_status,
@@ -2336,9 +2400,9 @@ def normalize_s05_params(
             "outsideTemp": outside_temp * 10 if outside_temp is not None else None,
             # Raw tenths of a percent; ``parse_condition`` applies the scale.
             "insideHumidity": _as_float(params.get("innerHumidity")),
-            "remoteTemp": _as_float(params.get("airConditioningSetTemperature")) * 10
-            if _as_float(params.get("airConditioningSetTemperature")) is not None
-            else None,
+            "remoteTemp": _cabin_target_tenths(
+                params.get("airConditioningSetTemperature")
+            ),
             "acStatus": _as_int(params.get("airStatus")),
             "defrostStatus": _as_int(params.get("frontDefrostStatus")),
             "insideAirQualityLevel": _as_int(params.get("airPurifierStatus")),
@@ -2352,7 +2416,9 @@ def normalize_s05_params(
             "acChargeCurrent": ac_current,
             "dcChargeCurrent": dc_current,
             "chargeCurrent": active_current,
-            "remainChargeTime": _as_charge_time(params.get("chargDeltMins")),
+            "remainChargeTime": _remaining_charge_time(
+                params.get("chargDeltMins"), charge_status
+            ),
         },
         "fuel": {
             "leftPercent": _as_int(params.get("remainingFuel")),
@@ -2487,8 +2553,6 @@ MAPPED_S05_KEYS: frozenset[str] = frozenset(
         "totalResidualMileage",
         # Drivetrain and mileage
         "totalOdometer",
-        "totalMeterYesterday",
-        "igniteCumulativeMileage",
         "engineStatus",
         "powerStatusFeedBack",
         "electronichandbrakeStatus",

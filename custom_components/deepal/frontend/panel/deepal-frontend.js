@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit; run scripts/build_panel.py after changing src/ or texts/.
-const PANEL_VERSION = "1.8.1";
+const PANEL_VERSION = "1.9.0-b6";
 
 // ---- 10_constants.js ----
 // Constants shared by the card modules. The build script prepends the
@@ -197,8 +197,6 @@ const PANEL_KEYS = {
     gear: "gear",
     epb_status: "epb_status",
     vehicle_status: "vehicle_status",
-    mileage_yesterday: "mileage_yesterday",
-    trip_mileage: "trip_mileage",
     charge_status: "charge_status",
     charge_mode: "charge_mode",
     charge_current: "charge_current",
@@ -420,7 +418,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Türen verriegeln",
     "locked": "Verriegelt",
     "low_beam": "Abblendlicht",
-    "mileage_yesterday": "Fahrt von gestern",
     "model": "Modell",
     "more": "Mehr",
     "move_down": "Nach unten",
@@ -496,7 +493,6 @@ const PANEL_TEXTS = {
     "toast_position": "Position der Meldungen",
     "toasts": "Bildschirmmeldungen",
     "top": "Oben",
-    "trip_mileage": "Letzte Fahrt",
     "trunk": "Kofferraum",
     "unavailable": "Nicht verfügbar",
     "unknown": "Unbekannt",
@@ -625,7 +621,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Lock doors",
     "locked": "Locked",
     "low_beam": "Low beam",
-    "mileage_yesterday": "Yesterday's trip",
     "model": "Model",
     "more": "More",
     "move_down": "Move down",
@@ -701,7 +696,6 @@ const PANEL_TEXTS = {
     "toast_position": "Message position",
     "toasts": "On-screen messages",
     "top": "Top",
-    "trip_mileage": "Last trip",
     "trunk": "Trunk",
     "unavailable": "Unavailable",
     "unknown": "Unknown",
@@ -830,7 +824,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Cerrar puertas",
     "locked": "Cerrado",
     "low_beam": "Cortas",
-    "mileage_yesterday": "Trayecto de ayer",
     "model": "Modelo",
     "more": "Más",
     "move_down": "Bajar",
@@ -906,7 +899,6 @@ const PANEL_TEXTS = {
     "toast_position": "Posición de los mensajes",
     "toasts": "Mensajes en pantalla",
     "top": "Arriba",
-    "trip_mileage": "Último trayecto",
     "trunk": "Maletero",
     "unavailable": "No disponible",
     "unknown": "Desconocido",
@@ -1035,7 +1027,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Verrouiller les portes",
     "locked": "Verrouillé",
     "low_beam": "Feux de croisement",
-    "mileage_yesterday": "Trajet d'hier",
     "model": "Modèle",
     "more": "Plus",
     "move_down": "Descendre",
@@ -1111,7 +1102,6 @@ const PANEL_TEXTS = {
     "toast_position": "Position des messages",
     "toasts": "Messages à l'écran",
     "top": "Haut",
-    "trip_mileage": "Dernier trajet",
     "trunk": "Coffre",
     "unavailable": "Indisponible",
     "unknown": "Inconnu",
@@ -1240,7 +1230,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Blocca le porte",
     "locked": "Bloccato",
     "low_beam": "Anabbaglianti",
-    "mileage_yesterday": "Viaggio di ieri",
     "model": "Modello",
     "more": "Altro",
     "move_down": "Sposta giù",
@@ -1316,7 +1305,6 @@ const PANEL_TEXTS = {
     "toast_position": "Posizione dei messaggi",
     "toasts": "Messaggi sullo schermo",
     "top": "In alto",
-    "trip_mileage": "Ultimo viaggio",
     "trunk": "Bagagliaio",
     "unavailable": "Non disponibile",
     "unknown": "Sconosciuto",
@@ -1445,7 +1433,6 @@ const PANEL_TEXTS = {
     "lock_doors": "Trancar portas",
     "locked": "Trancado",
     "low_beam": "Médios",
-    "mileage_yesterday": "Viagem de ontem",
     "model": "Modelo",
     "more": "Mais",
     "move_down": "Mover para baixo",
@@ -1521,7 +1508,6 @@ const PANEL_TEXTS = {
     "toast_position": "Posição das mensagens",
     "toasts": "Mensagens no ecrã",
     "top": "Em cima",
-    "trip_mileage": "Última viagem",
     "trunk": "Bagageira",
     "unavailable": "Indisponível",
     "unknown": "Desconhecido",
@@ -4294,8 +4280,6 @@ DeepalCardBase.prototype._renderDriving = function (vehicle) {
     metric("gear", "gear"),
     metric("epb", "epb_status"),
     metric("vehicle_status", "vehicle_status"),
-    metric("mileage_yesterday", "mileage_yesterday"),
-    metric("trip_mileage", "trip_mileage"),
   ].join("");
 
   const ambienceMetrics = [
@@ -4724,8 +4708,6 @@ const CARD_INFO_ITEMS = {
   vehicle_status: ["sensor", "vehicle_status", "vehicle_status", "car"],
   speed: ["sensor", "speed", "speed", "speed"],
   gear: ["sensor", "gear", "gear", "gear"],
-  trip_mileage: ["sensor", "trip_mileage", "trip_mileage", "odometer"],
-  mileage_yesterday: ["sensor", "mileage_yesterday", "mileage_yesterday", "odometer"],
 };
 const CARD_INFO_IDS = Object.keys(CARD_INFO_ITEMS);
 
@@ -5590,8 +5572,6 @@ class DeepalCard extends DeepalCardBase {
       "battery",
       "fuel_level",
       "fuel_range",
-      "trip_mileage",
-      "mileage_yesterday",
     ]);
     for (const id of this._config.info_order || CARD_INFO_IDS) {
       if (!(this._config.info || []).includes(id)) continue;

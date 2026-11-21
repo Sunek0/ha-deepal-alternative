@@ -25,8 +25,6 @@ DeepalCardBase.prototype._renderDriving = function (vehicle) {
     metric("gear", "gear"),
     metric("epb", "epb_status"),
     metric("vehicle_status", "vehicle_status"),
-    metric("mileage_yesterday", "mileage_yesterday"),
-    metric("trip_mileage", "trip_mileage"),
   ].join("");
 
   const ambienceMetrics = [

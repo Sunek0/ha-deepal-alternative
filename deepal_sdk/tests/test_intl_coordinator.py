@@ -27,6 +27,7 @@ from custom_components.deepal.coordinator import (
     DeepalDataUpdateCoordinator,
     WakeResult,
 )
+from custom_components.deepal.deepal.models import TireStatus, TiresCondition
 from custom_components.deepal.deepal import (
     AuthToken,
     BatteryCondition,
@@ -204,6 +205,8 @@ def _coordinator(
     coordinator._last_steering_wheel = {}
     coordinator._ready_since = {}
     coordinator._last_app_report_ts = {}
+    coordinator._tire_zero_since = {}
+    coordinator._tire_guard_condition = {}
     coordinator._background_tasks = []
     coordinator._last_wake_at = {}
     coordinator._last_wake_result = {}
@@ -2896,17 +2899,38 @@ def _charging_condition(car_id: str, charging: bool = True) -> VehicleCondition:
 
 
 @pytest.mark.asyncio
-async def test_charging_read_updates_only_the_requested_vehicle():
+async def test_charging_read_of_an_mqtt_vehicle_does_not_wake_it():
     client = _FakeIntlClient([])
     coordinator, updates = _coordinator(client)
-    coordinator.vehicles = [_mqtt_vehicle(protocol=None)]
+    coordinator.vehicles = [_mqtt_vehicle(protocol="MQTT")]
     parked = _charging_condition("car-2", charging=False)
     coordinator.data = {"car-1": _charging_condition("car-1"), "car-2": parked}
+    fresh = _charging_condition("car-1")
+    fresh.last_updated_timestamp = 2000
+    client.mqtt_condition = fresh
+    client.http_condition = fresh
+
+    await coordinator._async_read_charging_vehicle("car-1")
+
+    # The live session already streams the charge telemetry: no wake, and no
+    # REST inquiry either, only the live condition request plus the overlay.
+    assert client.wake_calls == 0
+    assert client.events.count("mqtt_condition") == 1
+    assert "condition" in client.events
+    assert updates[-1]["car-1"].last_updated_timestamp == 2000
+    assert updates[-1]["car-2"] is parked
+
+
+@pytest.mark.asyncio
+async def test_charging_read_of_a_rest_vehicle_uses_the_refresh_path():
+    client = _FakeIntlClient([])
+    coordinator, updates = _coordinator(client)
+    coordinator.vehicles = [_mqtt_vehicle(car_id="car-1", protocol=None)]
+    coordinator.data = {"car-1": _charging_condition("car-1")}
     refreshed: list[str] = []
 
-    async def refresh(vehicle_id: str, *, force_wake: bool = False) -> None:
+    async def refresh(vehicle_id: str) -> None:
         refreshed.append(vehicle_id)
-        assert force_wake is True
 
     coordinator.async_refresh_vehicle = refresh
     fresh = _charging_condition("car-1")
@@ -2917,7 +2941,6 @@ async def test_charging_read_updates_only_the_requested_vehicle():
 
     assert refreshed == ["car-1"]
     assert updates[-1]["car-1"].last_updated_timestamp == 2000
-    assert updates[-1]["car-2"] is parked
 
 
 @pytest.mark.asyncio
@@ -5233,7 +5256,7 @@ async def test_merge_condition_accepts_zero_after_the_seat_sleep_sentinel():
 
 
 @pytest.mark.asyncio
-async def test_charging_refresh_forces_a_wake_even_with_a_fresh_report():
+async def test_charging_read_never_wakes_an_mqtt_vehicle():
     client = _FakeIntlClient([])
     now = int(time.time())
     current = VehicleCondition(
@@ -5246,9 +5269,268 @@ async def test_charging_refresh_forces_a_wake_even_with_a_fresh_report():
     coordinator.vehicles = [_live_mqtt_vehicle()]
     coordinator._wake_report_timeout = 0.01
     coordinator._wake_poll_interval = 0.001
+    fresh = VehicleCondition(
+        car_id="car-1",
+        vin="VIN-PLACEHOLDER-1",
+        battery=BatteryCondition(soc_percentage=41),
+        last_updated_timestamp=now + 10,
+    )
+    client.mqtt_condition = fresh
+    client.http_condition = fresh
 
-    await coordinator.async_refresh_vehicle("car-1")
+    await coordinator._async_read_charging_vehicle("car-1")
+
     assert client.wake_calls == 0
+    assert client.events.count("mqtt_condition") == 1
 
-    await coordinator.async_refresh_vehicle("car-1", force_wake=True)
-    assert client.wake_calls == 1
+
+def _tires(**pressures: float) -> TiresCondition:
+    """Build a tire group from the four position pressures."""
+    return TiresCondition(
+        front_left=TireStatus(pressure_bar=pressures.get("front_left")),
+        front_right=TireStatus(pressure_bar=pressures.get("front_right")),
+        rear_left=TireStatus(pressure_bar=pressures.get("rear_left")),
+        rear_right=TireStatus(pressure_bar=pressures.get("rear_right")),
+    )
+
+
+def test_wake_burst_tire_zero_keeps_the_last_valid_pressure():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(
+            front_left=2.71, front_right=2.72, rear_left=2.73, rear_right=2.74
+        ),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    burst = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(
+            front_left=0.0, front_right=0.0, rear_left=0.0, rear_right=0.0
+        ),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+
+    coordinator._retain_valid_tire_pressures("car-1", previous, burst, now=100.0)
+
+    assert burst.tires.front_left.pressure_bar == 2.71
+    assert burst.tires.front_right.pressure_bar == 2.72
+    assert burst.tires.rear_left.pressure_bar == 2.73
+    assert burst.tires.rear_right.pressure_bar == 2.74
+
+
+def test_persistent_tire_zero_is_published_after_a_minute():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=2.71),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    first = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+    coordinator._retain_valid_tire_pressures("car-1", previous, first, now=100.0)
+    assert first.tires.front_left.pressure_bar == 2.71
+
+    persisted = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+    coordinator._retain_valid_tire_pressures("car-1", previous, persisted, now=161.0)
+    assert persisted.tires.front_left.pressure_bar == 0.0
+
+
+def test_tire_zero_timer_clears_with_a_positive_reading():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client, data={})
+    zero = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+
+    coordinator._retain_valid_tire_pressures("car-1", None, zero, now=100.0)
+    assert zero.tires.front_left.pressure_bar is None
+    assert "front_left" in coordinator._tire_zero_since["car-1"]
+
+    healthy = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=2.7),
+        mqtt_raw_data={"lfTyrePressure": 270.0},
+    )
+    coordinator._retain_valid_tire_pressures("car-1", None, healthy, now=110.0)
+    assert healthy.tires.front_left.pressure_bar == 2.7
+    assert "front_left" not in coordinator._tire_zero_since["car-1"]
+
+
+def test_first_zero_without_a_previous_value_stays_unknown():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client, data={})
+    zero = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+
+    coordinator._retain_valid_tire_pressures("car-1", None, zero, now=100.0)
+
+    assert zero.tires.front_left.pressure_bar is None
+
+
+@pytest.mark.asyncio
+async def test_a_second_merge_of_the_same_report_keeps_the_tire_timer():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=999,
+        tires=_tires(front_left=2.71),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, updates = _coordinator(client, data={"car-1": previous})
+    raw = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1000,
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+
+    # The poll path merges twice: the fetch merges the report and the apply
+    # merges the already-restored condition again.
+    merged = coordinator._merge_condition("car-1", raw)
+    assert merged.tires.front_left.pressure_bar == 2.71
+    await coordinator._async_apply_condition("car-1", merged)
+
+    assert "front_left" in coordinator._tire_zero_since["car-1"]
+    assert updates[-1]["car-1"].tires.front_left.pressure_bar == 2.71
+
+    recovered = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1001,
+        tires=_tires(front_left=2.75),
+        mqtt_raw_data={"lfTyrePressure": 275.0},
+    )
+    await coordinator._async_apply_condition("car-1", recovered)
+
+    assert "front_left" not in coordinator._tire_zero_since["car-1"]
+    assert updates[-1]["car-1"].tires.front_left.pressure_bar == 2.75
+
+
+@pytest.mark.asyncio
+async def test_a_persistent_tire_zero_is_published_through_the_apply_path():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=999,
+        tires=_tires(front_left=2.71),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, updates = _coordinator(client, data={"car-1": previous})
+    coordinator._tire_zero_since = {
+        "car-1": {"front_left": time.monotonic() - 61}
+    }
+    flat = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=2000,
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+
+    await coordinator._async_apply_condition("car-1", flat)
+
+    assert updates[-1]["car-1"].tires.front_left.pressure_bar == 0.0
+
+
+def test_a_delta_without_tire_keys_keeps_the_tire_timer():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        tires=_tires(front_left=2.71),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    zero = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1000,
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+    coordinator._merge_condition("car-1", zero)
+    assert "front_left" in coordinator._tire_zero_since["car-1"]
+
+    # A one-key delta that does not carry the tire group must not clear the
+    # timer: the group retention copies the last published (valid) pressure.
+    delta = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1001,
+        mqtt_raw_data={"soc": 50},
+    )
+    merged = coordinator._merge_condition("car-1", delta)
+
+    assert "front_left" in coordinator._tire_zero_since["car-1"]
+    assert merged.tires.front_left.pressure_bar == 2.71
+
+
+def test_two_tire_reports_in_the_same_second_are_both_guarded():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=999,
+        tires=_tires(front_left=2.71),
+        mqtt_raw_data={"lfTyrePressure": 271.0},
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    first_zero = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1000,
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+    coordinator._merge_condition("car-1", first_zero)
+
+    # A second, distinct report inside the same second must still be guarded
+    # (the dedupe is per report object, not per timestamp).
+    second_zero = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1000,
+        tires=_tires(front_left=0.0),
+        mqtt_raw_data={"lfTyrePressure": 0.0},
+    )
+    merged = coordinator._merge_condition("car-1", second_zero)
+    assert merged.tires.front_left.pressure_bar == 2.71
+    assert "front_left" in coordinator._tire_zero_since["car-1"]
+
+    # A positive report in that same second clears the timer.
+    recovered = VehicleCondition(
+        car_id="car-1",
+        vin="",
+        last_updated_timestamp=1000,
+        tires=_tires(front_left=2.75),
+        mqtt_raw_data={"lfTyrePressure": 275.0},
+    )
+    coordinator._merge_condition("car-1", recovered)
+
+    assert "front_left" not in coordinator._tire_zero_since["car-1"]

@@ -29,10 +29,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DEFAULT_MODEL,
+    DENSITY_GRAMS_PER_CUBIC_METER,
     DENSITY_MICROGRAMS_PER_CUBIC_METER,
     DOMAIN,
     MANUFACTURER,
     PERCENTAGE_UNIT,
+    CORNER_POSITIONS,
+    POWER_STATUS_ON_VALUES,
 )
 from .coordinator import DeepalDataUpdateCoordinator
 from .deepal import DeepalIntlClient
@@ -84,9 +87,12 @@ CHARGE_STATUS_OPTION_BY_STATE = {
     CHARGE_STATE_WAITING_SCHEDULE: "waiting_schedule",
 }
 
-#: Power-state enum options: only the verified 0/2 mapping is translated.
+#: Power-state enum options: `0` is off and the verified on-values (`2` ready,
+#: `3` the 0.1 s power-cycle transition) are on.
 POWER_STATUS_OPTIONS = ("off", "on")
-POWER_STATUS_OPTION_BY_VALUE = {0: "off", 2: "on"}
+POWER_STATUS_OPTION_BY_VALUE = {0: "off"} | {
+    value: "on" for value in POWER_STATUS_ON_VALUES
+}
 
 
 # Sensors the S05 does not report (verified live on a C857-EU): the MQTT
@@ -130,7 +136,9 @@ CHARGE_SCHEDULE_SENSOR_KEYS = frozenset(
 
 # Keys retired from the platform. Their entity-registry entries are removed on
 # setup so they do not linger as orphaned entities.
-REMOVED_SENSOR_KEYS = frozenset({"steering_wheel_heater_level"})
+REMOVED_SENSOR_KEYS = frozenset(
+    {"steering_wheel_heater_level", "mileage_yesterday", "trip_mileage"}
+)
 
 
 def _remove_sensor_entities(registry: Any, vehicle: Any, keys: Any) -> None:
@@ -203,23 +211,17 @@ def build_sensors(
 
     s05 = is_s05(vehicle)
 
-    if coordinator.vehicle_uses_mqtt(vehicle.car_id) and not s05:
-        entities.extend([
-            DeepalMileageYesterdaySensor(coordinator, vehicle),
-            DeepalTripMileageSensor(coordinator, vehicle),
-        ])
-
     if isinstance(coordinator.client, DeepalIntlClient):
         entities.append(DeepalPowerStatusSensor(coordinator, vehicle))
         if s05:
             entities.append(DeepalChargeStatusSensor(coordinator, vehicle))
             entities.append(DeepalChargeModeSensor(coordinator, vehicle))
 
-        for key in ("front_left", "front_right", "rear_left", "rear_right"):
+        for key in CORNER_POSITIONS:
             entities.append(DeepalTirePressureSensor(coordinator, vehicle, key))
 
         capabilities = coordinator.vehicle_capabilities(vehicle.car_id)
-        for position in ("front_left", "front_right", "rear_left", "rear_right"):
+        for position in CORNER_POSITIONS:
             if s05 and position in S05_UNSUPPORTED_SEAT_POSITIONS:
                 continue
             if not seat_function_supported(capabilities, position, "heating"):
@@ -371,44 +373,6 @@ class DeepalOdometerSensor(DeepalBaseSensor):
         """Return the total odometer in km."""
         cond = self.coordinator.data.get(self._car_id)
         return cond.total_odometer_km if cond else None
-
-
-class DeepalMileageYesterdaySensor(DeepalBaseSensor):
-    """Mileage driven yesterday (km) sensor, MQTT-backed vehicles only."""
-
-    _attr_device_class = SensorDeviceClass.DISTANCE
-    _attr_state_class = SensorStateClass.TOTAL
-    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
-        super().__init__(coordinator, vehicle)
-        self._attr_unique_id = f"deepal_{vehicle.car_id}_mileage_yesterday"
-        self._attr_translation_key = "mileage_yesterday"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return yesterday's mileage in km."""
-        cond = self.coordinator.data.get(self._car_id)
-        return cond.mileage_yesterday_km if cond else None
-
-
-class DeepalTripMileageSensor(DeepalBaseSensor):
-    """Mileage since the current ignition cycle (km), MQTT-backed vehicles only."""
-
-    _attr_device_class = SensorDeviceClass.DISTANCE
-    _attr_state_class = SensorStateClass.TOTAL
-    _attr_native_unit_of_measurement = UnitOfLength.KILOMETERS
-
-    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
-        super().__init__(coordinator, vehicle)
-        self._attr_unique_id = f"deepal_{vehicle.car_id}_trip_mileage"
-        self._attr_translation_key = "trip_mileage"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the trip mileage in km."""
-        cond = self.coordinator.data.get(self._car_id)
-        return cond.trip_mileage_km if cond else None
 
 
 class DeepalTirePressureSensor(DeepalBaseSensor):
@@ -634,10 +598,18 @@ SENSORS: tuple[DeepalSensorDescription, ...] = (
     DeepalSensorDescription(
         key="cabin_humidity",
         name="Cabin Humidity",
-        value_fn=lambda cond, vehicle: cond.climate.humidity,
+        value_fn=lambda cond, vehicle: cond.climate.relative_humidity,
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=PERCENTAGE_UNIT,
+    ),
+    DeepalSensorDescription(
+        key="absolute_humidity",
+        name="Absolute Humidity",
+        value_fn=lambda cond, vehicle: cond.climate.absolute_humidity,
+        device_class=SensorDeviceClass.ABSOLUTE_HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=DENSITY_GRAMS_PER_CUBIC_METER,
     ),
     DeepalSensorDescription(
         key="inside_pm25",

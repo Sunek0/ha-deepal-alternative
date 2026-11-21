@@ -409,8 +409,8 @@ def test_sensor_settings_filter_and_labels() -> None:
     assert "c.info_order || CARD_INFO_IDS" in card
     assert texts["outside_temperature"] == "Temperatura exterior"
     assert texts["inside_temperature"] == "Temperatura interior"
-    assert texts["trip_mileage"] == "Último trayecto"
-    assert texts["mileage_yesterday"] == "Trayecto de ayer"
+    assert "trip_mileage" not in texts
+    assert "mileage_yesterday" not in texts
 
 
 def test_seat_buttons_and_tire_text_sizes() -> None:
@@ -474,7 +474,7 @@ vm.runInContext({json.dumps(constants + "\n" + head)} + "\\n;globalThis.__merge 
 const defaults = sandbox.__merge({{}}, {{}});
 if (defaults.refresh_button !== true) process.exit(1);
 if (!defaults.buttons.includes("seats")) process.exit(1);
-if (defaults.info_order.length !== 14) process.exit(1);
+if (defaults.info_order.length !== 12) process.exit(1);
 const old = sandbox.__merge({{ info: ["battery", "odometer"] }}, {{}});
 if (old.info.join(",") !== "battery,odometer") process.exit(2);
 if (old.info_order[0] !== "battery" || old.info_order[1] !== "odometer") process.exit(3);

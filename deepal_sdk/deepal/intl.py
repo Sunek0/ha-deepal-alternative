@@ -9,6 +9,7 @@ import hashlib
 from ipaddress import ip_address
 import json
 import logging
+import math
 import secrets
 import socket
 import ssl
@@ -390,20 +391,47 @@ def _flag_active(value: Any) -> bool:
     return number is not None and number != 0
 
 
-def _humidity_percent(value: Any) -> Optional[float]:
-    """Return the cabin humidity as a percentage.
+def _absolute_humidity(value: Any) -> Optional[float]:
+    """Return the cabin absolute humidity in g/m³, or None when unknown.
 
     The API reports ``insideHumidity`` as a fixed-point integer from 1 to 1000
-    with one implied decimal: ``453`` means 45.3 %. Values outside that range,
-    or non-numeric values, are unknown. ``0`` is a "no reading" placeholder, not
-    0 % humidity: a live S05 PHEV capture (239 reports, 2026-11-10/11) alternated
-    ``0.0`` with real readings of 136-164 while the car was in the same parked
-    state, so a zero is unknown.
+    with one implied decimal: ``111`` means 11.1 g/m³. The value is an absolute
+    humidity, not a percentage: the live S05 BEV reported 111-147 while the
+    cabin was occupied at 23-26 °C (2026-11-21), which as tenths of a percent
+    would be an implausible 11-15 %RH. Values outside that range, or non-numeric
+    values, are unknown. ``0`` is a "no reading" placeholder while the body
+    module sleeps, not 0 g/m³: the same capture alternated ``0.0`` with real
+    readings while the car stayed parked.
     """
     humidity = _as_float(value)
     if humidity is None or not 0 < humidity <= 1000:
         return None
     return round(humidity / 10, 1)
+
+
+def relative_humidity_from_absolute(
+    absolute_humidity: Optional[float], temperature_c: Optional[float]
+) -> Optional[float]:
+    """Return the cabin relative humidity (%) from the absolute value.
+
+    The car reports absolute humidity and cabin temperature; the percentage is
+    derived with the Magnus saturation formula over water:
+    ``e_s(T) = 6.112·exp(17.62·T/(243.12+T))`` hPa, ``e = AH·(T+273.15)/216.7``
+    hPa and ``RH = 100·e/e_s(T)``. Both inputs are required, so a report without
+    one of them leaves the percentage unknown instead of guessing. The result is
+    capped at 100 and rounded to one decimal; the cabin temperature arrives
+    in 0.5 °C steps, so the percentage carries a few units of uncertainty and is
+    a comfort indicator, not a calibrated measurement.
+    """
+    if absolute_humidity is None or temperature_c is None:
+        return None
+    if absolute_humidity <= 0 or temperature_c <= -243.12:
+        return None
+    saturation = 6.112 * math.exp(
+        17.62 * temperature_c / (243.12 + temperature_c)
+    )
+    vapour_pressure = absolute_humidity * (temperature_c + 273.15) / 216.7
+    return round(min(100.0, 100.0 * vapour_pressure / saturation), 1)
 
 
 def _as_bool(value: Any) -> Optional[bool]:
@@ -2031,15 +2059,20 @@ class DeepalIntlClient:
         steering_heater = _as_int(status.get("steeringWheelHeater"))
         defrost = _as_int(hvac.get("defrostStatus"))
         ac_status = hvac.get("acStatus")
+        inside_temperature_c = _tenths(hvac.get("insideTemp"))
+        absolute_humidity = _absolute_humidity(hvac.get("insideHumidity"))
 
         climate = ClimateCondition(
             power_on=(
                 ac_status not in (None, 0) if ac_status is not None else None
             ),
             target_temperature_c=target_temp / 10 if target_temp is not None else None,
-            inside_temperature_c=_tenths(hvac.get("insideTemp")),
+            inside_temperature_c=inside_temperature_c,
             outside_temperature_c=_tenths(hvac.get("outsideTemp")),
-            humidity=_humidity_percent(hvac.get("insideHumidity")),
+            absolute_humidity=absolute_humidity,
+            relative_humidity=relative_humidity_from_absolute(
+                absolute_humidity, inside_temperature_c
+            ),
             inside_pm25=_as_float(hvac.get("insidePm25")),
             air_quality_level=_as_int(hvac.get("insideAirQualityLevel")),
             defrost_on=None if defrost is None else defrost != 0,
@@ -2109,8 +2142,6 @@ class DeepalIntlClient:
             latitude=location[0] if location is not None else None,
             longitude=location[1] if location is not None else None,
             total_odometer_km=_as_float(status.get("totalMileage")),
-            mileage_yesterday_km=_as_float(status.get("totalMeterYesterday")),
-            trip_mileage_km=_as_float(status.get("igniteCumulativeMileage")),
             speed_kmh=_as_float(status.get("speed")),
             gear=(
                 str(status["gearSignal"])

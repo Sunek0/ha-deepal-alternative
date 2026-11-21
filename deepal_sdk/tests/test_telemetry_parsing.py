@@ -394,7 +394,8 @@ def test_real_s05_phev_mqtt_capture_maps_every_sensor():
     assert condition.total_odometer_km == 2846.0
     assert condition.climate.inside_temperature_c == 19.0
     assert condition.climate.target_temperature_c == 25.5
-    assert condition.climate.humidity == 15.3
+    assert condition.climate.absolute_humidity == 15.3
+    assert condition.climate.relative_humidity == 94.1
     assert condition.tires.front_left.pressure_bar == 2.92
     assert condition.tires.front_left.alarm is False
     assert condition.doors.locked is True
@@ -407,13 +408,17 @@ def test_real_s05_phev_mqtt_capture_maps_every_sensor():
     assert condition.climate.outside_temperature_c is None
 
 
-def test_zero_humidity_placeholder_is_unknown_not_zero_percent():
+def test_zero_humidity_placeholder_is_unknown_not_zero_grams():
     for raw in (0, 0.0):
         params = dict(REAL_S05_PHEV_MQTT_PARKED, innerHumidity=raw)
         condition = _parse(mqtt.normalize_s05_params(params))
-        assert condition.climate.humidity is None
-    assert _parse({"hvac": {"insideHumidity": 0.0}}).climate.humidity is None
-    assert _parse({"hvac": {"insideHumidity": 136.0}}).climate.humidity == 13.6
+        assert condition.climate.absolute_humidity is None
+        assert condition.climate.relative_humidity is None
+    assert _parse({"hvac": {"insideHumidity": 0.0}}).climate.absolute_humidity is None
+    assert (
+        _parse({"hvac": {"insideHumidity": 136.0}}).climate.absolute_humidity
+        == 13.6
+    )
 
 
 def test_real_rest_condition_of_a_sleeping_s05_phev():
@@ -424,7 +429,8 @@ def test_real_rest_condition_of_a_sleeping_s05_phev():
     assert condition.total_odometer_km == 2846.0
     assert condition.climate.inside_temperature_c == 21.0
     assert condition.climate.target_temperature_c == 25.0
-    assert condition.climate.humidity is None
+    assert condition.climate.absolute_humidity is None
+    assert condition.climate.relative_humidity is None
     assert condition.last_updated_timestamp == 1794412842
     # chargeConStatus 3 is a stale latch on the S05: the cable stays unplugged.
     assert condition.battery.charger_connected is False

@@ -11,6 +11,7 @@ from .intl import (
     SIGNING_POLICY_APP,
     SIGNING_POLICY_LEGACY,
     DeepalIntlClient,
+    relative_humidity_from_absolute,
 )
 from .intl_mqtt import DeepalIntlMqttSession
 from .mqtt import MqttSessionState, MqttSessionStats
@@ -51,6 +52,7 @@ __version__ = "0.1.0"
 __all__ = [
     "DeepalClient",
     "DeepalIntlClient",
+    "relative_humidity_from_absolute",
     "DeepalIntlMqttSession",
     "MqttSessionState",
     "MqttSessionStats",

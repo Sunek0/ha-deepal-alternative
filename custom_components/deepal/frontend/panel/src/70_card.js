@@ -40,8 +40,6 @@ const CARD_INFO_ITEMS = {
   vehicle_status: ["sensor", "vehicle_status", "vehicle_status", "car"],
   speed: ["sensor", "speed", "speed", "speed"],
   gear: ["sensor", "gear", "gear", "gear"],
-  trip_mileage: ["sensor", "trip_mileage", "trip_mileage", "odometer"],
-  mileage_yesterday: ["sensor", "mileage_yesterday", "mileage_yesterday", "odometer"],
 };
 const CARD_INFO_IDS = Object.keys(CARD_INFO_ITEMS);
 
@@ -906,8 +904,6 @@ class DeepalCard extends DeepalCardBase {
       "battery",
       "fuel_level",
       "fuel_range",
-      "trip_mileage",
-      "mileage_yesterday",
     ]);
     for (const id of this._config.info_order || CARD_INFO_IDS) {
       if (!(this._config.info || []).includes(id)) continue;

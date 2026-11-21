@@ -187,6 +187,9 @@
       }
     },
     "sensor": {
+      "absolute_humidity": {
+        "default": "mdi:water"
+      },
       "ac_charge_current": {
         "default": "mdi:current-ac"
       },
@@ -256,9 +259,6 @@
       "license_plate": {
         "default": "mdi:card-text-outline"
       },
-      "mileage_yesterday": {
-        "default": "mdi:calendar-clock"
-      },
       "outside_temperature": {
         "default": "mdi:thermometer-lines"
       },
@@ -294,9 +294,6 @@
       },
       "total_odometer": {
         "default": "mdi:counter"
-      },
-      "trip_mileage": {
-        "default": "mdi:map-marker-path"
       },
       "vehicle_status": {
         "default": "mdi:car-info"

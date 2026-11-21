@@ -9,10 +9,15 @@ try:  # Home Assistant 2026.4 and later expose the density unit enum.
     DENSITY_MICROGRAMS_PER_CUBIC_METER = (
         UnitOfDensity.MICROGRAMS_PER_CUBIC_METER
     )
+    DENSITY_GRAMS_PER_CUBIC_METER = UnitOfDensity.GRAMS_PER_CUBIC_METER
 except ImportError:  # Home Assistant 2026.3 only ships the legacy constant.
-    from homeassistant.const import CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+    from homeassistant.const import (
+        CONCENTRATION_GRAMS_PER_CUBIC_METER,
+        CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    )
 
     DENSITY_MICROGRAMS_PER_CUBIC_METER = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+    DENSITY_GRAMS_PER_CUBIC_METER = CONCENTRATION_GRAMS_PER_CUBIC_METER
 
 try:  # Home Assistant 2026.7 and later expose the ratio unit enum.
     from homeassistant.const import UnitOfRatio
@@ -24,6 +29,17 @@ except ImportError:  # Home Assistant 2026.3-2026.6 only ship the string.
     PERCENTAGE_UNIT = PERCENTAGE
 
 DOMAIN = "deepal"
+
+#: Raw power states that the power-status sensor displays as on. The reference
+#: S05 reports `2` while ready and `3` for about 0.1 s during a power cycle
+#: (live capture 2026-11-21). The warning-light ready window deliberately keeps
+#: requiring `2`: at `3` the airbag register glitched on the reference car
+#: (2026-11-12), which is also why the SDK's REST subsystem rule rejects it.
+POWER_STATUS_ON_VALUES = frozenset({2, 3})
+
+#: Vehicle corner positions shared by the tire and seat entities and the
+#: coordinator retention rules.
+CORNER_POSITIONS = ("front_left", "front_right", "rear_left", "rear_right")
 
 PLATFORM_SDA = "sda"
 PLATFORM_INTL = "intl"

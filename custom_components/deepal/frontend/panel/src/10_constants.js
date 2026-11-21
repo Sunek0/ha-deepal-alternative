@@ -193,8 +193,6 @@ const PANEL_KEYS = {
     gear: "gear",
     epb_status: "epb_status",
     vehicle_status: "vehicle_status",
-    mileage_yesterday: "mileage_yesterday",
-    trip_mileage: "trip_mileage",
     charge_status: "charge_status",
     charge_mode: "charge_mode",
     charge_current: "charge_current",

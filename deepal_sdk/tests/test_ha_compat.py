@@ -18,6 +18,7 @@ pytest.importorskip("homeassistant")
 
 from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    UnitOfDensity,
     UnitOfRatio,
     UnitOfVolume,
 )
@@ -50,6 +51,7 @@ from custom_components.deepal.const import (
     CONF_ACCESS_TOKEN,
     CONF_CONTROL_PIN,
     CONF_VEHICLE_ID,
+    POWER_STATUS_ON_VALUES,
 )
 from custom_components.deepal.deepal import (
     DeepalAPIError,
@@ -153,8 +155,6 @@ def _entities_by_platform() -> dict[str, list]:
             sensor.DeepalBatterySocSensor(coordinator, vehicle),
             sensor.DeepalRemainingRangeSensor(coordinator, vehicle),
             sensor.DeepalOdometerSensor(coordinator, vehicle),
-            sensor.DeepalMileageYesterdaySensor(coordinator, vehicle),
-            sensor.DeepalTripMileageSensor(coordinator, vehicle),
             sensor.DeepalTirePressureSensor(coordinator, vehicle, "front_left"),
             sensor.DeepalSeatLevelSensor(
                 coordinator, vehicle, "front_left", "heating_level"
@@ -654,6 +654,25 @@ def test_percentage_entities_use_ratio_enumerator() -> None:
     )
 
 
+def test_absolute_humidity_sensor_contract() -> None:
+    descriptions = {description.key: description for description in sensor.SENSORS}
+    absolute = descriptions["absolute_humidity"]
+
+    assert absolute.device_class is sensor.SensorDeviceClass.ABSOLUTE_HUMIDITY
+    assert absolute.native_unit_of_measurement is UnitOfDensity.GRAMS_PER_CUBIC_METER
+    assert absolute.state_class is sensor.SensorStateClass.MEASUREMENT
+    assert descriptions["cabin_humidity"].device_class is sensor.SensorDeviceClass.HUMIDITY
+
+
+def test_power_status_accepts_the_transitional_on_value() -> None:
+    options = sensor.POWER_STATUS_OPTION_BY_VALUE
+
+    assert options[0] == "off"
+    assert options[2] == "on"
+    assert options[3] == "on"
+    assert 3 in POWER_STATUS_ON_VALUES
+
+
 def test_platforms_declare_no_parallel_update_limit() -> None:
     platforms = (
         binary_sensor,
@@ -1054,22 +1073,31 @@ def test_sda_unique_id_falls_back_to_an_opaque_token_digest() -> None:
     assert token[:10] not in unique_id
 
 
-def test_odometer_and_mileage_sensor_names() -> None:
+def test_odometer_sensor_name() -> None:
     coordinator = FakeCoordinator()
     vehicle = _fake_vehicle()
     odometer = sensor.DeepalOdometerSensor(coordinator, vehicle)
-    yesterday = sensor.DeepalMileageYesterdaySensor(coordinator, vehicle)
-    trip = sensor.DeepalTripMileageSensor(coordinator, vehicle)
 
     assert odometer._attr_has_entity_name is True
     assert odometer._attr_translation_key == "total_odometer"
     assert odometer._attr_unique_id == "deepal_car-1_total_odometer"
-    assert yesterday._attr_translation_key == "mileage_yesterday"
-    assert yesterday._attr_unique_id == "deepal_car-1_mileage_yesterday"
-    assert yesterday._attr_state_class is sensor.SensorStateClass.TOTAL
-    assert trip._attr_translation_key == "trip_mileage"
-    assert trip._attr_unique_id == "deepal_car-1_trip_mileage"
-    assert trip._attr_state_class is sensor.SensorStateClass.TOTAL
+
+
+def test_mileage_sensors_are_retired_for_every_vehicle() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.client = object.__new__(DeepalIntlClient)
+    coordinator.mqtt_vehicles = {"car-1"}
+
+    for vehicle in (
+        _fake_vehicle(),
+        _model_vehicle("car-1", series_name="Deepal S07"),
+    ):
+        keys = {
+            entity.translation_key for entity in sensor.build_sensors(coordinator, vehicle)
+        }
+
+        assert "mileage_yesterday" not in keys
+        assert "trip_mileage" not in keys
 
 
 def test_entity_description_cached_properties_resolve() -> None:
@@ -1527,7 +1555,7 @@ def test_build_sensors_skips_s05_unsupported_entities() -> None:
     assert "outside_temperature" not in s05_keys
     assert "outside_temperature" in s07_keys
     assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s05_keys)
-    assert {"mileage_yesterday", "trip_mileage"} <= s07_keys
+    assert {"mileage_yesterday", "trip_mileage"}.isdisjoint(s07_keys)
     rear_seats = {"seat_heating_level_rear_left", "seat_heating_level_rear_right"}
     assert rear_seats.isdisjoint(s05_keys)
     assert rear_seats <= s07_keys
@@ -2291,13 +2319,6 @@ def test_entities_have_no_hardcoded_icons() -> None:
             assert entity.icon is None, f"{platform}:{entity.translation_key}"
 
 
-def test_mileage_sensors_are_gated_on_mqtt_vehicles() -> None:
-    source = (INTEGRATION_DIR / "sensor.py").read_text(encoding="utf-8")
-    assert "vehicle_uses_mqtt" in source
-    assert "DeepalMileageYesterdaySensor" in source
-    assert "DeepalTripMileageSensor" in source
-
-
 def _translation_key_tree(data, prefix: str = "") -> set[str]:
     keys: set[str] = set()
     if isinstance(data, dict):
@@ -2418,7 +2439,9 @@ def test_engine_binary_sensor_uses_the_power_device_class() -> None:
 
 
 def test_steering_wheel_heater_level_sensor_is_retired() -> None:
-    assert sensor.REMOVED_SENSOR_KEYS == frozenset({"steering_wheel_heater_level"})
+    assert sensor.REMOVED_SENSOR_KEYS == frozenset(
+        {"steering_wheel_heater_level", "mileage_yesterday", "trip_mileage"}
+    )
     assert "steering_wheel_heater_level" not in {
         description.key for description in sensor.SENSORS
     }
@@ -2447,7 +2470,11 @@ def test_steering_wheel_heater_level_sensor_is_retired() -> None:
         _Registry(), SimpleNamespace(car_id="car-1")
     )
 
-    assert removed == ["sensor.deepal_car-1_steering_wheel_heater_level"]
+    assert set(removed) == {
+        "sensor.deepal_car-1_steering_wheel_heater_level",
+        "sensor.deepal_car-1_mileage_yesterday",
+        "sensor.deepal_car-1_trip_mileage",
+    }
 
 
 def test_every_entity_translation_key_ships_in_every_language() -> None:

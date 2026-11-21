@@ -326,8 +326,6 @@ Mapping:
 | `vehicleStatus.soc` | State of charge (%) | `battery.soc_percentage` |
 | `vehicleStatus.drvMileage` | Estimated range (km) | `battery.remaining_range_km` |
 | `vehicleStatus.totalMileage` | Total odometer (km) | `total_odometer_km` |
-| `vehicleStatus.totalMeterYesterday` | Mileage yesterday (km) | `mileage_yesterday_km` |
-| `vehicleStatus.igniteCumulativeMileage` | Mileage since ignition (km) | `trip_mileage_km` |
 | `vehicleStatus.speed` | Speed (km/h) | `speed_kmh` |
 | `vehicleStatus.gearSignal` | Raw gear signal | `gear` (string) |
 | `vehicleStatus.epbSts` / `powerStatus` / `status` | Raw states | `epb_status` / `power_status` / `vehicle_status` |
@@ -352,7 +350,8 @@ Mapping:
 | `hvac.acStatus` | AC (`!= 0` on; absent stays unknown) | `climate.power_on` |
 | `hvac.remoteTemp` | Target temperature (tenths of degree) | `climate.target_temperature_c` |
 | `hvac.insideTemp` / `outsideTemp` | Cabin / outside temperature (tenths) | `climate.inside_temperature_c` / `outside_temperature_c` |
-| `hvac.insideHumidity` | Cabin humidity (fixed-point tenths of a percent, `1-1000`; `0` is a no-reading placeholder and becomes unknown) | `climate.humidity` |
+| `hvac.insideHumidity` | Cabin absolute humidity (fixed-point tenths of a gram per cubic metre, `1-1000`; `0` is a no-reading placeholder and becomes unknown) | `climate.absolute_humidity` |
+| `hvac.insideTemp` (same report) | Used with the absolute humidity to derive the percentage (Magnus) | `climate.relative_humidity` |
 | `hvac.insidePm25` / `insideAirQualityLevel` | Air quality | `climate.inside_pm25` / `air_quality_level` |
 | `hvac.defrostStatus` / `fanLevel` | Defrost / fan | `climate.defrost_on` / `fan_level` |
 | `lamp.highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `leftTurn`, `rightTurn` | Exterior lamps | `lamps.*` |
@@ -365,9 +364,15 @@ Notes:
 
 - Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
   valid snapshot.
-- `hvac.insideHumidity` is a fixed-point integer from 1 to 1000 tenths of a percent (`453` is
-  45.3 %); `0` (a no-reading placeholder seen alternating with real values on a parked PHEV) and
-  values outside `1-1000` become unknown.
+- `hvac.insideHumidity` is a fixed-point integer from 1 to 1000 tenths of a gram per cubic metre
+  (`111` is 11.1 g/m³); `0` (a no-reading placeholder while the body module sleeps) and values
+  outside `1-1000` become unknown. The live S05 BEV reported 111-147 while occupied at 23-26 °C
+  (2026-11-21), which as tenths of a percent would be an implausible 11-15 %RH.
+- `climate.relative_humidity` is derived from the absolute humidity and the cabin temperature with
+  the Magnus saturation formula, capped at 100 and rounded to one decimal; it is unknown when
+  either input is missing. The cabin temperature arrives in 0.5 °C steps, so the percentage carries
+  a few units of uncertainty. The `relative_humidity_from_absolute(absolute_humidity,
+  temperature_c)` helper exposes the same derivation to SDK users.
 - Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.

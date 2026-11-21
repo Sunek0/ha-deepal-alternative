@@ -1462,8 +1462,6 @@ Mapping:
 | `vehicleStatus.soc` | State of charge (%) | `battery.soc_percentage` |
 | `vehicleStatus.drvMileage` | Estimated range (km) | `battery.remaining_range_km` |
 | `vehicleStatus.totalMileage` | Total odometer (km) | `total_odometer_km` |
-| `vehicleStatus.totalMeterYesterday` | Mileage yesterday (km) | `mileage_yesterday_km` |
-| `vehicleStatus.igniteCumulativeMileage` | Mileage since ignition (km) | `trip_mileage_km` |
 | `vehicleStatus.speed` | Speed (km/h) | `speed_kmh` |
 | `vehicleStatus.gearSignal` | Raw gear signal | `gear` (string) |
 | `vehicleStatus.epbSts` / `powerStatus` / `status` | Raw states | `epb_status` / `power_status` / `vehicle_status` |
@@ -1488,7 +1486,8 @@ Mapping:
 | `hvac.acStatus` | AC (`!= 0` on; absent stays unknown) | `climate.power_on` |
 | `hvac.remoteTemp` | Target temperature (tenths of degree) | `climate.target_temperature_c` |
 | `hvac.insideTemp` / `outsideTemp` | Cabin / outside temperature (tenths) | `climate.inside_temperature_c` / `outside_temperature_c` |
-| `hvac.insideHumidity` | Cabin humidity (fixed-point tenths of a percent, `1-1000`; `0` is a no-reading placeholder and becomes unknown) | `climate.humidity` |
+| `hvac.insideHumidity` | Cabin absolute humidity (fixed-point tenths of a gram per cubic metre, `1-1000`; `0` is a no-reading placeholder and becomes unknown) | `climate.absolute_humidity` |
+| `hvac.insideTemp` (same report) | Used with the absolute humidity to derive the percentage (Magnus) | `climate.relative_humidity` |
 | `hvac.insidePm25` / `insideAirQualityLevel` | Air quality | `climate.inside_pm25` / `air_quality_level` |
 | `hvac.defrostStatus` / `fanLevel` | Defrost / fan | `climate.defrost_on` / `fan_level` |
 | `lamp.highBeam`, `lowBeam`, `positionLamp`, `frontFoglamp`, `rearFoglamp`, `leftTurn`, `rightTurn` | Exterior lamps | `lamps.*` |
@@ -1501,9 +1500,15 @@ Notes:
 
 - Missing groups default to `None`, `False` or `0`; no error is raised, so a partial payload is a
   valid snapshot.
-- `hvac.insideHumidity` is a fixed-point integer from 1 to 1000 tenths of a percent (`453` is
-  45.3 %); `0` (a no-reading placeholder seen alternating with real values on a parked PHEV) and
-  values outside `1-1000` become unknown.
+- `hvac.insideHumidity` is a fixed-point integer from 1 to 1000 tenths of a gram per cubic metre
+  (`111` is 11.1 g/m³); `0` (a no-reading placeholder while the body module sleeps) and values
+  outside `1-1000` become unknown. The live S05 BEV reported 111-147 while occupied at 23-26 °C
+  (2026-11-21), which as tenths of a percent would be an implausible 11-15 %RH.
+- `climate.relative_humidity` is derived from the absolute humidity and the cabin temperature with
+  the Magnus saturation formula, capped at 100 and rounded to one decimal; it is unknown when
+  either input is missing. The cabin temperature arrives in 0.5 °C steps, so the percentage carries
+  a few units of uncertainty. The `relative_humidity_from_absolute(absolute_humidity,
+  temperature_c)` helper exposes the same derivation to SDK users.
 - Sleep sentinels and out-of-range seat levels (`> 3`, for example `6` on a sleeping module) map to
   `None` ("unknown"), never to a made-up level.
 - `climate.power_on` and other comfort states are tri-state: absent means unknown, not off.
@@ -2088,12 +2093,10 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `soc`, `socDsp`, `remainPower` | `vehicleStatus.soc` | `battery.soc_percentage` |
 | `remainedPowerMile`, `totalResidualMileage` | `vehicleStatus.drvMileage` | `battery.remaining_range_km` |
 | `totalOdometer` | `vehicleStatus.totalMileage` | `total_odometer_km` |
-| `totalMeterYesterday` | `vehicleStatus.totalMeterYesterday` | `mileage_yesterday_km` |
-| `igniteCumulativeMileage` | `vehicleStatus.igniteCumulativeMileage` | `trip_mileage_km` |
 | `engineStatus` / `powerStatusFeedBack` / `electronichandbrakeStatus` | `vehicleStatus.engineSts` / `powerStatus` / `epbSts` | `engine_on` / `power_status` / `epb_status` |
 | `vehicleTemperature` | `hvac.insideTemp` (x10) | `climate.inside_temperature_c` |
 | `outsideTemperature`, `externalTemperature` | `hvac.outsideTemp` (x10; source unit assumed Celsius, pending live confirmation) | `climate.outside_temperature_c` |
-| `innerHumidity` | `hvac.insideHumidity` (raw tenths) | `climate.humidity` |
+| `innerHumidity` | `hvac.insideHumidity` (raw tenths of g/m³) | `climate.absolute_humidity` / `climate.relative_humidity` |
 | `airConditioningSetTemperature` | `hvac.remoteTemp` (x10) | `climate.target_temperature_c` |
 | `airStatus` | `hvac.acStatus` | `climate.power_on` |
 | `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
@@ -2119,8 +2122,9 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `leftBackSeatHeatStatus` / `leftBackSeatVentilateStatus` | `seat.leftBack.heatStatus` / `ventStatus` | `seats.rear_left.*` |
 | `rightBackSeatHeatStatus` / `rightBackSeatVentilateStatus` | `seat.rightBack.heatStatus` / `ventStatus` | `seats.rear_right.*` |
 
-`innerHumidity` keeps the raw fixed-point value (0-1000 tenths of a percent) in the normalized
-payload; `parse_condition()` converts it to percent exactly once.
+`innerHumidity` keeps the raw fixed-point value (0-1000 tenths of a gram per cubic metre) in the
+normalized payload; `parse_condition()` converts it to g/m³ exactly once and derives the relative
+percentage with the cabin temperature the same report carries.
 
 The normalizer reads the vehicle model code from the MQTT envelope (`b.mc`, with `b.modelCode` as a
 fallback) and uses it to select the PHEV handling for an absent or unrecognized state. On every
@@ -2400,8 +2404,6 @@ Full telemetry snapshot shared by the REST and MQTT paths.
 | `car_id` | `str` | required | Vehicle id |
 | `vin` | `str` | `""` | VIN |
 | `total_odometer_km` | `float?` | `None` | Total odometer (km) |
-| `mileage_yesterday_km` | `float?` | `None` | Mileage yesterday (km) |
-| `trip_mileage_km` | `float?` | `None` | Mileage since the current ignition cycle (km) |
 | `speed_kmh` | `float?` | `None` | Speed (km/h) |
 | `gear` | `str?` | `None` | Raw gear signal |
 | `epb_status` | `int?` | `None` | Raw electronic parking brake status |
@@ -2481,7 +2483,8 @@ four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
 | `power_on` | `bool?` | `None` | AC state; `None` when not reported (unknown, not off) |
 | `target_temperature_c` | `float?` | `None` | Target temperature (C) |
 | `inside_temperature_c` / `outside_temperature_c` | `float?` | `None` | Cabin / outside temperature (C) |
-| `humidity` | `float?` | `None` | Cabin humidity (%) |
+| `absolute_humidity` | `float?` | `None` | Cabin absolute humidity (g/m³); `None` while the body module sleeps |
+| `relative_humidity` | `float?` | `None` | Cabin relative humidity (%), derived from the absolute value and `inside_temperature_c` |
 | `inside_pm25` | `float?` | `None` | PM2.5 |
 | `air_quality_level` | `int?` | `None` | Air quality level |
 | `defrost_on` | `bool?` | `None` | Front defrost; `None` when not reported |

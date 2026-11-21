@@ -868,8 +868,6 @@ def test_normalize_s05_params_maps_telemetry():
         "soc": 63,
         "remainedPowerMile": 210,
         "totalOdometer": 18300,
-        "totalMeterYesterday": 42.5,
-        "igniteCumulativeMileage": 12.25,
         "engineStatus": 1,
         "powerStatusFeedBack": 2,
         "electronichandbrakeStatus": 0,
@@ -928,8 +926,6 @@ def test_normalize_s05_params_maps_telemetry():
     assert condition["vehicleStatus"]["soc"] == 63
     assert condition["vehicleStatus"]["drvMileage"] == 210
     assert condition["vehicleStatus"]["totalMileage"] == 18300
-    assert condition["vehicleStatus"]["totalMeterYesterday"] == 42.5
-    assert condition["vehicleStatus"]["igniteCumulativeMileage"] == 12.25
     assert condition["vehicleStatus"]["steeringWheelHeater"] == 0
     assert condition["hvac"]["acStatus"] == 1
     assert condition["hvac"]["remoteTemp"] == 225
@@ -2194,3 +2190,62 @@ def test_seat_sleep_sentinel_six_maps_to_off():
     assert condition["seat"]["rightFront"]["ventStatus"] == 0
     assert condition["seat"]["leftFront"]["heatStatus"] == 0
     assert condition["seat"]["rightFront"]["heatStatus"] == 0
+
+
+def test_normalize_s05_params_drops_an_impossible_cabin_target():
+    for raw, expected in (
+        (17.5, None),
+        (17.9, None),
+        (18.0, 180.0),
+        (21.0, 210.0),
+        (32.0, 320.0),
+        (32.5, None),
+    ):
+        condition = normalize_s05_params(
+            {"airConditioningSetTemperature": raw}
+        )
+
+        assert condition["hvac"]["remoteTemp"] == expected
+
+
+def test_normalize_s05_params_drops_the_wake_charge_time_zero():
+    for state in (0, 1, 2, 5, 8, None):
+        params = {"chargDeltMins": 0}
+        if state is not None:
+            params["ChrgSts"] = state
+
+        assert (
+            normalize_s05_params(params)["charge"]["remainChargeTime"] is None
+        )
+
+    for state in (3, 4):
+        condition = normalize_s05_params(
+            {"chargDeltMins": 0, "ChrgSts": state}
+        )
+
+        assert condition["charge"]["remainChargeTime"] == 0
+
+    assert (
+        normalize_s05_params({"chargDeltMins": 8191})["charge"][
+            "remainChargeTime"
+        ]
+        is None
+    )
+
+
+def test_normalize_s05_params_drops_the_wake_dc_current_sentinel():
+    params = {"BattDCChrgInCurr": -400.0}
+
+    condition = normalize_s05_params(params)
+
+    assert condition["charge"]["dcChargeCurrent"] is None
+    assert condition["charge"]["chargeCurrent"] is None
+
+    condition = normalize_s05_params({"BattDCChrgInCurr": -400.0, "ChrgSts": 4})
+
+    assert condition["charge"]["dcChargeCurrent"] == 400.0
+
+    # With an AC charging state the DC field is zeroed, not dropped.
+    condition = normalize_s05_params({"BattDCChrgInCurr": -400.0, "ChrgSts": 3})
+
+    assert condition["charge"]["dcChargeCurrent"] == 0.0

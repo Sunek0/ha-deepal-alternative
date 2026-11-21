@@ -217,7 +217,17 @@ class ClimateCondition(BaseModel):
     target_temperature_c: Optional[float] = None
     inside_temperature_c: Optional[float] = None
     outside_temperature_c: Optional[float] = None
-    humidity: Optional[float] = None
+    absolute_humidity: Optional[float] = Field(
+        default=None,
+        description="Cabin absolute humidity in g/m³ (the API fixed point divided by ten)",
+    )
+    relative_humidity: Optional[float] = Field(
+        default=None,
+        description=(
+            "Cabin relative humidity in percent, derived from the absolute humidity "
+            "and the cabin temperature"
+        ),
+    )
     inside_pm25: Optional[float] = None
     air_quality_level: Optional[int] = None
     defrost_on: Optional[bool] = Field(
@@ -279,12 +289,6 @@ class VehicleCondition(BaseModel):
         default=None, description="Vehicle longitude in decimal degrees (when reported)"
     )
     total_odometer_km: Optional[float] = Field(default=None, description="Total odometer in km")
-    mileage_yesterday_km: Optional[float] = Field(
-        default=None, description="Mileage driven yesterday in km (MQTT)"
-    )
-    trip_mileage_km: Optional[float] = Field(
-        default=None, description="Mileage since the current ignition cycle in km (MQTT)"
-    )
     speed_kmh: Optional[float] = Field(default=None, description="Vehicle speed in km/h")
     gear: Optional[str] = Field(default=None, description="Raw gear signal value")
     epb_status: Optional[int] = Field(default=None, description="Raw electronic parking brake status")

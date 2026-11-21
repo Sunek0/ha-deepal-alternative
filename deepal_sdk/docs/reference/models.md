@@ -96,8 +96,6 @@ Full telemetry snapshot shared by the REST and MQTT paths.
 | `car_id` | `str` | required | Vehicle id |
 | `vin` | `str` | `""` | VIN |
 | `total_odometer_km` | `float?` | `None` | Total odometer (km) |
-| `mileage_yesterday_km` | `float?` | `None` | Mileage yesterday (km) |
-| `trip_mileage_km` | `float?` | `None` | Mileage since the current ignition cycle (km) |
 | `speed_kmh` | `float?` | `None` | Speed (km/h) |
 | `gear` | `str?` | `None` | Raw gear signal |
 | `epb_status` | `int?` | `None` | Raw electronic parking brake status |
@@ -177,7 +175,8 @@ four positions `front_left`, `front_right`, `rear_left`, `rear_right`.
 | `power_on` | `bool?` | `None` | AC state; `None` when not reported (unknown, not off) |
 | `target_temperature_c` | `float?` | `None` | Target temperature (C) |
 | `inside_temperature_c` / `outside_temperature_c` | `float?` | `None` | Cabin / outside temperature (C) |
-| `humidity` | `float?` | `None` | Cabin humidity (%) |
+| `absolute_humidity` | `float?` | `None` | Cabin absolute humidity (g/m³); `None` while the body module sleeps |
+| `relative_humidity` | `float?` | `None` | Cabin relative humidity (%), derived from the absolute value and `inside_temperature_c` |
 | `inside_pm25` | `float?` | `None` | PM2.5 |
 | `air_quality_level` | `int?` | `None` | Air quality level |
 | `defrost_on` | `bool?` | `None` | Front defrost; `None` when not reported |

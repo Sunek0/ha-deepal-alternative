@@ -4,6 +4,42 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b7 - 2026-11-21
+
+### Added
+
+- **Absolute and relative cabin humidity.** The car reports `innerHumidity` as an absolute humidity
+  in g/m³, not a percentage. The integration now creates an `absolute_humidity` sensor in g/m³ and
+  derives the relative percentage from the cabin temperature, so `cabin_humidity` keeps its entity
+  id and `%` unit but shows the real value (for example ~46 % where it used to show 11.1).
+
+### Changed
+
+- The 10-minute charging read no longer wakes an MQTT vehicle: the live session already streams the
+  charge telemetry, so the read requests it on the open connection and the REST-only charge plan
+  keeps refreshing through the app-condition overlay.
+- The power status sensor accepts the `3` transition the car reports for about 0.1 s during a power
+  cycle as `on`.
+
+### Fixed
+
+- The module-initialisation values the car publishes when it wakes no longer reach Home Assistant:
+  a `0.0 bar` tire pressure is held for 60 seconds (and published if it persists, so a real puncture
+  is still visible), an impossible cabin target temperature is ignored, a `0 min` remaining charge
+  time without an active charge is unknown, and the `-400 A` DC current sentinel is dropped.
+
+### Removed
+
+- `sensor.mileage_yesterday` and `sensor.trip_mileage`: neither the MQTT reports nor the European
+  REST condition carry `totalMeterYesterday`/`igniteCumulativeMileage`, so the entities were
+  permanently unknown. Their entity-registry entries are removed on setup.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. The two mileage entities disappear,
+  `cabin_humidity` changes from the raw absolute reading to the derived percentage and the new
+  `absolute_humidity` entity appears. The other entity ids and unique ids do not change.
+
 ## 1.9.0-b6 - 2026-11-21
 
 ### Fixed

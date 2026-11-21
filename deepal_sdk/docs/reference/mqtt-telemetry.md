@@ -132,12 +132,10 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `soc`, `socDsp`, `remainPower` | `vehicleStatus.soc` | `battery.soc_percentage` |
 | `remainedPowerMile`, `totalResidualMileage` | `vehicleStatus.drvMileage` | `battery.remaining_range_km` |
 | `totalOdometer` | `vehicleStatus.totalMileage` | `total_odometer_km` |
-| `totalMeterYesterday` | `vehicleStatus.totalMeterYesterday` | `mileage_yesterday_km` |
-| `igniteCumulativeMileage` | `vehicleStatus.igniteCumulativeMileage` | `trip_mileage_km` |
 | `engineStatus` / `powerStatusFeedBack` / `electronichandbrakeStatus` | `vehicleStatus.engineSts` / `powerStatus` / `epbSts` | `engine_on` / `power_status` / `epb_status` |
 | `vehicleTemperature` | `hvac.insideTemp` (x10) | `climate.inside_temperature_c` |
 | `outsideTemperature`, `externalTemperature` | `hvac.outsideTemp` (x10; source unit assumed Celsius, pending live confirmation) | `climate.outside_temperature_c` |
-| `innerHumidity` | `hvac.insideHumidity` (raw tenths) | `climate.humidity` |
+| `innerHumidity` | `hvac.insideHumidity` (raw tenths of g/m³) | `climate.absolute_humidity` / `climate.relative_humidity` |
 | `airConditioningSetTemperature` | `hvac.remoteTemp` (x10) | `climate.target_temperature_c` |
 | `airStatus` | `hvac.acStatus` | `climate.power_on` |
 | `frontDefrostStatus` | `hvac.defrostStatus` | `climate.defrost_on` |
@@ -163,8 +161,9 @@ the tables in [REST telemetry](intl-api.md#7-rest-telemetry) then apply unchange
 | `leftBackSeatHeatStatus` / `leftBackSeatVentilateStatus` | `seat.leftBack.heatStatus` / `ventStatus` | `seats.rear_left.*` |
 | `rightBackSeatHeatStatus` / `rightBackSeatVentilateStatus` | `seat.rightBack.heatStatus` / `ventStatus` | `seats.rear_right.*` |
 
-`innerHumidity` keeps the raw fixed-point value (0-1000 tenths of a percent) in the normalized
-payload; `parse_condition()` converts it to percent exactly once.
+`innerHumidity` keeps the raw fixed-point value (0-1000 tenths of a gram per cubic metre) in the
+normalized payload; `parse_condition()` converts it to g/m³ exactly once and derives the relative
+percentage with the cabin temperature the same report carries.
 
 The normalizer reads the vehicle model code from the MQTT envelope (`b.mc`, with `b.modelCode` as a
 fallback) and uses it to select the PHEV handling for an absent or unrecognized state. On every
