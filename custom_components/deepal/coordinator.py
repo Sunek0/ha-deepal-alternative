@@ -39,7 +39,7 @@ from .snapshot import (
     conditions_from_snapshot,
     conditions_to_snapshot,
 )
-from .vehicle_model import uses_s05_charge_enum
+from .vehicle_model import is_s05_phev, uses_s05_charge_enum
 from .deepal.mqtt import (
     REST_SUBSYSTEM_WARNING_KEYS,
     S05_CHARGE_GUN_KEYS,
@@ -76,6 +76,13 @@ _CONDITION_FETCH_INTERVAL = 5.0
 _WAKE_POLL_INTERVAL = 5.0
 _VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
+# The charge plan only comes from the REST condition, which lists a new plan a
+# few seconds after the command. A push or an older REST read can repeat the
+# optimistic value (merged from the published state) or carry the old list, so
+# plan fields are held for a fixed window and never released early by a report
+# that happens to match.
+_PLAN_HOLD_SECONDS = 30.0
+_PLAN_HOLD_PREFIXES = ("battery.charge_schedule", "battery.charge_plan")
 _CHARGING_READ_INTERVAL = 600.0
 # A rejected CA/MQTT token triggers a forced session refresh, which bypasses the
 # SDK's own INTL_REFRESH_THROTTLE_SECONDS window (1800 s) because the refresh no
@@ -1024,12 +1031,24 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             # plan list are always taken from the app condition: a stale
             # charge_plan_id in the MQTT snapshot would make the switch delete
             # the wrong plan after an add.
-            condition.battery.charge_schedule_start = (
-                app_condition.battery.charge_schedule_start
-            )
-            condition.battery.charge_schedule_end = (
-                app_condition.battery.charge_schedule_end
-            )
+            # The car reports no times while only its default plan exists. Keep
+            # the last known times then (the merge restores them, also after a
+            # restart) instead of clearing them.
+            if app_condition.battery.charge_schedule_start is not None:
+                condition.battery.charge_schedule_start = (
+                    app_condition.battery.charge_schedule_start
+                )
+            if is_s05_phev(vehicle):
+                # S05 PHEV: a plan with a start but no end is a "continue to
+                # full charge" plan, so the end is unknown, not the last end.
+                if app_condition.battery.charge_schedule_start is not None:
+                    condition.battery.charge_schedule_end = (
+                        app_condition.battery.charge_schedule_end
+                    )
+            elif app_condition.battery.charge_schedule_end is not None:
+                condition.battery.charge_schedule_end = (
+                    app_condition.battery.charge_schedule_end
+                )
             condition.battery.charge_plan_id = app_condition.battery.charge_plan_id
             condition.battery.charge_plan_type = (
                 app_condition.battery.charge_plan_type
@@ -1123,10 +1142,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         changes = _diff_paths(before, after)
         if not changes:
             return
-        expires = time.monotonic() + _OPTIMISTIC_HOLD_SECONDS
+        now = time.monotonic()
         hold = self._optimistic_holds.setdefault(vehicle_id, {})
         for path, value in changes.items():
-            hold[path] = _OptimisticFieldHold(expires, value)
+            window = (
+                _PLAN_HOLD_SECONDS
+                if path.startswith(_PLAN_HOLD_PREFIXES)
+                else _OPTIMISTIC_HOLD_SECONDS
+            )
+            hold[path] = _OptimisticFieldHold(now + window, value)
         self._optimistic_pending.setdefault(vehicle_id, set()).update(changes)
 
     def _apply_optimistic_hold(
@@ -1153,6 +1177,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     continue
                 try:
                     if _path_get(condition, path) == entry.value:
+                        if path.startswith(_PLAN_HOLD_PREFIXES):
+                            # Keep holding: the next read may still carry the
+                            # plan list from before the command.
+                            remaining[path] = entry
                         continue
                     _path_set(condition, path, entry.value)
                 except AttributeError:
@@ -1476,12 +1504,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             self._retain_unknown_warnings(condition, previous)
             _retain_unreported_groups(previous, condition, pending)
             _retain_odometer(previous, condition)
+            vehicle = self._vehicle(vehicle_id)
+            phev = vehicle is not None and is_s05_phev(vehicle)
+            # S05 PHEV: only restore the end with the start; a start without an
+            # end is a "continue to full charge" plan, not a missing value.
+            if (
+                not phev or condition.battery.charge_schedule_start is None
+            ) and condition.battery.charge_schedule_end is None:
+                condition.battery.charge_schedule_end = (
+                    previous.battery.charge_schedule_end
+                )
             _copy_missing_fields(
                 condition.battery,
                 previous.battery,
                 (
                     "charge_schedule_start",
-                    "charge_schedule_end",
                     "charge_plan_id",
                     "charge_plan_type",
                     "charge_plan_time_format",

@@ -54,6 +54,15 @@
     "charge_schedule_unsupported": {
       "message": "Der Ladezeitplan wird nur beim S05 unterstützt."
     },
+    "charge_schedule_too_short": {
+      "message": "Das Ende des Ladeplans muss mindestens 30 Minuten nach dem Start liegen (Start {start}, Ende {end})."
+    },
+    "charge_schedule_set_outside_on": {
+      "message": "Der Ladeplan konnte nicht eingestellt werden: Er wurde in der Deepal-App oder im Auto festgelegt, und das Auto lässt keine Änderung aus Home Assistant zu. Schalte ihn zuerst in der App oder im Auto aus."
+    },
+    "charge_schedule_set_outside_off": {
+      "message": "Der Ladeplan konnte nicht ausgeschaltet werden: Er wurde in der Deepal-App oder im Auto festgelegt, und das Auto lässt keine Änderung aus Home Assistant zu. Schalte ihn in der App oder im Auto aus."
+    },
     "charge_schedule_delete_failed": {
       "message": "Der Ladezeitplan konnte nicht gelöscht werden: {error}"
     }
@@ -628,6 +637,9 @@
     "switch": {
       "charge_schedule": {
         "name": "Ladezeitplan"
+      },
+      "charge_schedule_full": {
+        "name": "Ladeplan bis voll"
       },
       "steering_wheel_heating": {
         "name": "Lenkradheizung"

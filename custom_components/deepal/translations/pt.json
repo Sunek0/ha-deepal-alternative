@@ -54,6 +54,15 @@
     "charge_schedule_unsupported": {
       "message": "O horário de carga só é suportado no S05."
     },
+    "charge_schedule_too_short": {
+      "message": "O fim do programa de carga deve ser pelo menos 30 minutos após o início (início {start}, fim {end})."
+    },
+    "charge_schedule_set_outside_on": {
+      "message": "Não foi possível definir o programa de carga: foi definido na app Deepal ou no carro, e o carro não aceita alterá-lo a partir do Home Assistant. Desative-o primeiro na app ou no carro."
+    },
+    "charge_schedule_set_outside_off": {
+      "message": "Não foi possível desativar o programa de carga: foi definido na app Deepal ou no carro, e o carro não aceita alterá-lo a partir do Home Assistant. Desative-o na app ou no carro."
+    },
     "charge_schedule_delete_failed": {
       "message": "Não foi possível eliminar o horário de carga: {error}"
     }
@@ -628,6 +637,9 @@
     "switch": {
       "charge_schedule": {
         "name": "Horário de carga"
+      },
+      "charge_schedule_full": {
+        "name": "Programa de carga até cheio"
       },
       "steering_wheel_heating": {
         "name": "Aquecimento do volante"

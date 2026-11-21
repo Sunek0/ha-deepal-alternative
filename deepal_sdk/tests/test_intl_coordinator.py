@@ -1031,6 +1031,41 @@ async def test_optimistic_hold_keeps_value_until_confirmed():
 
 
 @pytest.mark.asyncio
+async def test_charge_plan_hold_is_not_released_by_a_matching_report():
+    # Live S05 PHEV: a push repeated the optimistic plan values, the hold was
+    # released, and a REST read with the plan list from before the add then
+    # reverted the switch, so it needed a second press.
+    client = _FakeIntlClient([])
+    current = VehicleCondition(car_id="car-1", vin="")
+    current.battery.charge_schedule_start = "0500"
+    current.battery.charge_schedule_end = "0800"
+    current.battery.charge_schedule_enabled = True
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    before = current.model_dump()
+    after = current.model_copy(deep=True)
+    after.battery.charge_schedule_end = None
+    coordinator._register_optimistic_hold("car-1", before, after.model_dump())
+
+    echo = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    echo.battery.charge_schedule_start = "0500"
+    echo.battery.charge_schedule_end = None
+    coordinator._apply_optimistic_hold("car-1", echo)
+
+    stale = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2001)
+    stale.battery.charge_schedule_start = "0500"
+    stale.battery.charge_schedule_end = "0800"
+    applied = coordinator._apply_optimistic_hold("car-1", stale)
+    assert applied.battery.charge_schedule_end is None
+
+    _expire_optimistic_holds(coordinator, "car-1")
+    later = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2002)
+    later.battery.charge_schedule_end = "0800"
+    applied = coordinator._apply_optimistic_hold("car-1", later)
+    assert applied.battery.charge_schedule_end == "0800"
+
+
+@pytest.mark.asyncio
 async def test_optimistic_seat_hold_survives_unrelated_command():
     client = _FakeIntlClient([])
     current = VehicleCondition(car_id="car-1", vin="")
@@ -1261,6 +1296,38 @@ async def test_app_comfort_overlay_copies_the_charge_plan():
     assert merged.battery.charge_schedule_enabled is True
     assert merged.battery.charge_schedule_start == "0000"
     assert merged.battery.charge_schedule_end == "0100"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_code", "expected_end"),
+    [("SC6460AAAA7HEV", None), ("SC6464AAKBEV", "0900")],
+)
+async def test_app_overlay_full_charge_end_is_only_cleared_on_the_s05_phev(
+    model_code, expected_end
+):
+    # Live S05 PHEV: a "continue to full charge" plan has no end time, and the
+    # last end (09:00) must not be shown. Other models keep the last end.
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(
+        car_id="car-1", vin="VIN", protocol_type="MQTT", model_code=model_code
+    )
+    coordinator.vehicles = [vehicle]
+    plans = [{"planId": 1, "isValid": 1, "startTime": "0100", "startSwitch": 1}]
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.battery.charge_schedule_start = "0100"
+    app_condition.battery.charge_schedule_end = None
+    app_condition.battery.charge_plans = plans
+    app_condition.raw_data = {"charge": {"chargePlanList": plans}}
+    client.http_condition = app_condition
+    condition = VehicleCondition(car_id="car-1", vin="VIN")
+    condition.battery.charge_schedule_end = "0900"
+
+    merged = await coordinator._overlay_app_comfort(vehicle, condition)
+
+    assert merged.battery.charge_schedule_start == "0100"
+    assert merged.battery.charge_schedule_end == expected_end
 
 
 @pytest.mark.asyncio
