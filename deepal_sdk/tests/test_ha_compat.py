@@ -1643,10 +1643,7 @@ def test_build_sensors_adds_fuel_only_for_fuel_vehicles() -> None:
         for entity in sensor.build_sensors(coordinator, s05_without_codes)
     }
 
-    assert sensor.FUEL_SENSOR_KEYS - sensor.S05_PHEV_UNSUPPORTED_SENSOR_KEYS <= (
-        phev_keys
-    )
-    assert sensor.S05_PHEV_UNSUPPORTED_SENSOR_KEYS.isdisjoint(phev_keys)
+    assert sensor.FUEL_SENSOR_KEYS <= phev_keys
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(bev_keys)
     assert sensor.FUEL_SENSOR_KEYS.isdisjoint(electric_keys)
     assert "charge_limit" not in phev_keys
@@ -1670,72 +1667,6 @@ def test_fuel_volume_sensor_exposes_litres() -> None:
     assert entity._attr_device_class is sensor.SensorDeviceClass.VOLUME_STORAGE
     assert entity._attr_state_class is sensor.SensorStateClass.MEASUREMENT
     assert entity._attr_native_unit_of_measurement is UnitOfVolume.LITERS
-
-
-def test_s05_phev_has_no_fuel_tank_capacity_sensor() -> None:
-    coordinator = FakeCoordinator()
-    coordinator.client = object.__new__(DeepalIntlClient)
-    coordinator.capabilities = {
-        "car-1": VehicleCapabilities.from_codes(["#oilMileage"]),
-        "car-2": VehicleCapabilities.from_codes(["#oilMileage"]),
-    }
-    phev = _model_vehicle(
-        "car-1", series_name="S05", series_code="C857P1", model_code="SC6460AAAA7HEV"
-    )
-    other_fuel_vehicle = _model_vehicle("car-2", series_name="Deepal S07")
-
-    phev_keys = {
-        entity.translation_key for entity in sensor.build_sensors(coordinator, phev)
-    }
-    other_keys = {
-        entity.translation_key
-        for entity in sensor.build_sensors(coordinator, other_fuel_vehicle)
-    }
-
-    assert sensor.S05_PHEV_UNSUPPORTED_SENSOR_KEYS == frozenset({"fuel_tank_capacity"})
-    assert {"fuel_level", "fuel_range", "fuel_volume"} <= phev_keys
-    assert "fuel_tank_capacity" not in phev_keys
-    # Other fuel vehicles keep the sensor, so the REST tank volume still shows.
-    assert sensor.FUEL_SENSOR_KEYS <= other_keys
-
-
-@pytest.mark.asyncio
-async def test_s05_phev_fuel_tank_capacity_entry_is_removed_from_the_registry(
-    monkeypatch,
-) -> None:
-    coordinator = FakeCoordinator()
-    client = object.__new__(DeepalIntlClient)
-    client.private_key_pem = "test-private-key"
-    coordinator.client = client
-    coordinator.capabilities = {
-        "car-1": VehicleCapabilities.from_codes(["#oilMileage"]),
-        "car-2": VehicleCapabilities.from_codes(["#oilMileage"]),
-    }
-    phev = _model_vehicle(
-        "car-1", series_name="S05", series_code="C857P1", model_code="SC6460AAAA7HEV"
-    )
-    other_fuel_vehicle = _model_vehicle("car-2", series_name="Deepal S07")
-    coordinator.vehicles = [phev, other_fuel_vehicle]
-    entry = SimpleNamespace(runtime_data=SimpleNamespace(coordinator=coordinator))
-    removed: list[str] = []
-
-    class _Registry:
-        def async_get_entity_id(self, platform, domain, unique_id):
-            assert (platform, domain) == ("sensor", "deepal")
-            return f"sensor.{unique_id}"
-
-        def async_remove(self, entity_id):
-            removed.append(entity_id)
-
-    registry = _Registry()
-    monkeypatch.setattr(sensor.er, "async_get", lambda hass: registry)
-
-    await sensor.async_setup_entry(None, entry, [].extend)
-
-    assert "sensor.deepal_car-1_fuel_tank_capacity" in removed
-    assert "sensor.deepal_car-2_fuel_tank_capacity" not in removed
-    assert "sensor.deepal_car-1_fuel_volume" not in removed
-    assert "sensor.deepal_car-1_fuel_level" not in removed
 
 
 def test_fuel_tank_capacity_uses_stored_volume_semantics() -> None:

@@ -70,6 +70,19 @@ Another host or timeout:
 
 `--keys` overrides the `keys=*` query parameter when a smaller response is useful.
 
+## Offline mode (captured payload)
+
+If you do not have a live token, run the probe against a captured JSON payload. File mode makes no
+network request and needs no credentials:
+
+```bash
+.venv/bin/python tools/deepal-cn-probe/probe.py --payload-file capture.json --raw
+```
+
+The file can be either the full gateway envelope (`{"code":0,"data":{...}}`) or the bare `data`
+object. Redact tokens, VIN, car id, coordinates and user identifiers before sharing the file; the
+`--raw` output applies the probe's own redaction on top.
+
 Example output (values are illustrative):
 
 ```text
@@ -90,8 +103,8 @@ illustrative: the exact values and the missing set depend on the car.
 | Code | Meaning |
 | --- | --- |
 | `0` | The token was accepted and the summary was printed |
-| `1` | Transport error, HTTP error, invalid JSON, or a gateway error (`code` != `0`) |
-| `2` | Missing `DEEPAL_CN_TOKEN`/`DEEPAL_CN_CAR_ID`, or a non-HTTPS `--base-url` |
+| `1` | Transport error, HTTP error, invalid JSON from the gateway, or a gateway error (`code` != `0`) |
+| `2` | Missing `DEEPAL_CN_TOKEN`/`DEEPAL_CN_CAR_ID`, a non-HTTPS `--base-url`, or an unreadable/invalid `--payload-file` |
 
 ## Security notes
 

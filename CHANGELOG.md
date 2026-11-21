@@ -4,6 +4,19 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b5 - 2026-11-21
+
+### Added
+
+- `--payload-file` mode in `tools/deepal-cn-probe/`: render a captured `car/data` payload from
+  disk, with the same redacted summary and `--raw` output, without a token or a network request.
+  The file can be the full gateway envelope or the bare data object.
+
+### Upgrade
+
+- No integration behaviour changes; this beta only updates the tester tool. HACS users can stay on
+  `1.9.0-b4` unless they want the tool update.
+
 ## 1.9.0-b4 - 2026-11-20
 
 ### Added

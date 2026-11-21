@@ -116,11 +116,35 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"request timeout in seconds (default: {DEFAULT_TIMEOUT:g})",
     )
     parser.add_argument(
+        "--payload-file",
+        type=Path,
+        default=None,
+        help=(
+            "read a captured JSON payload from this file instead of calling the "
+            "endpoint (no token required)"
+        ),
+    )
+    parser.add_argument(
         "--raw",
         action="store_true",
         help="print the full redacted payload after the summary",
     )
     return parser
+
+
+def load_payload_file(path: Path) -> dict[str, Any]:
+    """Load a captured payload, accepting the envelope or a bare data object."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as err:
+        raise ValueError(f"cannot read {path}: {err}") from err
+    except json.JSONDecodeError as err:
+        raise ValueError(f"{path} is not valid JSON: {err}") from err
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} does not contain a JSON object")
+    if "data" in payload or ("code" in payload and ("msg" in payload or "message" in payload)):
+        return payload
+    return {"code": 0, "data": payload}
 
 
 async def fetch_car_data(
@@ -192,50 +216,58 @@ async def run(
     client: Optional[httpx.AsyncClient] = None,
 ) -> int:
     """Execute the probe and return the process exit code."""
-    token = (args.token or "").strip()
-    car_id = (args.car_id or "").strip()
-    if not token or not car_id:
-        print(
-            "Missing credentials: set DEEPAL_CN_TOKEN and DEEPAL_CN_CAR_ID "
-            "(or pass --token and --car-id).",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
-    if not str(args.base_url).lower().startswith("https://"):
-        print(
-            "Refusing to send the token over a non-HTTPS base URL; use https://.",
-            file=sys.stderr,
-        )
-        return EXIT_USAGE
+    payload_file = args.payload_file
+    if payload_file is not None:
+        try:
+            payload = load_payload_file(Path(payload_file))
+        except ValueError as err:
+            print(f"Cannot load payload: {err}", file=sys.stderr)
+            return EXIT_USAGE
+    else:
+        token = (args.token or "").strip()
+        car_id = (args.car_id or "").strip()
+        if not token or not car_id:
+            print(
+                "Missing credentials: set DEEPAL_CN_TOKEN and DEEPAL_CN_CAR_ID "
+                "(or pass --token and --car-id).",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if not str(args.base_url).lower().startswith("https://"):
+            print(
+                "Refusing to send the token over a non-HTTPS base URL; use https://.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
 
-    owns_client = client is None
-    http_client = client or httpx.AsyncClient()
-    try:
-        payload = await fetch_car_data(
-            http_client,
-            base_url=args.base_url,
-            token=token,
-            car_id=car_id,
-            keys=args.keys,
-            timeout=args.timeout,
-        )
-    except httpx.HTTPStatusError as err:
-        # Do not print the exception: it embeds the URL, and the token is a
-        # query parameter.
-        print(
-            f"Request failed with HTTP {err.response.status_code}.",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
-    except httpx.RequestError as err:
-        print(f"Request failed ({type(err).__name__}).", file=sys.stderr)
-        return EXIT_ERROR
-    except ValueError as err:
-        print(f"Invalid response: {err}", file=sys.stderr)
-        return EXIT_ERROR
-    finally:
-        if owns_client:
-            await http_client.aclose()
+        owns_client = client is None
+        http_client = client or httpx.AsyncClient()
+        try:
+            payload = await fetch_car_data(
+                http_client,
+                base_url=args.base_url,
+                token=token,
+                car_id=car_id,
+                keys=args.keys,
+                timeout=args.timeout,
+            )
+        except httpx.HTTPStatusError as err:
+            # Do not print the exception: it embeds the URL, and the token is a
+            # query parameter.
+            print(
+                f"Request failed with HTTP {err.response.status_code}.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        except httpx.RequestError as err:
+            print(f"Request failed ({type(err).__name__}).", file=sys.stderr)
+            return EXIT_ERROR
+        except ValueError as err:
+            print(f"Invalid response: {err}", file=sys.stderr)
+            return EXIT_ERROR
+        finally:
+            if owns_client:
+                await http_client.aclose()
 
     if str(payload.get("code")) != "0":
         print(_error_text(payload), file=sys.stderr)

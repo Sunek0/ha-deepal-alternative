@@ -118,11 +118,6 @@ FUEL_SENSOR_KEYS = frozenset(
     {"fuel_level", "fuel_range", "fuel_volume", "fuel_tank_capacity"}
 )
 
-# The S05 PHEV reports the fuel level, range and litres left over MQTT but never
-# a fuel tank capacity (the entity stayed unknown on a live car), so it does not
-# get that sensor.
-S05_PHEV_UNSUPPORTED_SENSOR_KEYS = frozenset({"fuel_tank_capacity"})
-
 # Charge-schedule sensors exist only on models with the schedule option.
 CHARGE_SCHEDULE_SENSOR_KEYS = frozenset(
     {"charge_schedule_start", "charge_schedule_end"}
@@ -243,10 +238,6 @@ def build_sensors(
                 return False
             if description.key in FUEL_SENSOR_KEYS and not fuel:
                 return False
-            if description.key in S05_PHEV_UNSUPPORTED_SENSOR_KEYS and is_s05_phev(
-                vehicle
-            ):
-                return False
             if not s05:
                 return True
             if description.key in S05_ENUM_SENSOR_KEYS:
@@ -285,7 +276,6 @@ async def async_setup_entry(
             removed = {"outside_temperature"}
             if is_s05_phev(vehicle):
                 removed.add("charge_limit")
-                removed.update(S05_PHEV_UNSUPPORTED_SENSOR_KEYS)
             _remove_sensor_entities(registry, vehicle, removed)
         if not supports_charge_plan(vehicle):
             _remove_sensor_entities(registry, vehicle, CHARGE_SCHEDULE_SENSOR_KEYS)
