@@ -1014,12 +1014,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             # plan list are always taken from the app condition: a stale
             # charge_plan_id in the MQTT snapshot would make the switch delete
             # the wrong plan after an add.
-            condition.battery.charge_schedule_start = (
-                app_condition.battery.charge_schedule_start
-            )
-            condition.battery.charge_schedule_end = (
-                app_condition.battery.charge_schedule_end
-            )
+            # The car reports no times while only its default plan exists. Keep
+            # the last known times then (the merge restores them, also after a
+            # restart) instead of clearing them.
+            if app_condition.battery.charge_schedule_start is not None:
+                condition.battery.charge_schedule_start = (
+                    app_condition.battery.charge_schedule_start
+                )
+            if app_condition.battery.charge_schedule_end is not None:
+                condition.battery.charge_schedule_end = (
+                    app_condition.battery.charge_schedule_end
+                )
             condition.battery.charge_plan_id = app_condition.battery.charge_plan_id
             condition.battery.charge_plan_type = (
                 app_condition.battery.charge_plan_type

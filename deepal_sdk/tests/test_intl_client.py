@@ -5193,6 +5193,70 @@ def test_parse_condition_without_location_leaves_it_unknown():
     assert condition.longitude is None
 
 
+# The S05 PHEV lists its plans newest first and always keeps a default plan
+# with id "1" (placeholder times). That is only known for the PHEV.
+_PLAN_LIST = [
+    {"planId": "1", "isValid": 0, "startTime": "0100", "endTime": "2300"},
+]
+_NEWEST_OFF_OLDER_ON = [
+    {"planId": "300", "isValid": 0, "startTime": "0100", "endTime": "0200"},
+    {"planId": "200", "isValid": 1, "startTime": "0300", "endTime": "0400"},
+    {"planId": "1", "isValid": 0, "startTime": "0100", "endTime": "2300"},
+]
+
+
+def _plan_condition(plans, model_code):
+    client = _client(lambda request: httpx.Response(200, json={}))
+    return client.parse_condition(
+        {"charge": {"chargePlanList": plans}},
+        "car-1",
+        model_code=model_code,
+    )
+
+
+def test_parse_condition_s05_phev_follows_the_newest_plan():
+    battery = _plan_condition(_NEWEST_OFF_OLDER_ON, "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "300"
+    assert battery.charge_plan_valid is False
+    assert battery.charge_schedule_enabled is False
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0100",
+        "0200",
+    )
+
+
+def test_parse_condition_s05_phev_ignores_the_placeholder_times():
+    battery = _plan_condition(_PLAN_LIST, "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "1"
+    assert battery.charge_schedule_start is None
+    assert battery.charge_schedule_end is None
+
+
+@pytest.mark.parametrize("model_code", ["SC6464AAKBEV", "SC6501ABABEV", None])
+def test_parse_condition_other_models_keep_the_first_valid_plan(model_code):
+    battery = _plan_condition(_NEWEST_OFF_OLDER_ON, model_code).battery
+
+    assert battery.charge_plan_id == "200"
+    assert battery.charge_plan_valid is True
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0300",
+        "0400",
+    )
+
+
+@pytest.mark.parametrize("model_code", ["SC6464AAKBEV", "SC6501ABABEV", None])
+def test_parse_condition_other_models_use_plan_id_1_times(model_code):
+    battery = _plan_condition(_PLAN_LIST, model_code).battery
+
+    assert battery.charge_plan_id == "1"
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0100",
+        "2300",
+    )
+
+
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
