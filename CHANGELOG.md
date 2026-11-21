@@ -4,6 +4,14 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b6 - 2026-11-21
+
+### Fixed
+
+- The S05 PHEV no longer creates the fuel tank capacity sensor, which was always unknown because
+  the car reports fuel level, range and litres left but never a tank capacity. The entity-registry
+  entry is removed on setup; other fuel vehicles keep the sensor. Contributed by @rmxs.
+
 ## 1.9.0-b5 - 2026-11-21
 
 ### Added
