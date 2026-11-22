@@ -17,7 +17,7 @@ import logging
 import math
 import ssl
 import struct
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -2009,6 +2009,55 @@ def _warning_light(value: Any, power_status: Optional[int]) -> Optional[bool]:
     return _as_bool(value)
 
 
+#: S05 dashboard light bits: model field -> wire parameter. One mapping feeds
+#: both the normalizer and the live-session reset below, so every mapped light
+#: is covered when the accumulated power state becomes ready.
+S05_DASHBOARD_LIGHT_KEYS: dict[str, str] = {
+    "battery12v": "batt12VLightStatus",
+    "tpms": "tpmsLightStatus",
+    "abs": "absLightStatus",
+    "airbag": "airBagLightStatus",
+    "brakeFluid": "brakeFluidLightStatus",
+    "brake": "brakeLightStatus",
+    "eps": "epsLightStatus",
+    "powerLimit": "powerLimitLightStatus",
+    "powerSystem": "powerSystemLightStatus",
+    "tractionBatteryLow": "bcuBattSocLightStatus",
+    "coolantTemperature": "coolanTemperatureLightStatus",
+}
+
+#: Wire parameter that carries the S05 power state gating those bits.
+S05_POWER_STATUS_KEY = "powerStatusFeedBack"
+
+
+def drop_stale_s05_light_bits(
+    accumulated: MutableMapping[str, Any], report: Mapping[str, Any]
+) -> bool:
+    """Drop accumulated dashboard bits that a ready report leaves behind.
+
+    The live session re-parses the merged state of every partial report, so a
+    dashboard bit can be compared with a power state that a later report
+    supplied. When the report crosses the power gate from off/unknown to on, the
+    bits it does not carry belong to the pre-ready state (the wake self-check)
+    and must not be trusted. Returns whether a key was removed.
+
+    See ``docs/investigations/brake-warning-false-positive-2026-11-21.md``.
+    """
+    incoming = _as_int(report.get(S05_POWER_STATUS_KEY))
+    if incoming is None or incoming == 0:
+        return False
+    previous = _as_int(accumulated.get(S05_POWER_STATUS_KEY))
+    if previous is not None and previous != 0:
+        return False
+    dropped = False
+    for key in S05_DASHBOARD_LIGHT_KEYS.values():
+        if key in report or key not in accumulated:
+            continue
+        del accumulated[key]
+        dropped = True
+    return dropped
+
+
 # Dashboard lights that have a REST ``vehicleStatus`` subsystem register. The
 # MQTT light bits (notably ``airBagLightStatus``) glitch to 1 on a healthy car,
 # while the app paints these registers, which read 0 on a healthy car.
@@ -2370,7 +2419,7 @@ def normalize_s05_params(
         dc_gun_value=_first(params, *S05_DC_GUN_KEYS),
         phev=phev,
     )
-    power_status = _as_int(params.get("powerStatusFeedBack"))
+    power_status = _as_int(params.get(S05_POWER_STATUS_KEY))
     outside_temp = _as_float(
         _first(params, "outsideTemperature", "externalTemperature")
     )
@@ -2457,27 +2506,8 @@ def normalize_s05_params(
             "rightTurn": _as_int(params.get("turnLndicatorRight")),
         },
         "warningLights": {
-            "battery12v": _warning_light(params.get("batt12VLightStatus"), power_status),
-            "tpms": _warning_light(params.get("tpmsLightStatus"), power_status),
-            "abs": _warning_light(params.get("absLightStatus"), power_status),
-            "airbag": _warning_light(params.get("airBagLightStatus"), power_status),
-            "brakeFluid": _warning_light(
-                params.get("brakeFluidLightStatus"), power_status
-            ),
-            "brake": _warning_light(params.get("brakeLightStatus"), power_status),
-            "eps": _warning_light(params.get("epsLightStatus"), power_status),
-            "powerLimit": _warning_light(
-                params.get("powerLimitLightStatus"), power_status
-            ),
-            "powerSystem": _warning_light(
-                params.get("powerSystemLightStatus"), power_status
-            ),
-            "tractionBatteryLow": _warning_light(
-                params.get("bcuBattSocLightStatus"), power_status
-            ),
-            "coolantTemperature": _warning_light(
-                params.get("coolanTemperatureLightStatus"), power_status
-            ),
+            field: _warning_light(params.get(key), power_status)
+            for field, key in S05_DASHBOARD_LIGHT_KEYS.items()
         },
         "windowOpenings": {
             "frontLeft": _as_int(params.get("leftAnteriorWindowDegree")),

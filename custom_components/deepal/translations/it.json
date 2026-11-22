@@ -54,6 +54,15 @@
     "charge_schedule_unsupported": {
       "message": "L’orario di ricarica è supportato solo sull’S05."
     },
+    "charge_schedule_too_short": {
+      "message": "La fine del programma di ricarica deve essere almeno 30 minuti dopo l'inizio (inizio {start}, fine {end})."
+    },
+    "charge_schedule_set_outside_on": {
+      "message": "Impossibile impostare il programma di ricarica: è stato impostato nell'app Deepal o sull'auto, e l'auto non accetta modifiche da Home Assistant. Disattivalo prima nell'app o sull'auto."
+    },
+    "charge_schedule_set_outside_off": {
+      "message": "Impossibile disattivare il programma di ricarica: è stato impostato nell'app Deepal o sull'auto, e l'auto non accetta modifiche da Home Assistant. Disattivalo nell'app o sull'auto."
+    },
     "charge_schedule_delete_failed": {
       "message": "Impossibile eliminare l’orario di ricarica: {error}"
     }
@@ -628,6 +637,9 @@
     "switch": {
       "charge_schedule": {
         "name": "Programma di ricarica"
+      },
+      "charge_schedule_full": {
+        "name": "Programma di ricarica fino al pieno"
       },
       "steering_wheel_heating": {
         "name": "Riscaldamento volante"

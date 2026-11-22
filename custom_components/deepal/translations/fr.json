@@ -54,6 +54,15 @@
     "charge_schedule_unsupported": {
       "message": "Le programme de charge est uniquement pris en charge sur le S05."
     },
+    "charge_schedule_too_short": {
+      "message": "La fin du programme de charge doit être au moins 30 minutes après le début (début {start}, fin {end})."
+    },
+    "charge_schedule_set_outside_on": {
+      "message": "Impossible de régler le programme de charge : il a été défini dans l'app Deepal ou dans la voiture, et la voiture n'accepte pas de le modifier depuis Home Assistant. Désactivez-le d'abord dans l'app ou dans la voiture."
+    },
+    "charge_schedule_set_outside_off": {
+      "message": "Impossible de désactiver le programme de charge : il a été défini dans l'app Deepal ou dans la voiture, et la voiture n'accepte pas de le modifier depuis Home Assistant. Désactivez-le dans l'app ou dans la voiture."
+    },
     "charge_schedule_delete_failed": {
       "message": "Le programme de charge n’a pas pu être supprimé : {error}"
     }
@@ -628,6 +637,9 @@
     "switch": {
       "charge_schedule": {
         "name": "Plage de charge"
+      },
+      "charge_schedule_full": {
+        "name": "Programme de charge jusqu'au plein"
       },
       "steering_wheel_heating": {
         "name": "Chauffage du volant"

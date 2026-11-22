@@ -4,6 +4,54 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0-b8 - 2026-11-22
+
+### Added
+
+- **"Charge schedule to full" switch (S05 PHEV).** The app and the car store a "continue to full
+  charge" plan as a start with no end time, and the end time entity cannot be cleared, so the new
+  switch is the way to set it from Home Assistant. Turning it off gives the plan an end time again
+  (08:00, or the end time entity).
+- The S05 PHEV schedule switches expose `set_by` (`app_or_car`, `home_assistant` or `none`) and
+  `controllable`, so a dashboard can disable its controls for a plan Home Assistant cannot change.
+
+### Changed
+
+- The S05 PHEV charge schedule replaces the plan instead of editing it: `add-plan` to enable, on a
+  time edit and for full charge, `delete-plan` to disable. The car rejects `modify-plan` and the
+  plan on/off command for the plan the app and the car follow, so that path never worked.
+- The S05 PHEV parser follows the first `chargePlanList` entry, on or off, and treats a missing end
+  time as unknown (full charge) instead of reusing another entry's end. Other models keep the
+  first valid plan.
+- An S05 plan whose end is less than 30 minutes after its start is rejected before the command, as
+  the app does, including windows that cross midnight. A plan without an end time is exempt.
+- Dashboard warning lights are only published as a fault once the car has been ready for 60 seconds,
+  and a confirmed fault stops being shown while the car is off or asleep. Healthy values keep their
+  last known state.
+
+### Fixed
+
+- The S05 PHEV switch no longer stays on after the app switched the plan off, no longer shows the
+  times of a plan the car does not follow, and no longer needs a second press: plan fields are
+  held for 30 seconds so a push or an old REST read cannot revert them.
+- Switching the schedule off no longer fails with `HW_1_1_01_001` for a plan saved in the app or on
+  the car: the integration explains where to switch it off instead of sending a command the car
+  rejects, and only reports the schedule as off once the plan list confirms it.
+- Older plans Home Assistant added are removed only after the car lists the new one, and a delete
+  the car no longer lists is skipped instead of retried.
+- The S05 no longer reports the dashboard self-check as a fault when it wakes: the live session
+  drops the light bits of a report that predates the ready state, and every warning light waits for
+  the settled ready window. This removes the false brake warning seen for a few seconds after a
+  wake or a command, and closes the same window for the other dashboard lights.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. The new `switch.<car>_charge_schedule_to_full`
+  appears on S05 PHEV vehicles only; the existing schedule switch and time entities keep their ids.
+  A PHEV schedule may need one action in the app or on the car if it was set there.
+- A warning light can take up to 60 seconds to appear after the car starts, and a confirmed fault no
+  longer stays on while the car sleeps. No entity ids change.
+
 ## 1.9.0-b7 - 2026-11-21
 
 ### Added

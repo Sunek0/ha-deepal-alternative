@@ -15,10 +15,30 @@ The integration provides the connection, the telemetry and the remote controls; 
 
 ## Requirements
 
-- Home Assistant 2026.8.0.
+- Home Assistant 2026.11.0.
 - An international My Changan account (email or SMS login). The HACS metadata advertises the
   countries with a translated language: Spain, Portugal, the United Kingdom, Ireland, France,
   Belgium, Luxembourg, Germany, Austria, Switzerland, Italy and Greece.
+
+## Installation
+
+### HACS
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
+
+1. Click in add from link (or add this repository as a custom repository) and use this link:
+   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
+   offers to add the repository as a custom repository.
+2. Install **Deepal Alternative** and restart Home Assistant.
+3. Add the integration from **Settings > Devices & services**, choose the international platform and
+   log in with an email or SMS code (use the secondary account from above).
+
+Updating keeps the same `deepal` domain, so no reconfiguration is needed.
+
+### Manual
+
+1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
+2. Restart Home Assistant and add the integration as described above.
 
 ## Supported vehicles
 
@@ -39,8 +59,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   reauthentication flow. If a verification code does not arrive, the login step can resend it or
   correct the destination; Changan is currently not delivering SMS codes, so the email method is
   recommended.
-- Integration options for the scan interval, API logging, the regional environment, the vehicle
-  wake and the live MQTT session.
+- Integration options for the scan interval, API logging and the regional environment.
 
 ### Telemetry
 
@@ -51,11 +70,6 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
   brakes, power steering, power limit, power system, traction battery low and coolant
   temperature), the key fob battery, the air recirculation state and the rear fog lamp.
-- **Live MQTT session**: Home Assistant keeps one MQTT connection open for MQTT vehicles, so the
-  car's unsolicited reports (doors, windows, climate, odometer, charge state) reach the entities in
-  seconds instead of waiting for the next poll. It is enabled by default for `protocolType: MQTT`
-  vehicles and can be disabled in the options. The periodic poll and the REST condition remain in
-  place; the charge schedule is a REST-only field and refreshes with the periodic scan.
 - Beta MQTT telemetry for SDA-platform vehicles (`SDA-MQTT`, E07) through the SDA condition
   service, with fallback to the legacy service and the REST condition.
 - Climate target temperature, outside temperature (when the vehicle reports it; the S05 does not),
@@ -73,9 +87,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   sleeping vehicle with the same service the official app uses and waits for a fresh report; wakes
   are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
   never wakes the car.
-- While a charging session is open, every two main polls (10 minutes with the default 300 s
-  scan) the integration wakes the charging vehicle and reads only it, and stops as soon as the
-  session closes.
+- While a charging session is open, the integration reads only the charging vehicles every 10
+  minutes and stops as soon as the session closes.
 - Waking the vehicle can take up to 20 seconds before it reports again.
 - REST-backed and `SDA-MQTT` vehicles keep using the signed condition request; the MQTT wake is only
   available for CA/MQTT vehicles.
@@ -83,12 +96,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 ### Remote controls
 
 - Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule (S05
-  BEV and PHEV), lights, horn and lights-and-horn together.
-- The S05 BEV charge reservation is managed with the `deepal.set_charge_schedule` service; the
-  PHEV also keeps its switch/time entities. The integration uses `/charge/add-plan` and
-  `/charge/delete-plan` on the BEV, and `/charge/modify-plan` on the PHEV with an `add-plan`
-  fallback when the car only reports the placeholder plan or rejects the update. The PHEV switch
-  uses `/charge/validity` to flip the plan on or off.
+  PHEV only), lights, horn and lights-and-horn together.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
@@ -98,39 +106,6 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   seconds while the vehicle wakes up and reports before the command is sent.
 - Flashing the lights, sounding the horn and the combined lights-and-horn button make the car run a
   physical cycle (about 30 s, 6 s and 30 s respectively).
-
-### Charge schedule
-
-The S05 BEV and S05 PHEV expose a real charge reservation. Set it from an automation, script or
-the service developer tools:
-
-```yaml
-service: deepal.set_charge_schedule
-data:
-  start_time: "00:00"
-  end_time: "01:00"
-  enabled: true
-```
-
-- The times are the vehicle's local time in `HH:MM` or `HHMM` form. The plan's own timezone wins
-  when the car reports one; Home Assistant is the fallback. The schedule time entities expose the
-  effective `time_zone` attribute.
-- `enabled: false` removes the active plan on the S05 BEV and disables the current plan on the
-  S05 PHEV. The S05 BEV uses `add-plan`/`delete-plan` because the car rejects `modify-plan`.
-- On the S05 PHEV the integration updates the reported plan with `modify-plan`; if the car rejects
-  it, the reservation is created with `add-plan`. Disabling uses the plan on/off command first and
-  deletes the plan if that fails, so it never adds a plan to switch off. The service response
-  reports the command that actually ran (`plan-validity`, `modify-plan`, `add-plan` or
-  `delete-plan`).
-- With several loaded entries or vehicles, pass `config_entry_id` and/or `vehicle_id`.
-- The switch and time controls are available for both variants. On the S05 BEV the switch adds a
-  plan with the current times and deletes it when turned off; changing a time adds an active
-  plan. On the S05 PHEV the switch uses the plan on/off command for both states and the time
-  entities keep writing the times with `modify-plan`.
-- The read-only "Charge schedule enabled" binary sensor and the start/end sensors are available
-  for both variants.
-- The BEV deletes only the active plan before adding a new one; disabled plans created in the app
-  are left untouched.
 
 ### Vehicle image
 
@@ -261,40 +236,13 @@ troubleshooting) is available in every language the integration supports:
 - [Italiano](guides/installation-guide.it.md)
 - [Português](guides/installation-guide.pt.md)
 
-## Installation
-
-### HACS
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Sunek0&repository=ha-deepal-alternative&category=integration)
-
-1. Click the badge (or add this repository as a custom repository of type **Integration**:
-   `https://github.com/Sunek0/ha-deepal-alternative`). The badge opens HACS on your instance and
-   offers to add the repository as a custom repository.
-2. Install **Deepal Alternative** and restart Home Assistant.
-3. Add the integration from **Settings > Devices & services**, choose the international platform and
-   log in with an email or SMS code (use the secondary account from above).
-
-Updating keeps the same `deepal` domain, so no reconfiguration is needed.
-
-### Manual
-
-1. Copy `custom_components/deepal/` into your Home Assistant `config/custom_components/` directory.
-2. Restart Home Assistant and add the integration as described above.
-
-## Configuration
+# Configuration
 
 Open **Settings > Devices & services > Deepal Alternative > Configure** to change these options:
 
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
-- **Live MQTT session**: keep one MQTT connection open for MQTT vehicles so their reports arrive in
-  seconds. Enabled by default; disable it to return to the one-shot polling behavior. The phone app
-  and Home Assistant can normally stay connected at the same time because each installation gets
-  its own MQTT identity; if the app disconnects while the live session is on, disable the option.
-  The live connection itself only listens and does not wake the car; the existing refresh and
-  command wake behavior is unchanged. Pushed reports do not trigger REST calls. The charge
-  schedule remains a REST-only field and refreshes with the periodic scan.
 - **Scan interval**, **API logging**, **full diagnostics capture** and **regional environment**:
   polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging. Every
   cycle reads each vehicle over MQTT plus the app condition, so an account with several cars can

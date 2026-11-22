@@ -40,6 +40,7 @@ from .mqtt import (
     condition_request_payload,
     condition_request_services,
     config_mqtt_identity,
+    drop_stale_s05_light_bits,
     new_request_id,
     normalize_s05_params,
     parse_publish,
@@ -878,6 +879,14 @@ class DeepalIntlMqttSession:
         model_code: Optional[str],
     ) -> bool:
         before = dict(context.accumulated)
+        # A report that turns the vehicle on must not inherit the dashboard
+        # bits of the wake self-check it did not carry (2026-11-21 false brake
+        # warning); see ``drop_stale_s05_light_bits``.
+        if drop_stale_s05_light_bits(context.accumulated, params):
+            logger.debug(
+                "Deepal live MQTT: dropped the pre-ready dashboard bits of %s",
+                context.vehicle.car_id,
+            )
         context.accumulated.update(params)
         if model_code:
             context.model_code = model_code

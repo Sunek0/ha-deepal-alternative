@@ -339,7 +339,7 @@ Mapping:
 | `charge.chargeCurrent` / `acChargeCurrent` / `dcChargeCurrent` | Charging currents (A), validated by magnitude to `0-600 A`, or to `0-250 A` for an S05 PHEV identified by a `HEV` model code without `BEV`; negative readings are exposed as their magnitude because the API uses the battery sign convention; the S05 normalization resolves the active field from the state | `battery.charge_current_a` / `ac_charge_current_a` / `dc_charge_current_a` |
 | `charge.remainChargeTime` | Remaining minutes; `8191` = no estimate | `battery.remaining_charge_time_min` (`8191` becomes `None`) |
 | `charge.maxSocPercent` | Charge limit (%). The S05 PHEV condition does not return it; its charge-limit entities are not created until a readable source is verified | `battery.charge_limit_percent` |
-| `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone` | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
+| `charge.chargePlanList[0]` | `startSwitch`, `endSwitch`, `startTime`, `endTime`, `planId`, `planType`, `timeFormat`, `timeZone`. The list is newest first and `planId` is not unique. The SDK uses the entry the official app shows: for an S05 PHEV the first entry (on or off, and a missing `endTime` is a "continue to full charge" plan), otherwise the first `isValid` `1` entry | `battery.charge_schedule_*` (`charge_schedule_enabled` requires both switches `1`) and `battery.charge_plan_*` |
 | `fuel.leftPercent` | Fuel level (%) | `fuel.level_percent` |
 | `fuel.leftVolume` / `tankVolume` | Fuel volume / tank capacity (L) | `fuel.volume_l` / `fuel.tank_capacity_l` |
 | `fuel.temperature` | Fuel temperature (C) | `fuel.temperature_c` |
@@ -481,7 +481,7 @@ require and send `rc_token`.
 | `control_seats_heat(vehicle_id, master_switch=None, master_level=None, copilot_switch=None, copilot_level=None, ...)` | `/control/seats/heat` | `command="seats_heat"` plus only the provided positions | Optional | `1` | Verified live |
 | `control_seats_wind(...)` | `/control/seats/wind` | `command="seats_wind"` plus only the provided positions | Optional | `1` | Verified live |
 | `control_steering_wheel_heat(vehicle_id, open_value, ...)` | `/control/steering-wheel/heat` | `command="steering_wheel_heating"`, `open` | Optional | `1` | Verified live |
-| `control_charge_plan_add(vehicle_id, start_time, end_time, end_switch, ...)` | `/charge/add-plan` | `command="add_charge_plan"`, `startTime`, `endTime`, `endSwitch`, `planType`, `timeFormat`, `timeZone` | Optional | `2` | Recovered |
+| `control_charge_plan_add(vehicle_id, start_time, end_time, end_switch, ...)` | `/charge/add-plan` | `command="add_charge_plan"`, `startTime`, `endTime`, `endSwitch`, `planType`, `timeFormat`, `timeZone`; `endTime` is omitted when `end_time` is `None` (a "continue to full charge" plan) | Optional | `2` | Recovered; full-charge payload verified live on an S05 PHEV |
 | `control_charge_plan_delete(vehicle_id, plan_id, ...)` | `/charge/delete-plan` | `command="delete_charge_plan"`, `planId` | Optional | `2` | Recovered |
 | `control_charge_plan_validity(vehicle_id, plan_id, enabled, ...)` | `/charge/validity` | `command="COMMAND_VALID_CHARGE_PLAN"`, `enabled`, `planId` | Optional | `2` | Recovered |
 | `control_departure_plan_add(vehicle_id, start_time, weeks, ...)` | `/departure-plans/add-plan` | `command="COMMAND_TRAVELPLAN_ADD"`, `isValid`, `planType`, `startTime`, `type`, `weeks` | Optional | `1` | Recovered |
@@ -496,6 +496,11 @@ Flash/horn action codes: `FLASH_HONK_OFF = 0`, `FLASH_HONK_FLASH = 1`, `FLASH_HO
 
 Seat commands serialize only the provided positions. Turning a seat off sends `switch: 0` without a
 level, because a zero level is rejected with `COMMON_1_1_01_005`.
+
+On an S05 PHEV the plan list is the source of truth and the car rejects `modify-plan` and
+`validity` for plan id `1`, so the plan family to use is `add-plan`/`delete-plan`; plan id `1` is
+the slot the official app writes to and its delete is accepted without changing the list. Other
+international models keep `modify-plan`.
 
 The optional families expose `serial_type` and `require_rc_token`; their defaults (`"1"`/`"2"` and
 `False`) come from the app constants and are pending full live validation.

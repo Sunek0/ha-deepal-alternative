@@ -1856,14 +1856,29 @@ class DeepalIntlClient:
         plans = charge.get("chargePlanList")
         if not isinstance(plans, list):
             plans = []
-        charge_plan = next(
-            (
-                plan
-                for plan in plans
-                if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
-            ),
-            plans[0] if plans and isinstance(plans[0], dict) else {},
-        ) or {}
+        # The S05 PHEV lists plans newest first, and the official app and the
+        # car show and edit only the first entry, whatever its id. The id is not
+        # unique: the cloud can keep older entries with id "1" that nothing can
+        # reach any more (live capture), so only the first entry counts. An entry
+        # without an end time is a "continue to full charge" plan, not a stub.
+        # This is only known for the PHEV, so every other model keeps the "first
+        # valid plan" rule.
+        phev_plans = s05 and is_phev_model(model_code)
+        first_plan = plans[0] if plans and isinstance(plans[0], dict) else {}
+        if phev_plans:
+            charge_plan = first_plan
+        else:
+            charge_plan = (
+                next(
+                    (
+                        plan
+                        for plan in plans
+                        if isinstance(plan, dict) and _as_int(plan.get("isValid")) == 1
+                    ),
+                    first_plan,
+                )
+                or {}
+            )
         plan_valid = _as_int(charge_plan.get("isValid"))
 
         def _tenths(value: Any) -> Optional[float]:
@@ -4614,7 +4629,7 @@ class DeepalIntlClient:
         self,
         vehicle_id: str,
         start_time: str,
-        end_time: str,
+        end_time: Optional[str],
         end_switch: int,
         plan_type: int = 1,
         time_format: int = 1,
@@ -4622,19 +4637,25 @@ class DeepalIntlClient:
         serial_type: str = "2",
         require_rc_token: bool = False,
     ) -> str:
-        """Add a charging schedule plan (optional command)."""
+        """Add a charging schedule plan (optional command).
+
+        ``end_time=None`` leaves the end out: a "continue to full charge" plan,
+        as the app and the car write it (no endTime on the S05 PHEV).
+        """
+        payload: dict[str, Any] = {
+            "command": "add_charge_plan",
+            "endSwitch": end_switch,
+            "planType": plan_type,
+            "startTime": start_time,
+            "timeFormat": time_format,
+            "timeZone": time_zone,
+        }
+        if end_time is not None:
+            payload["endTime"] = end_time
         return await self._signed_command(
             path=INTL_CHARGE_ADD_PLAN,
             vehicle_id=vehicle_id,
-            payload={
-                "command": "add_charge_plan",
-                "endSwitch": end_switch,
-                "endTime": end_time,
-                "planType": plan_type,
-                "startTime": start_time,
-                "timeFormat": time_format,
-                "timeZone": time_zone,
-            },
+            payload=payload,
             serial_type=serial_type,
             require_rc_token=require_rc_token,
             sign_omit_keys={"command", "rcToken"},

@@ -54,6 +54,15 @@
     "charge_schedule_unsupported": {
       "message": "The charge schedule is only supported on the S05."
     },
+    "charge_schedule_too_short": {
+      "message": "The charge schedule end must be at least 30 minutes after the start (start {start}, end {end})."
+    },
+    "charge_schedule_set_outside_on": {
+      "message": "Could not set the charge schedule: it was set in the Deepal app or on the car, and the car does not accept changing it from Home Assistant. Switch it off in the app or on the car first."
+    },
+    "charge_schedule_set_outside_off": {
+      "message": "Could not switch off the charge schedule: it was set in the Deepal app or on the car, and the car does not accept changing it from Home Assistant. Switch it off in the app or on the car."
+    },
     "charge_schedule_delete_failed": {
       "message": "The charge schedule could not be deleted: {error}"
     }
@@ -638,6 +647,9 @@
     "switch": {
       "charge_schedule": {
         "name": "Charge schedule"
+      },
+      "charge_schedule_full": {
+        "name": "Charge schedule to full"
       },
       "steering_wheel_heating": {
         "name": "Steering wheel heating"

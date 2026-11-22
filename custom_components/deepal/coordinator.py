@@ -33,13 +33,14 @@ from .deepal import (
     Vehicle,
     VehicleCapabilities,
     VehicleCondition,
+    WarningLightsCondition,
 )
 from .snapshot import (
     SNAPSHOT_VERSION,
     conditions_from_snapshot,
     conditions_to_snapshot,
 )
-from .vehicle_model import uses_s05_charge_enum
+from .vehicle_model import is_s05_phev, uses_s05_charge_enum
 from .deepal.mqtt import (
     REST_SUBSYSTEM_WARNING_KEYS,
     S05_CHARGE_GUN_KEYS,
@@ -76,6 +77,13 @@ _CONDITION_FETCH_INTERVAL = 5.0
 _WAKE_POLL_INTERVAL = 5.0
 _VEHICLE_REFRESH_INTERVAL = 600.0
 _OPTIMISTIC_HOLD_SECONDS = 120.0
+# The charge plan only comes from the REST condition, which lists a new plan a
+# few seconds after the command. A push or an older REST read can repeat the
+# optimistic value (merged from the published state) or carry the old list, so
+# plan fields are held for a fixed window and never released early by a report
+# that happens to match.
+_PLAN_HOLD_SECONDS = 30.0
+_PLAN_HOLD_PREFIXES = ("battery.charge_schedule", "battery.charge_plan")
 _CHARGING_READ_INTERVAL = 600.0
 # A rejected CA/MQTT token triggers a forced session refresh, which bypasses the
 # SDK's own INTL_REFRESH_THROTTLE_SECONDS window (1800 s) because the refresh no
@@ -91,9 +99,9 @@ _SNAPSHOT_SAVE_DELAY = 30.0
 # Pushed conditions are coalesced per vehicle to absorb the car's delta bursts.
 # REST-only fields are refreshed by the periodic scan, not by a per-push overlay.
 _PUSH_COALESCE_SECONDS = 0.5
-# A non-zero S05 subsystem register is only a fault once the car has been
-# continuously ready beyond the dashboard bulb check. A waking car also reports
-# power status 2 with the airbag register at 1 for a few seconds (owner report
+# An S05 dashboard light is only a fault once the car has been continuously
+# ready beyond the dashboard bulb check. A waking car reports power status 2 with
+# the self-check lights on for a few seconds (owner reports 2026-10-17 and
 # 2026-11-20), so the first ready report after sleep must not raise a fault.
 _S05_WARNING_SETTLE_SECONDS = 60.0
 # The S05 publishes 0.0 kPa on the four wheels in the module-init burst that
@@ -102,6 +110,12 @@ _S05_WARNING_SETTLE_SECONDS = 60.0
 _TIRE_ZERO_SETTLE_SECONDS = 60.0
 #: The S05 lights sourced from the REST subsystem registers.
 _S05_SUBSYSTEM_WARNING_FIELDS = frozenset(REST_SUBSYSTEM_WARNING_KEYS)
+#: Every S05 dashboard warning light. The wake self-check reports them on while
+#: the car wakes, so the coordinator only publishes a fault once the ready state
+#: has settled (see docs/investigations/brake-warning-false-positive-2026-11-21.md).
+_S05_WARNING_FIELDS = frozenset(WarningLightsCondition.model_fields)
+#: The S05 lights sourced from the MQTT bit only.
+_S05_BIT_ONLY_WARNING_FIELDS = _S05_WARNING_FIELDS - _S05_SUBSYSTEM_WARNING_FIELDS
 
 
 class WakeResult(StrEnum):
@@ -495,8 +509,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         self._capabilities: dict[str, VehicleCapabilities | None] = {}
         self._last_steering_wheel: dict[str, tuple[bool, int | None]] = {}
         # Per-vehicle ready window and last app-condition report timestamp. The
-        # S05 subsystem lights are only faults after a settled ready state and a
-        # fresh REST block; both are memory-only, so a restart starts unconfirmed.
+        # S05 dashboard lights are only faults after a settled ready state, and
+        # the register-backed ones also need a fresh REST block; both are
+        # memory-only, so a restart starts unconfirmed.
         self._ready_since: dict[str, float] = {}
         self._last_app_report_ts: dict[str, int | None] = {}
         # Per-vehicle, per-tire start of a zero-pressure reading, used to tell a
@@ -644,10 +659,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             return
         try:
             condition = self._merge_condition(vehicle_id, condition)
-            # A push does not carry the REST registers. Force the three S05
-            # subsystem lights through the same gate so the glitchy MQTT bits
-            # never reach the published condition.
-            self._guard_subsystem_warnings(vehicle_id, condition)
+            # A push does not carry the REST registers. Force every S05
+            # dashboard light through the same ready gate so the wake
+            # self-check bits never reach the published condition.
+            self._guard_s05_warning_rules(vehicle_id, condition)
             condition = self._apply_optimistic_hold(vehicle_id, condition)
             self._update_ready_window(vehicle_id, condition)
             data = dict(self.data or {})
@@ -801,7 +816,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition.climate.steering_wheel_heater_on = remembered[0]
         condition.climate.steering_wheel_heater_level = remembered[1]
 
-    def _apply_rest_subsystem_warnings(
+    def _apply_s05_warning_rules(
         self,
         vehicle: Vehicle,
         condition: VehicleCondition,
@@ -809,15 +824,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         *,
         report_ts: int | None = None,
     ) -> None:
-        """Set the S05 airbag, ABS and power steering lights from REST registers.
+        """Apply the S05 warning-light rules with the REST subsystem registers.
 
-        The REST overlay runs after the condition merge, so it is the place
-        that can leave these three lights unknown on a sleeping car. A register
-        is only trusted as a fault once the ready window was already established
-        and the app report is fresh: the wake/self-check also reports ready with
-        the airbag register at 1 for a few seconds (owner report 2026-11-20).
-        Healthy values keep the last-known behavior, but an unconfirmed fault is
-        never revived from the previous condition or the stored snapshot.
+        The REST overlay runs after the condition merge, so it is the place that
+        can leave the register-backed lights unknown on a sleeping car. A
+        register is only trusted as a fault once the ready window was already
+        established and the app report is fresh: the wake/self-check also
+        reports ready with the lights on for a few seconds (owner reports
+        2026-10-17 and 2026-11-20). The resolver owns the retention decision for
+        every dashboard light, so the blind retention must not run afterwards.
         """
         if not self._is_s05(vehicle):
             return
@@ -825,27 +840,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         fresh = True
         if report_ts is not None:
             fresh = self._consume_app_report(vehicle.car_id, report_ts)
-        previous = self._previous_condition(vehicle.car_id)
-        self._resolve_subsystem_warnings(
+        self._resolve_warning_lights(
             condition,
-            previous,
+            self._previous_condition(vehicle.car_id),
             rest_subsystem_warnings(status, condition.power_status),
             established=established,
             fresh=fresh,
         )
-        self._retain_unknown_warnings(
-            condition,
-            previous,
-            skip=_S05_SUBSYSTEM_WARNING_FIELDS,
-        )
 
     @staticmethod
     def _is_s05(vehicle: Vehicle) -> bool:
-        """Return whether the vehicle uses the S05 REST subsystem registers."""
+        """Return whether the vehicle uses the S05 warning-light rules."""
         return is_s05_model(vehicle.model_code) or is_s05_model(vehicle.series_code)
 
     @staticmethod
-    def _resolve_subsystem_warnings(
+    def _resolve_warning_lights(
         condition: VehicleCondition,
         previous: VehicleCondition | None,
         registers: dict[str, bool | None],
@@ -853,16 +862,25 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         established: bool,
         fresh: bool,
     ) -> None:
-        """Publish the S05 subsystem lights under the ready/freshness rule.
+        """Publish the S05 dashboard lights under the ready/freshness rule.
 
-        A non-zero register is a fault only while the ready window is settled
-        and the app report advanced. Healthy values keep the last-known
-        behavior; an unconfirmed fault is never revived from the previous
-        condition or the stored snapshot.
+        The three REST subsystem lights take the register as their candidate and
+        additionally require a fresh app report; the other lights take the bit
+        already parsed into the condition. A fault is only published while the
+        ready window is settled, because the wake/self-check also reports ready
+        with the lights on for a few seconds (owner reports 2026-10-17 and
+        2026-11-20). Healthy values keep the last-known behavior; an unconfirmed
+        fault is never revived from the previous condition or the stored
+        snapshot.
         """
-        for field in _S05_SUBSYSTEM_WARNING_FIELDS:
-            value = registers.get(field)
-            if value is True and not (established and fresh):
+        for field in _S05_WARNING_FIELDS:
+            if field in _S05_BIT_ONLY_WARNING_FIELDS:
+                value = getattr(condition.warnings, field)
+                trusted = established
+            else:
+                value = registers.get(field)
+                trusted = established and fresh
+            if value is True and not trusted:
                 value = None
             if value is None:
                 retained = (
@@ -876,24 +894,23 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     value = False
             setattr(condition.warnings, field, value)
 
-    def _guard_subsystem_warnings(
+    def _guard_s05_warning_rules(
         self, vehicle_id: str, condition: VehicleCondition
     ) -> None:
-        """Keep the glitchy S05 bits out of non-REST publications.
+        """Keep the S05 self-check bits out of non-REST publications.
 
-        A live push or a command confirmation does not carry the REST
-        registers, so it must never publish the MQTT airbag/ABS/EPS bits. A
-        known non-S05 vehicle keeps its normal behavior; when the vehicle list
-        is not loaded yet, the three diagnostic fields are resolved from the
-        previous condition instead of exposing a possible false airbag light.
+        A live push or a command confirmation does not carry the REST registers,
+        so the register-backed lights resolve through the same ready rule with no
+        candidate. A known non-S05 vehicle keeps its normal behavior; when the
+        vehicle list is not loaded yet, every dashboard light is resolved from
+        the previous condition instead of exposing a possible false light.
         """
         vehicle = self._vehicle(vehicle_id)
         if vehicle is not None and not self._is_s05(vehicle):
             return
-        previous = self._previous_condition(vehicle_id)
-        self._resolve_subsystem_warnings(
+        self._resolve_warning_lights(
             condition,
-            previous,
+            self._previous_condition(vehicle_id),
             rest_subsystem_warnings(None, condition.power_status),
             established=self._ready_is_established(vehicle_id, condition),
             fresh=True,
@@ -921,7 +938,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """Open or close the per-vehicle ready window from a published state."""
         vehicle = self._vehicle(vehicle_id)
         if vehicle is not None and not self._is_s05(vehicle):
-            # The window only feeds the S05 subsystem warning rule.
+            # The window only feeds the S05 warning-light rule.
             return
         if condition.power_status is None:
             # A partial push without the power state says nothing about ready.
@@ -989,10 +1006,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         """
         if not self._uses_mqtt(vehicle):
             return condition
-        # The MQTT airbag, ABS and power steering light bits glitch on a healthy
-        # car, so for an S05 they are taken from the REST subsystem registers
-        # only: unknown until the app condition confirms them.
-        self._apply_rest_subsystem_warnings(vehicle, condition, None)
+        # Every S05 dashboard light is gated by the ready window, and the
+        # register-backed ones are only trusted with a fresh app report: unknown
+        # until the app condition confirms them.
+        self._apply_s05_warning_rules(vehicle, condition, None)
         if app_condition is None:
             try:
                 app_condition = await self.client.get_vehicle_condition(
@@ -1009,7 +1026,7 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 self._apply_steering_wheel_state(vehicle, condition)
                 return condition
         assert app_condition is not None
-        self._apply_rest_subsystem_warnings(
+        self._apply_s05_warning_rules(
             vehicle,
             condition,
             (app_condition.raw_data or {}).get("vehicleStatus"),
@@ -1024,12 +1041,24 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             # plan list are always taken from the app condition: a stale
             # charge_plan_id in the MQTT snapshot would make the switch delete
             # the wrong plan after an add.
-            condition.battery.charge_schedule_start = (
-                app_condition.battery.charge_schedule_start
-            )
-            condition.battery.charge_schedule_end = (
-                app_condition.battery.charge_schedule_end
-            )
+            # The car reports no times while only its default plan exists. Keep
+            # the last known times then (the merge restores them, also after a
+            # restart) instead of clearing them.
+            if app_condition.battery.charge_schedule_start is not None:
+                condition.battery.charge_schedule_start = (
+                    app_condition.battery.charge_schedule_start
+                )
+            if is_s05_phev(vehicle):
+                # S05 PHEV: a plan with a start but no end is a "continue to
+                # full charge" plan, so the end is unknown, not the last end.
+                if app_condition.battery.charge_schedule_start is not None:
+                    condition.battery.charge_schedule_end = (
+                        app_condition.battery.charge_schedule_end
+                    )
+            elif app_condition.battery.charge_schedule_end is not None:
+                condition.battery.charge_schedule_end = (
+                    app_condition.battery.charge_schedule_end
+                )
             condition.battery.charge_plan_id = app_condition.battery.charge_plan_id
             condition.battery.charge_plan_type = (
                 app_condition.battery.charge_plan_type
@@ -1123,10 +1152,15 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         changes = _diff_paths(before, after)
         if not changes:
             return
-        expires = time.monotonic() + _OPTIMISTIC_HOLD_SECONDS
+        now = time.monotonic()
         hold = self._optimistic_holds.setdefault(vehicle_id, {})
         for path, value in changes.items():
-            hold[path] = _OptimisticFieldHold(expires, value)
+            window = (
+                _PLAN_HOLD_SECONDS
+                if path.startswith(_PLAN_HOLD_PREFIXES)
+                else _OPTIMISTIC_HOLD_SECONDS
+            )
+            hold[path] = _OptimisticFieldHold(now + window, value)
         self._optimistic_pending.setdefault(vehicle_id, set()).update(changes)
 
     def _apply_optimistic_hold(
@@ -1153,6 +1187,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                     continue
                 try:
                     if _path_get(condition, path) == entry.value:
+                        if path.startswith(_PLAN_HOLD_PREFIXES):
+                            # Keep holding: the next read may still carry the
+                            # plan list from before the command.
+                            remaining[path] = entry
                         continue
                     _path_set(condition, path, entry.value)
                 except AttributeError:
@@ -1242,8 +1280,8 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         condition = self._merge_condition(vehicle_id, condition)
         if vehicle is not None and self._is_s05(vehicle):
             # The MQTT overlay is not available on this path (REST-only vehicle
-            # or MQTT fallback), so apply the REST subsystem rule here too.
-            self._apply_rest_subsystem_warnings(
+            # or MQTT fallback), so apply the S05 warning rules here too.
+            self._apply_s05_warning_rules(
                 vehicle,
                 condition,
                 (condition.raw_data or {}).get("vehicleStatus"),
@@ -1324,20 +1362,17 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
     def _retain_unknown_warnings(
         condition: VehicleCondition,
         previous: VehicleCondition | None,
-        *,
-        skip: frozenset[str] = frozenset(),
     ) -> None:
         """Fill the warning lights a condition did not report from the last one.
 
         Only unknown fields are filled, so a warning value reported by the
-        current condition always wins. ``skip`` lets the S05 subsystem overlay
-        apply its own ready/freshness rule instead of this blind retention.
+        current condition always wins. The S05 warning-light resolver runs after
+        the merge and gates faults on the ready window, so filling them here
+        cannot keep an unconfirmed fault in the published condition.
         """
         if previous is None:
             return
         for field in type(condition.warnings).model_fields:
-            if field in skip:
-                continue
             if getattr(condition.warnings, field) is not None:
                 continue
             retained = getattr(previous.warnings, field)
@@ -1449,10 +1484,10 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         known position is also kept, so the location tracker does not flap when
         the car reports no coordinates. The dashboard warning lights reported as
         unknown (vehicle off, asleep or a REST fallback) keep their last known
-        values as well. The S05 airbag, ABS and power-steering lights are the
-        exception: their overlay applies its own ready/freshness rule after this
-        merge, so an unconfirmed fault is not revived here. PHEV fuel and the
-        AC charge limit also keep their last known values; an unconfirmed
+        values as well. The S05 dashboard lights are the exception: their
+        overlay applies its own ready/freshness rule after this merge, so the
+        published condition never revives an unconfirmed fault. PHEV fuel and
+        the AC charge limit also keep their last known values; an unconfirmed
         optimistic charge limit expires
         instead of being retained. The odometer keeps the previous value on a
         missing field, a stale lower report or a precision dip, so the
@@ -1476,12 +1511,21 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
             self._retain_unknown_warnings(condition, previous)
             _retain_unreported_groups(previous, condition, pending)
             _retain_odometer(previous, condition)
+            vehicle = self._vehicle(vehicle_id)
+            phev = vehicle is not None and is_s05_phev(vehicle)
+            # S05 PHEV: only restore the end with the start; a start without an
+            # end is a "continue to full charge" plan, not a missing value.
+            if (
+                not phev or condition.battery.charge_schedule_start is None
+            ) and condition.battery.charge_schedule_end is None:
+                condition.battery.charge_schedule_end = (
+                    previous.battery.charge_schedule_end
+                )
             _copy_missing_fields(
                 condition.battery,
                 previous.battery,
                 (
                     "charge_schedule_start",
-                    "charge_schedule_end",
                     "charge_plan_id",
                     "charge_plan_type",
                     "charge_plan_time_format",
@@ -1851,9 +1895,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
         if vehicle is not None:
             condition = await self._overlay_app_comfort(vehicle, condition)
         else:
-            # Without the vehicle we cannot run the REST overlay; keep the
-            # glitchy S05 bits out of the published condition.
-            self._guard_subsystem_warnings(vehicle_id, condition)
+            # Without the vehicle we cannot run the REST overlay; keep the S05
+            # self-check bits out of the published condition.
+            self._guard_s05_warning_rules(vehicle_id, condition)
         condition = self._apply_optimistic_hold(vehicle_id, condition)
         latest = (self.data or {}).get(vehicle_id)
         if latest is not None and latest is not current:
@@ -2603,8 +2647,9 @@ class DeepalDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleConditi
                 if vehicle is not None:
                     self._apply_steering_wheel_state(vehicle, condition)
                 # The confirmation fetch has no REST subsystem registers, so
-                # keep the glitchy MQTT bits out of the published condition.
-                self._guard_subsystem_warnings(vehicle_id, condition)
+                # apply the S05 warning rules to keep the self-check bits out of
+                # the published condition.
+                self._guard_s05_warning_rules(vehicle_id, condition)
                 condition = self._apply_optimistic_hold(vehicle_id, condition)
                 next_condition_at = now + condition_interval
                 current = (self.data or {}).get(vehicle_id)

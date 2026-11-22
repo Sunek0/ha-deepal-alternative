@@ -255,6 +255,15 @@ def _coordinator(
     return coordinator, updates
 
 
+def _s05_vehicle() -> Vehicle:
+    return Vehicle(
+        car_id="car-1",
+        vin="VIN",
+        protocol_type="MQTT",
+        model_code="SC6464AAKBEV",
+    )
+
+
 def _expire_optimistic_holds(
     coordinator: DeepalDataUpdateCoordinator, vehicle_id: str = "car-1"
 ) -> None:
@@ -1031,6 +1040,41 @@ async def test_optimistic_hold_keeps_value_until_confirmed():
 
 
 @pytest.mark.asyncio
+async def test_charge_plan_hold_is_not_released_by_a_matching_report():
+    # Live S05 PHEV: a push repeated the optimistic plan values, the hold was
+    # released, and a REST read with the plan list from before the add then
+    # reverted the switch, so it needed a second press.
+    client = _FakeIntlClient([])
+    current = VehicleCondition(car_id="car-1", vin="")
+    current.battery.charge_schedule_start = "0500"
+    current.battery.charge_schedule_end = "0800"
+    current.battery.charge_schedule_enabled = True
+    coordinator, _ = _coordinator(client, data={"car-1": current})
+
+    before = current.model_dump()
+    after = current.model_copy(deep=True)
+    after.battery.charge_schedule_end = None
+    coordinator._register_optimistic_hold("car-1", before, after.model_dump())
+
+    echo = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2000)
+    echo.battery.charge_schedule_start = "0500"
+    echo.battery.charge_schedule_end = None
+    coordinator._apply_optimistic_hold("car-1", echo)
+
+    stale = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2001)
+    stale.battery.charge_schedule_start = "0500"
+    stale.battery.charge_schedule_end = "0800"
+    applied = coordinator._apply_optimistic_hold("car-1", stale)
+    assert applied.battery.charge_schedule_end is None
+
+    _expire_optimistic_holds(coordinator, "car-1")
+    later = VehicleCondition(car_id="car-1", vin="", last_updated_timestamp=2002)
+    later.battery.charge_schedule_end = "0800"
+    applied = coordinator._apply_optimistic_hold("car-1", later)
+    assert applied.battery.charge_schedule_end == "0800"
+
+
+@pytest.mark.asyncio
 async def test_optimistic_seat_hold_survives_unrelated_command():
     client = _FakeIntlClient([])
     current = VehicleCondition(car_id="car-1", vin="")
@@ -1261,6 +1305,38 @@ async def test_app_comfort_overlay_copies_the_charge_plan():
     assert merged.battery.charge_schedule_enabled is True
     assert merged.battery.charge_schedule_start == "0000"
     assert merged.battery.charge_schedule_end == "0100"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_code", "expected_end"),
+    [("SC6460AAAA7HEV", None), ("SC6464AAKBEV", "0900")],
+)
+async def test_app_overlay_full_charge_end_is_only_cleared_on_the_s05_phev(
+    model_code, expected_end
+):
+    # Live S05 PHEV: a "continue to full charge" plan has no end time, and the
+    # last end (09:00) must not be shown. Other models keep the last end.
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    vehicle = Vehicle(
+        car_id="car-1", vin="VIN", protocol_type="MQTT", model_code=model_code
+    )
+    coordinator.vehicles = [vehicle]
+    plans = [{"planId": 1, "isValid": 1, "startTime": "0100", "startSwitch": 1}]
+    app_condition = VehicleCondition(car_id="car-1", vin="VIN")
+    app_condition.battery.charge_schedule_start = "0100"
+    app_condition.battery.charge_schedule_end = None
+    app_condition.battery.charge_plans = plans
+    app_condition.raw_data = {"charge": {"chargePlanList": plans}}
+    client.http_condition = app_condition
+    condition = VehicleCondition(car_id="car-1", vin="VIN")
+    condition.battery.charge_schedule_end = "0900"
+
+    merged = await coordinator._overlay_app_comfort(vehicle, condition)
+
+    assert merged.battery.charge_schedule_start == "0100"
+    assert merged.battery.charge_schedule_end == expected_end
 
 
 @pytest.mark.asyncio
@@ -4426,7 +4502,7 @@ async def test_s05_live_push_without_the_vehicle_list_does_not_publish_the_bits(
         car_id="car-1",
         vin="VIN",
         power_status=2,
-        warnings={"abs": False, "airbag": False, "eps": False},
+        warnings={"abs": False, "airbag": False, "eps": False, "brake": False},
         last_updated_timestamp=1000,
     )
     coordinator, updates = _coordinator(client, data={"car-1": previous})
@@ -4435,7 +4511,7 @@ async def test_s05_live_push_without_the_vehicle_list_does_not_publish_the_bits(
         car_id="car-1",
         vin="VIN",
         power_status=2,
-        warnings={"abs": True, "airbag": True, "eps": True},
+        warnings={"abs": True, "airbag": True, "eps": True, "brake": True},
         last_updated_timestamp=2000,
     )
     await coordinator._async_publish_push_condition("car-1", push)
@@ -4444,6 +4520,7 @@ async def test_s05_live_push_without_the_vehicle_list_does_not_publish_the_bits(
     assert published.warnings.abs is False
     assert published.warnings.airbag is False
     assert published.warnings.eps is False
+    assert published.warnings.brake is False
 
 
 @pytest.mark.asyncio
@@ -4478,6 +4555,134 @@ async def test_s05_live_push_keeps_an_established_fault():
     assert published.warnings.abs is True
     assert published.warnings.airbag is True
     assert published.warnings.eps is True
+
+
+@pytest.mark.asyncio
+async def test_s05_first_ready_report_after_wake_gates_every_light():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        warnings={"brake": False, "battery_12v": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    vehicle = _s05_vehicle()
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"brake": True, "battery_12v": True},
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        raw_data={"vehicleStatus": {"powerStatus": 2}},
+        last_updated_timestamp=2000,
+    )
+
+    data = await coordinator._async_update_data()
+    assert data["car-1"].warnings.brake is False
+    assert data["car-1"].warnings.battery_12v is False
+
+    # Once ready has settled, the same bits are published as the fault they are.
+    coordinator.data = data
+    coordinator._ready_since["car-1"] = time.monotonic() - 120
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"brake": True, "battery_12v": True},
+        last_updated_timestamp=3000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        raw_data={"vehicleStatus": {"powerStatus": 2}},
+        last_updated_timestamp=3000,
+    )
+
+    data = await coordinator._async_update_data()
+    assert data["car-1"].warnings.brake is True
+    assert data["car-1"].warnings.battery_12v is True
+
+
+@pytest.mark.asyncio
+async def test_s05_confirmed_fault_drops_when_the_ready_window_closes():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"brake": True, "tpms": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, _ = _coordinator(client, data={"car-1": previous})
+    vehicle = _s05_vehicle()
+    coordinator.vehicles = [vehicle]
+    coordinator._capabilities = {}
+    coordinator._ready_since = {"car-1": time.monotonic() - 120}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        raw_data={"vehicleStatus": {"powerStatus": 0}},
+        last_updated_timestamp=2000,
+    )
+
+    data = await coordinator._async_update_data()
+    assert data["car-1"].warnings.brake is None
+    assert data["car-1"].warnings.tpms is False
+
+
+@pytest.mark.asyncio
+async def test_s05_live_push_gates_the_dashboard_bits_on_the_ready_window():
+    client = _FakeIntlClient([])
+    previous = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        warnings={"brake": False},
+        last_updated_timestamp=1000,
+    )
+    coordinator, updates = _coordinator(client, data={"car-1": previous})
+    vehicle = _s05_vehicle()
+    coordinator.vehicles = [vehicle]
+
+    push = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"brake": True},
+        last_updated_timestamp=2000,
+    )
+    await coordinator._async_publish_push_condition("car-1", push)
+    assert updates[-1]["car-1"].warnings.brake is False
+
+    coordinator._ready_since = {"car-1": time.monotonic() - 120}
+    push = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=2,
+        warnings={"brake": True},
+        last_updated_timestamp=3000,
+    )
+    await coordinator._async_publish_push_condition("car-1", push)
+    assert updates[-1]["car-1"].warnings.brake is True
 
 
 @pytest.mark.asyncio
@@ -4520,6 +4725,42 @@ async def test_s05_subsystem_warnings_survive_the_first_asleep_poll_after_restar
     assert condition.warnings.abs is False
     assert condition.warnings.airbag is False
     assert condition.warnings.eps is False
+
+
+@pytest.mark.asyncio
+async def test_s05_restored_dashboard_fault_is_not_revived_on_an_asleep_poll():
+    client = _FakeIntlClient([])
+    coordinator, _ = _coordinator(client)
+    coordinator._restored = {
+        "car-1": VehicleCondition(
+            car_id="car-1",
+            vin="VIN",
+            power_status=2,
+            warnings={"brake": True, "tpms": False},
+            last_updated_timestamp=1000,
+        )
+    }
+    coordinator.vehicles = [_s05_vehicle()]
+    coordinator._capabilities = {}
+
+    client.mqtt_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        last_updated_timestamp=2000,
+    )
+    client.http_condition = VehicleCondition(
+        car_id="car-1",
+        vin="VIN",
+        power_status=0,
+        raw_data={"vehicleStatus": {"powerStatus": 0}},
+        last_updated_timestamp=2000,
+    )
+
+    condition = (await coordinator._async_fetch())["car-1"]
+
+    assert condition.warnings.brake is None
+    assert condition.warnings.tpms is False
 
 
 @pytest.mark.asyncio

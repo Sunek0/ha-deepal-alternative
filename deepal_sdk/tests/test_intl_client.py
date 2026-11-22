@@ -44,6 +44,7 @@ from deepal.mqtt import (
     aes_cbc_decrypt,
     aes_cbc_encrypt,
     build_publish_packet,
+    drop_stale_s05_light_bits,
     normalize_s05_params,
     parse_publish,
     sda_condition_plan,
@@ -2936,6 +2937,39 @@ async def test_s05_mqtt_condition_uses_normalized_params():
     assert condition.mqtt_raw_data == raw_params
 
 
+@pytest.mark.asyncio
+async def test_s05_mqtt_condition_keeps_a_bit_reported_ready():
+    raw_params = {
+        **S05_BROKER_PARAMS,
+        "powerStatusFeedBack": "2",
+        "brakeLightStatus": "1",
+    }
+
+    async def fake_config(vehicle_id: str) -> dict:
+        return {}
+
+    async def fake_token() -> str:
+        return "tsp-token"
+
+    async def fake_params(config: dict, token: str, **kwargs) -> MqttExchangeResult:
+        return MqttExchangeResult(
+            params=dict(raw_params),
+            source="legacy-mqtt",
+            variants={"legacy-mqtt": dict(raw_params)},
+        )
+
+    client = _client(lambda request: httpx.Response(200, json={}))
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    client.get_mqtt_config = fake_config
+    client.get_mqtt_token = fake_token
+    client._read_s05_params = fake_params
+    condition = await client.s05_mqtt_condition("car-1")
+    await client.close()
+
+    assert condition.warnings.brake is True
+
+
 @pytest.mark.parametrize(
     ("raw_value", "expected"),
     [(2, True), (1, False), (0, False), (None, None)],
@@ -5186,6 +5220,144 @@ def test_parse_condition_without_location_leaves_it_unknown():
     assert condition.longitude is None
 
 
+# The S05 PHEV lists its plans newest first and always keeps a default plan
+# with id "1" (placeholder times). That is only known for the PHEV.
+_PLAN_LIST = [
+    {"planId": "1", "isValid": 0, "startTime": "0100", "endTime": "2300"},
+]
+_NEWEST_OFF_OLDER_ON = [
+    {"planId": "300", "isValid": 0, "startTime": "0100", "endTime": "0200"},
+    {"planId": "200", "isValid": 1, "startTime": "0300", "endTime": "0400"},
+    {"planId": "1", "isValid": 0, "startTime": "0100", "endTime": "2300"},
+]
+
+
+def _plan_condition(plans, model_code):
+    client = _client(lambda request: httpx.Response(200, json={}))
+    return client.parse_condition(
+        {"charge": {"chargePlanList": plans}},
+        "car-1",
+        model_code=model_code,
+    )
+
+
+def test_parse_condition_s05_phev_follows_the_newest_plan():
+    battery = _plan_condition(_NEWEST_OFF_OLDER_ON, "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "300"
+    assert battery.charge_plan_valid is False
+    assert battery.charge_schedule_enabled is False
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0100",
+        "0200",
+    )
+
+
+def test_parse_condition_s05_phev_shows_the_times_of_an_off_plan_like_the_app():
+    battery = _plan_condition(_PLAN_LIST, "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "1"
+    assert battery.charge_schedule_enabled is False
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == ("0100", "2300")
+
+
+# The official app writes its plan to planId 1 on the PHEV and turning it off
+# only clears isValid, the times stay (live capture, PHEV SC6460AAAA7HEV).
+_APP_PLAN_ON = {
+    "planId": 1,
+    "planType": 1,
+    "isValid": 1,
+    "startTime": "0300",
+    "startSwitch": 1,
+    "endTime": "0900",
+    "endSwitch": 1,
+}
+_APP_PLAN_OFF = {**_APP_PLAN_ON, "isValid": 0}
+_STUB = {"planId": 1, "planType": 1, "isValid": 0}
+
+
+def test_parse_condition_s05_phev_uses_the_times_of_an_active_plan_1():
+    battery = _plan_condition([_APP_PLAN_ON], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "1"
+    assert battery.charge_plan_valid is True
+    assert battery.charge_schedule_enabled is True
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0300",
+        "0900",
+    )
+
+
+def test_parse_condition_s05_phev_off_plan_1_keeps_its_times():
+    # Turning the plan off in the app keeps its times, and the app shows them.
+    battery = _plan_condition([_APP_PLAN_OFF], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_id == "1"
+    assert battery.charge_plan_valid is False
+    assert battery.charge_schedule_enabled is False
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == ("0300", "0900")
+
+
+def test_parse_condition_s05_phev_off_full_charge_plan_has_no_end():
+    plan = {"planId": 1, "planType": 1, "isValid": 0, "startTime": "1402", "startSwitch": 1}
+    battery = _plan_condition([plan, _APP_PLAN_OFF], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_schedule_start == "1402"
+    assert battery.charge_schedule_end is None
+
+
+def test_parse_condition_s05_phev_follows_the_first_entry_not_an_older_duplicate():
+    # Live capture: the app wrote a "continue to full charge" plan (no end time)
+    # in front of an older entry with the same id that stays isValid 1.
+    full_charge = {"planId": 1, "planType": 1, "isValid": 1, "startTime": "0100", "startSwitch": 1}
+    battery = _plan_condition([full_charge, _APP_PLAN_ON], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_schedule_enabled is True
+    assert battery.charge_schedule_start == "0100"
+    # No end time: the car charges to full, never the older entry's 09:00.
+    assert battery.charge_schedule_end != "0900"
+    assert battery.charge_plans == [full_charge, _APP_PLAN_ON]
+
+
+def test_parse_condition_s05_phev_first_entry_off_wins_over_an_older_one_on():
+    battery = _plan_condition([_STUB, _APP_PLAN_ON], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_valid is False
+    assert battery.charge_schedule_enabled is False
+
+
+def test_parse_condition_s05_phev_with_only_a_stub_is_off_and_keeps_the_times():
+    battery = _plan_condition([_STUB], "SC6460AAAA7HEV").battery
+
+    assert battery.charge_plan_valid is False
+    assert battery.charge_schedule_enabled is False
+    assert battery.charge_schedule_start is None
+    assert battery.charge_schedule_end is None
+
+
+@pytest.mark.parametrize("model_code", ["SC6464AAKBEV", "SC6501ABABEV", None])
+def test_parse_condition_other_models_keep_the_first_valid_plan(model_code):
+    battery = _plan_condition(_NEWEST_OFF_OLDER_ON, model_code).battery
+
+    assert battery.charge_plan_id == "200"
+    assert battery.charge_plan_valid is True
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0300",
+        "0400",
+    )
+
+
+@pytest.mark.parametrize("model_code", ["SC6464AAKBEV", "SC6501ABABEV", None])
+def test_parse_condition_other_models_use_plan_id_1_times(model_code):
+    battery = _plan_condition(_PLAN_LIST, model_code).battery
+
+    assert battery.charge_plan_id == "1"
+    assert (battery.charge_schedule_start, battery.charge_schedule_end) == (
+        "0100",
+        "2300",
+    )
+
+
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
@@ -6001,6 +6173,23 @@ async def test_charge_plan_family_uses_serial_type_2():
     await client.close()
 
     assert captured["serial_bodies"] == [{"type": "2"}, {"type": "2"}, {"type": "2"}]
+
+
+@pytest.mark.asyncio
+async def test_charge_plan_add_without_end_is_a_full_charge_plan():
+    private_pem, public_key = _login_keypair()
+    captured: dict = {}
+    client = _client(_command_handler(public_key, captured))
+    client.access_token = "test_token_123"
+    client.private_key_pem = private_pem
+
+    await client.control_charge_plan_add("car-1", "0100", None, 0)
+    await client.close()
+
+    body = captured["body"]
+    assert body["startTime"] == "0100"
+    assert body["endSwitch"] == 0
+    assert "endTime" not in body
 
 
 @pytest.mark.asyncio
@@ -7435,6 +7624,24 @@ def _live_vehicle() -> Vehicle:
     )
 
 
+def _live_session_recorder(
+    monkeypatch: Any, broker: Any
+) -> tuple[Any, Any, list[tuple[str, Any]]]:
+    """Start a fake-broker live session that records the pushed conditions."""
+    _install_fake_broker(monkeypatch, broker)
+    client = _client(_mqtt_http_handler())
+    client.access_token = "test_token_123"
+    client.user_id = "test-user-1"
+    received: list[tuple[str, Any]] = []
+    session = client.create_mqtt_session(
+        [_live_vehicle()],
+        on_condition=lambda vehicle_id, condition: received.append(
+            (vehicle_id, condition)
+        ),
+    )
+    return client, session, received
+
+
 @pytest.mark.asyncio
 async def test_live_session_accumulates_partial_reports(monkeypatch):
     broker = _FakeMqttBroker(S05_BROKER_PARAMS)
@@ -7498,6 +7705,141 @@ async def test_live_session_accumulates_partial_reports(monkeypatch):
     assert "session_open" in names
     assert "receive" in names
     assert "session_close" in names
+
+
+def test_drop_stale_s05_light_bits_only_on_the_ready_transition():
+    self_check = {
+        "powerStatusFeedBack": "0",
+        "brakeLightStatus": "1",
+        "absLightStatus": "1",
+        "tpmsLightStatus": "0",
+    }
+
+    accumulated = dict(self_check)
+    assert (
+        drop_stale_s05_light_bits(
+            accumulated,
+            {
+                "latestDate": "2026-11-21T18:06:25Z",
+                "powerStatusFeedBack": 2,
+                "brakeLightStatus": "1",
+            },
+        )
+        is True
+    )
+    # The bit the ready report carries is kept; the rest of the self-check goes.
+    assert accumulated["brakeLightStatus"] == "1"
+    assert "absLightStatus" not in accumulated
+    assert "tpmsLightStatus" not in accumulated
+
+    steady = {**self_check, "powerStatusFeedBack": 2}
+    assert drop_stale_s05_light_bits(steady, {"powerStatusFeedBack": 2}) is False
+    assert steady["brakeLightStatus"] == "1"
+
+    off = dict(self_check)
+    assert drop_stale_s05_light_bits(off, {"powerStatusFeedBack": 0}) is False
+    assert off["brakeLightStatus"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_live_session_drops_the_self_check_bits_on_ready(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    client, session, received = _live_session_recorder(monkeypatch, broker)
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    # Wake self-check: the bulbs are on while the car still reports off.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="self-check",
+        params={
+            **S05_BROKER_PARAMS,
+            "latestDate": "2026-11-21T18:06:25Z",
+            "powerStatusFeedBack": "0",
+            "brakeLightStatus": "1",
+            "absLightStatus": "1",
+            "aebLightStatus": "0",
+        },
+    )
+    await _wait_until(lambda: len(received) >= 1)
+    assert received[-1][1].warnings.brake is None
+    assert received[-1][1].warnings.abs is None
+
+    # One second later the power state turns ready without the light fields.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="ready",
+        params={
+            "latestDate": "2026-11-21T18:06:26Z",
+            "powerStatusFeedBack": 2,
+            "turnLndicatorLeft": 1,
+            "turnLndicatorRight": 1,
+        },
+    )
+    await _wait_until(lambda: len(received) >= 2)
+    assert received[-1][1].warnings.brake is None
+    assert received[-1][1].warnings.abs is None
+
+    # The next snapshot reads the bits healthy with the car ready.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="correction",
+        params={
+            **S05_BROKER_PARAMS,
+            "latestDate": "2026-11-21T18:06:31Z",
+            "powerStatusFeedBack": "2",
+            "brakeLightStatus": "0",
+            "absLightStatus": "0",
+        },
+    )
+    await _wait_until(lambda: len(received) >= 3)
+    assert received[-1][1].warnings.brake is False
+    assert received[-1][1].warnings.abs is False
+
+    await session.stop()
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_session_keeps_a_bit_reported_ready(monkeypatch):
+    broker = _FakeMqttBroker(S05_BROKER_PARAMS)
+    client, session, received = _live_session_recorder(monkeypatch, broker)
+    await session.start()
+    await _wait_until(lambda: session.is_connected)
+
+    # A coherent ready report that carries the bit is a fault.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="ready-fault",
+        params={
+            **S05_BROKER_PARAMS,
+            "latestDate": "2026-11-21T19:00:00Z",
+            "powerStatusFeedBack": "2",
+            "brakeLightStatus": "1",
+        },
+    )
+    await _wait_until(lambda: len(received) >= 1)
+    assert received[-1][1].warnings.brake is True
+
+    # A later delta without the field does not discard the reported bit.
+    _feed_live_report(
+        broker,
+        car_id="car-1",
+        request_id="delta",
+        params={
+            "latestDate": "2026-11-21T19:00:01Z",
+            "turnLndicatorLeft": 0,
+        },
+    )
+    await _wait_until(lambda: len(received) >= 2)
+    assert received[-1][1].warnings.brake is True
+
+    await session.stop()
+    await client.close()
 
 
 @pytest.mark.asyncio
