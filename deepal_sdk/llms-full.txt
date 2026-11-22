@@ -164,7 +164,25 @@ else:
     condition = await client.get_vehicle_condition(vehicle.car_id)
 ```
 
-The bootstrap, the connection options and the parameter mapping are documented in
+For live updates, open a supervised session: it keeps one connection, merges the car's partial
+reports, dispatches them to your callbacks and reconnects with backoff, while the one-shot methods
+remain available as the fallback.
+
+```python
+def on_condition(vehicle_id, condition):
+    print(vehicle_id, condition.battery.soc_percentage)
+
+session = client.create_mqtt_session([vehicle], on_condition=on_condition)
+await session.start()
+try:
+    ...
+finally:
+    await session.stop()
+```
+
+The callbacks are synchronous and run in the event loop: keep them short and hand blocking work to
+a queue. Always `stop()` the session before closing the client. The bootstrap, the connection
+options, the live session and the parameter mapping are documented in
 [`docs/reference/mqtt-telemetry.md`](docs/reference/mqtt-telemetry.md).
 
 ## Quickstart: SDA (China) platform

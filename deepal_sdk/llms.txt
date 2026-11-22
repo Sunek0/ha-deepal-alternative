@@ -20,7 +20,7 @@ Start with the README for installation and a runnable quickstart. Each guide is 
 
 - [International platform API](docs/reference/intl-api.md): gateways, authentication, telemetry, commands, errors
 - [SDA (China) platform API](docs/reference/sda-api.md): access-token client and its limitations
-- [MQTT telemetry protocol](docs/reference/mqtt-telemetry.md): bootstrap, connection options, exchange and parameter mapping
+- [MQTT telemetry protocol](docs/reference/mqtt-telemetry.md): bootstrap, connection options, exchange, live session and parameter mapping
 - [Data models](docs/reference/models.md): every exported Pydantic model with its fields and unknown semantics
 
 ## Optional
