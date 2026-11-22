@@ -1,4 +1,4 @@
-"""Home Assistant integration regression tests (2026.8 baseline).
+"""Home Assistant integration regression tests (2026.11 baseline).
 
 The tests exercise units, device information, unique ids and the
 duplicate-vehicle guard without starting a Home Assistant runtime.
@@ -346,7 +346,7 @@ async def test_refresh_button_reports_no_fresh_report() -> None:
 def test_hacs_metadata_declares_supported_baseline() -> None:
     metadata = json.loads(HACS_METADATA.read_text(encoding="utf-8"))
     assert metadata["name"] == "Deepal Alternative"
-    assert metadata["homeassistant"] == "2026.8.0"
+    assert metadata["homeassistant"] == "2026.11.0"
     assert set(metadata["country"]) == {
         "ES",
         "PT",
@@ -401,6 +401,18 @@ def test_build_client_injects_the_shared_httpx_client(monkeypatch) -> None:
     sda_client = deepal_integration._build_client(hass, sda_entry)
     assert sda_client._client is shared
     assert sda_client._external_client is True
+
+
+def test_build_client_ignores_a_stored_api_logging_option(monkeypatch) -> None:
+    monkeypatch.setattr(deepal_integration, "get_async_client", lambda hass: object())
+    entry = SimpleNamespace(
+        data={"platform": "intl", "access_token": "test_token_123"},
+        options={"enable_api_logging": True},
+    )
+
+    client = deepal_integration._build_client(SimpleNamespace(), entry)
+
+    assert client.enable_api_logging is False
 
 
 def test_build_client_without_access_token_requests_reauth() -> None:
@@ -3032,6 +3044,31 @@ def test_options_schema_hides_the_location_toggle_for_sda() -> None:
     assert not [
         key for key in schema.schema if key.schema == CONF_ENABLE_LOCATION
     ]
+
+
+def test_options_schema_hides_the_removed_api_logging_toggle() -> None:
+    from custom_components.deepal.const import CONF_ENVIRONMENT
+
+    for international in (True, False):
+        flow = _options_flow(international=international)
+        schema = flow._options_schema({CONF_ENVIRONMENT: "release_eu"})
+
+        assert "enable_api_logging" not in {key.schema for key in schema.schema}
+
+
+def test_options_save_drops_the_stale_api_logging_option() -> None:
+    from custom_components.deepal.const import CONF_ENVIRONMENT
+
+    flow = _options_flow(international=True)
+    schema = flow._options_schema(
+        {"enable_api_logging": True, CONF_ENVIRONMENT: "release_eu"}
+    )
+
+    options, _action, _confirm_delete = (
+        config_flow.DeepalOptionsFlow._split_diagnostics(schema({}))
+    )
+
+    assert "enable_api_logging" not in options
 
 
 @pytest.mark.asyncio

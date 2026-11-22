@@ -28,7 +28,7 @@ principal continue ainsi de fonctionner normalement sur le téléphone.
 - Un véhicule Deepal compatible (S05, S07) lié à un compte My Changan.
 - Un accès à l'application **My Changan** avec le compte principal.
 - Une adresse e-mail ou un numéro de téléphone différent pour le compte secondaire.
-- Home Assistant 2026.8.0 ou version ultérieure.
+- Home Assistant 2026.11.0 ou version ultérieure.
 - [HACS](https://hacs.xyz/docs/use/download/download/) installé. Si vous ne l'avez pas encore, suivez
   les instructions d'installation officielles sur <https://hacs.xyz/docs/use/download/download/>.
 

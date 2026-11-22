@@ -210,7 +210,6 @@
         "data": {
           "scan_interval": "Scan interval (seconds)",
           "control_pin": "Remote control PIN",
-          "enable_api_logging": "Log API traffic",
           "wake": "Wake the vehicle when needed",
           "mqtt_live_session": "Keep a live MQTT connection",
           "enable_location": "Fetch the vehicle location",
@@ -220,7 +219,6 @@
         "data_description": {
           "scan_interval": "How often Home Assistant polls the vehicle and reads the app condition, in seconds (30-3600). The live MQTT session still delivers reports in between.",
           "control_pin": "Remote-control PIN from My Changan. Required to lock/unlock, move the windows or open the trunk; it is exchanged for a token that expires periodically and is asked for again when that happens.",
-          "enable_api_logging": "Write every API request and response to the Home Assistant log, with tokens, keys, VIN, email, phone, PIN and serial number hidden. Enable only while troubleshooting.",
           "wake": "Wake a sleeping MQTT vehicle before refreshing or sending a PIN command. Enabled by default; disable it to protect the 12 V battery if you refresh very often.",
           "mqtt_live_session": "Keep one MQTT connection open for MQTT vehicles so their reports reach Home Assistant in seconds. Enabled by default; disable it to fall back to polling.",
           "enable_location": "Request and expose the vehicle position. European vehicles currently report no location, so the tracker may stay unknown; the option targets servers that expose it.",

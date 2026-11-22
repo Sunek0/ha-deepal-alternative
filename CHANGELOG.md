@@ -4,6 +4,88 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.0 - 2026-11-22
+
+### Added
+
+- **Live MQTT telemetry for the S05 family.** One supervised connection receives the car's
+  unsolicited reports within seconds, merges the partial deltas and publishes them to Home
+  Assistant; the periodic poll remains the fallback and keeps refreshing the REST-only fields. The
+  session is enabled by default and can be disabled in the options.
+- **Charge-schedule control.** A switch and start/end time entities for the S05 BEV and PHEV, a
+  read-only "Charge schedule enabled" binary sensor, the `deepal.set_charge_schedule` service and a
+  **Charge schedule to full** switch on the S05 PHEV for the plan the app stores as a start with no
+  end time. The PHEV switches expose `set_by` (`app_or_car`, `home_assistant` or `none`) and
+  `controllable`, so a dashboard can disable its controls for a plan Home Assistant cannot change.
+- **Absolute and relative cabin humidity.** `absolute_humidity` exposes the g/m³ value the car
+  reports, and `cabin_humidity` now derives the relative percentage from it instead of showing the
+  raw absolute reading.
+- Tester tools: `tools/deepal-cn-probe/` renders a China `car/data` payload, including the offline
+  `--payload-file` mode, and `tools/mqtt-live-probe/` validates topics, identity, latency and
+  coexistence with the phone app.
+
+### Changed
+
+- The S05 PHEV charge schedule replaces the plan instead of editing it: `add-plan` enables it and
+  applies time edits and full charge, `delete-plan` disables it. The car rejects `modify-plan` and
+  the plan on/off command for the plan the app and the car follow.
+- An S05 plan whose end is less than 30 minutes after its start is rejected before the command, as
+  the app does, including windows that cross midnight.
+- Dashboard warning lights wait for a settled 60-second ready window before reporting a fault, and a
+  confirmed fault is hidden while the car is off or asleep. Healthy values keep their last known
+  state.
+- The 10-minute charging read requests the telemetry on the open MQTT connection instead of waking
+  the vehicle; the REST-only charge plan keeps refreshing through the app-condition overlay.
+- The SDA (China) client uses the production gateway, the `/app-apigw` prefix and the
+  `X-VCS-User-Token` header; SDA entries expose the charging sessions and start the charge read loop
+  as soon as a session is detected.
+
+### Fixed
+
+- The S05 PHEV switch no longer stays on after the app switched the plan off, no longer shows the
+  times of a plan the car does not follow and no longer needs a second press: plan fields are held
+  for 30 seconds so a push or an old REST read cannot revert them.
+- Switching the PHEV schedule off no longer fails with `HW_1_1_01_001` for a plan saved in the app
+  or on the car: the integration explains where to switch it off, and only reports the schedule as
+  off once the plan list confirms it.
+- The S05 no longer reports the dashboard self-check as a fault when it wakes: the live session
+  drops the light bits of a report that predates the ready state, removing the false brake, airbag,
+  ABS and power-steering warnings.
+- The module-initialisation values the car publishes when it wakes no longer reach Home Assistant:
+  a `0.0 bar` tire pressure is held for 60 seconds, an impossible cabin target is ignored, a
+  `0 min` remaining charge time without an active charge is unknown and the `-400 A` DC sentinel is
+  dropped.
+- SDA condition polls complete their first refresh; expired or missing SDA tokens (`46000`/`40005`)
+  start reauthentication, a transport error during the token refresh is an update failure and
+  impossible readings such as the `255` SOC sentinel become unknown.
+- The vehicle image stays available and keeps serving the cached or bundled image across failed
+  polls.
+- The S05 scheduled charge state follows the car's `ChrgSts` values instead of the previous
+  heuristic.
+
+### Removed
+
+- **The "Log API traffic" option.** The full diagnostics capture replaces it: it records every REST
+  request/response and MQTT exchange, survives reloads and can be downloaded. Entries that stored
+  the option stop writing those log lines, and the stale key is dropped the next time the options
+  are saved. The SDK-level `enable_api_logging` flag is unchanged.
+- `sensor.mileage_yesterday` and `sensor.trip_mileage`, which no source reports, and the S05 PHEV
+  fuel tank capacity sensor, which is always unknown. Their entity-registry entries are removed on
+  setup.
+
+### Upgrade
+
+- **Home Assistant 2026.11.0 or newer is required.** Update through HACS and restart Home
+  Assistant.
+- New entities: `absolute_humidity`, the S05 BEV charge-schedule entities and, on the S05 PHEV,
+  `switch.<car>_charge_schedule_to_full`. Removed: the two mileage sensors and the S05 PHEV tank
+  capacity sensor. The other entity ids and unique ids do not change.
+- `cabin_humidity` keeps its entity id but now shows the derived relative percentage.
+- The live MQTT session is enabled by default; disable **Keep a live MQTT connection** in the
+  options to fall back to polling.
+- SDA entries now validate against the production gateway. If a stored token is expired, use the
+  reauthentication flow to paste a fresh one.
+
 ## 1.9.0-b8 - 2026-11-22
 
 ### Added

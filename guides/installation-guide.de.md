@@ -29,7 +29,7 @@ normal.
 - Ein kompatibles Deepal-Fahrzeug (S05, S07), das mit einem My Changan Konto verknüpft ist.
 - Zugriff auf die **My Changan** App mit dem Hauptkonto.
 - Eine andere E-Mail-Adresse oder Telefonnummer für das Zweitkonto.
-- Home Assistant 2026.8.0 oder neuer.
+- Home Assistant 2026.11.0 oder neuer.
 - Installiertes [HACS](https://hacs.xyz/docs/use/download/download/). Falls noch nicht vorhanden,
   folge der offiziellen Installationsanleitung unter
   <https://hacs.xyz/docs/use/download/download/>.

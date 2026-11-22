@@ -47,7 +47,7 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 | Model | Notes |
 | --- | --- |
-| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. Neither powertrain exposes an outside-temperature sensor. The charging schedule is available only on the S05 PHEV. |
+| S05 EV / S05 PHEV | Telemetry and signed remote controls over MQTT and the REST API. |
 | S07 | Not tested. Telemetry and signed remote controls through the REST API. |
 | E07 | Only tested on SDA API. Telemetry through the REST API. |
 
@@ -59,13 +59,18 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
   reauthentication flow. If a verification code does not arrive, the login step can resend it or
   correct the destination; Changan is currently not delivering SMS codes, so the email method is
   recommended.
-- Integration options for the scan interval, API logging and the regional environment.
+- Integration options for the scan interval, the regional environment, the live MQTT connection,
+  the wake behaviour and the full diagnostics capture.
 
 ### Telemetry
 
 - REST telemetry: battery and range, charging state and currents, remaining charge time, charge
   limit (only in some vehicles), charge schedule and plan, doors, windows, climate, seats, tires and
   lamps.
+- **Live MQTT telemetry** for MQTT-backed vehicles (S05): the integration keeps one supervised
+  connection open and publishes the car's unsolicited reports within seconds, merging partial
+  deltas instead of waiting for the next poll. It is enabled by default and falls back to the
+  one-shot exchange when it is disabled or the connection drops.
 - MQTT telemetry for MQTT-backed vehicles (S05) through the CA gateway, including the mileage
   fields, the dashboard warning lights (12 V battery, tire pressure, ABS, airbag, brake fluid,
   brakes, power steering, power limit, power system, traction battery low and coolant
@@ -75,6 +80,12 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 - Climate target temperature, outside temperature (when the vehicle reports it; the S05 does not),
   fan level, the license plate and per-window opening-degree sensors (the opening sensors ship
   disabled by default because the scale is not confirmed).
+- Cabin humidity in two forms: `cabin_humidity` derives the relative percentage from the absolute
+  humidity in g/m³ the car reports, and the `absolute_humidity` sensor exposes that raw value.
+  Values the car cannot provide stay unknown.
+- Warning lights follow a settle rule: the self-test the car runs when it wakes is not published as
+  a fault until the vehicle has been ready for 60 seconds, and a confirmed fault is hidden while
+  the car is off or asleep. Healthy values keep their last known state.
 - Fuel telemetry on PHEV/range-extender vehicles (fuel level, fuel range and tank capacity).
 - **Opt-in vehicle location**: enable *Fetch the vehicle location* in the options to request and
   expose the car position as a device tracker. **European vehicles currently report no location**, so
@@ -86,7 +97,8 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 - MQTT-backed vehicles (S05) report telemetry only while they are awake. The refresh button wakes a
   sleeping vehicle with the same service the official app uses and waits for a fresh report; wakes
   are throttled per vehicle so Home Assistant cannot drain the 12 V battery, and the periodic poll
-  never wakes the car.
+  never wakes the car. With the live MQTT session enabled, everything the car reports while awake
+  reaches Home Assistant without waiting for the scan interval.
 - While a charging session is open, the integration reads only the charging vehicles every 10
   minutes and stops as soon as the session closes.
 - Waking the vehicle can take up to 20 seconds before it reports again.
@@ -95,8 +107,10 @@ models; Chinese SDA accounts can also be configured by pasting an access token.
 
 ### Remote controls
 
-- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule (S05
-  PHEV only), lights, horn and lights-and-horn together.
+- Signed REST commands: climate, door lock, windows, trunk, charge limit, charge schedule, lights,
+  horn and lights-and-horn together.
+- Charge-schedule control on the S05 BEV and PHEV through a switch and start/end time entities,
+  plus the `deepal.set_charge_schedule` service for automations.
 - Comfort commands: seat heating and ventilation levels and steering-wheel heating.
 - The door lock, window and trunk commands require the remote control PIN created with the account
   Home Assistant signs in with; their entities are only created once the PIN is saved in the
@@ -243,18 +257,24 @@ Open **Settings > Devices & services > Deepal Alternative > Configure** to chang
 - **Remote control PIN**: required for the door lock, window and trunk commands. Use the PIN created
   with the account Home Assistant signs in with (the secondary one); it is verified against the
   account when saved, so a PIN created with another account is rejected before it is stored.
-- **Scan interval**, **API logging**, **full diagnostics capture** and **regional environment**:
-  polling cadence and troubleshooting helpers. Leave the defaults unless you are debugging. Every
-  cycle reads each vehicle over MQTT plus the app condition, so an account with several cars can
-  raise the interval (for example to 5 minutes) to make fewer cloud requests.
+- **Wake the vehicle when needed** and **Keep a live MQTT connection**: the refresh button and the
+  PIN commands wake a sleeping S05 first (disable the wake to protect the 12 V battery if you
+  refresh very often), and the live session keeps one MQTT connection open so reports arrive in
+  seconds. Both are enabled by default.
+- **Fetch the vehicle location**: opt-in device tracker. European vehicles currently report no
+  location, so it may stay unknown.
+- **Scan interval** and **regional environment**: polling cadence and the gateway set. Leave the
+  defaults unless you are debugging. Every cycle reads each vehicle over MQTT plus the app
+  condition, so an account with several cars can raise the interval (for example to 5 minutes) to
+  make fewer cloud requests.
 - **Full diagnostics capture**: writes every REST request/response and MQTT exchange to
-  `/config/deepal_diagnostics`, under the integration's **Diagnostics** section in the same options
-  form. The option is off by default. The section shows the active file and a signed download link,
-  and its action selector can start a new file, delete all files or refresh the link. Deleting
-  requires the confirmation checkbox. The files are redacted (tokens, keys, VIN, email, phone, PIN,
-  identifiers and location hidden), rotate at 10 MB and keep the five most recent segments. The
-  capture grows while it is enabled, so disable it when you have the file; the rotation keeps the
-  disk use bounded.
+  `/config/deepal_diagnostics`, under the **Full diagnostics capture** section of the same options
+  form. The option is off by default and grows while it is enabled, so enable it, reproduce the
+  problem and disable it again when you have the file. The section shows the active file and a
+  signed download link, and its action selector can start a new file, delete all files or refresh
+  the link. Deleting requires the confirmation checkbox. The files are redacted (tokens, keys, VIN,
+  email, phone, PIN, identifiers and location hidden), rotate at 10 MB and keep the five most
+  recent segments, so the rotation keeps the disk use bounded.
 
 ## Automation examples
 

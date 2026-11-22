@@ -210,7 +210,6 @@
         "data": {
           "scan_interval": "Intervalo de sondeo (segundos)",
           "control_pin": "PIN de control remoto",
-          "enable_api_logging": "Registrar tráfico API",
           "wake": "Despertar el vehículo cuando haga falta",
           "mqtt_live_session": "Mantener una conexión MQTT viva",
           "enable_location": "Obtener la ubicación del coche",
@@ -220,7 +219,6 @@
         "data_description": {
           "scan_interval": "Cada cuánto sondea Home Assistant el vehículo y lee la condición de la app, en segundos (30-3600). La sesión MQTT viva sigue entregando reportes entre medias.",
           "control_pin": "PIN de control remoto de My Changan. Necesario para bloquear/desbloquear, mover las ventanillas o abrir el maletero.",
-          "enable_api_logging": "Escribe cada petición y respuesta de la API en el log de Home Assistant, con tokens, claves, VIN, email, teléfono, PIN y número de serie ocultos. Actívalo solo al solucionar problemas.",
           "wake": "Despertar un vehículo MQTT dormido antes de actualizar o enviar un comando con PIN. Activado por defecto; desactívalo para cuidar la batería de 12 V si actualizas muy a menudo.",
           "mqtt_live_session": "Mantén una conexión MQTT abierta para los vehículos MQTT para que sus reportes lleguen a Home Assistant en segundos. Activado por defecto; desactívalo para volver al sondeo.",
           "enable_location": "Solicita y expone la posición del coche. Actualmente los vehículos europeos no la envían, así que el rastreador puede quedarse desconocido; está pensado para servidores que sí la expongan.",

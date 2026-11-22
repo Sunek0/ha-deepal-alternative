@@ -44,7 +44,6 @@ from .const import (
     CONF_USER_ID,
     CONF_VEHICLE_ID,
     CONF_SCAN_INTERVAL,
-    CONF_ENABLE_API_LOGGING,
     CONF_ENABLE_DIAGNOSTICS_CAPTURE,
     CONF_DIAGNOSTICS_ACTION,
     CONF_DIAGNOSTICS_CONFIRM_DELETE,
@@ -1023,10 +1022,6 @@ class DeepalOptionsFlow(OptionsFlowWithReload):
                     type=selector.TextSelectorType.PASSWORD
                 )
             ),
-            vol.Optional(
-                CONF_ENABLE_API_LOGGING,
-                default=options.get(CONF_ENABLE_API_LOGGING, False),
-            ): bool,
             vol.Optional(DIAGNOSTICS_SECTION): section(
                 vol.Schema(
                     {

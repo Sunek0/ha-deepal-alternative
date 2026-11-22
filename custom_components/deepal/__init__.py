@@ -40,7 +40,6 @@ from .const import (
     CONF_USER_ID,
     CONF_ENVIRONMENT,
     CONF_SCAN_INTERVAL,
-    CONF_ENABLE_API_LOGGING,
     CONF_ENABLE_LOCATION,
     CONF_WAKE,
     CONF_MQTT_LIVE_SESSION,
@@ -93,9 +92,6 @@ def _build_client(
                 entry.options.get(CONF_ENVIRONMENT)
                 or entry.data.get(CONF_ENVIRONMENT)
                 or DEFAULT_ENVIRONMENT
-            ),
-            enable_api_logging=bool(
-                entry.options.get(CONF_ENABLE_API_LOGGING, False)
             ),
             httpx_client=get_async_client(hass),
             on_exchange=on_exchange,

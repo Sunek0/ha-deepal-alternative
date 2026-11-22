@@ -27,7 +27,7 @@ on the phone.
 - A compatible Deepal vehicle (S05, S07) linked to a My Changan account.
 - Access to the **My Changan** app with the main account.
 - A different email address or phone number for the secondary account.
-- Home Assistant 2026.8.0 or later.
+- Home Assistant 2026.11.0 or later.
 - [HACS](https://hacs.xyz/docs/use/download/download/) installed. If you do not have it yet, follow
   the official installation instructions at <https://hacs.xyz/docs/use/download/download/>.
 
