@@ -741,3 +741,95 @@ def test_language_selector_lists_every_shipped_language() -> None:
         assert f'"{name}"' in constants, name
     for code in ("de", "en", "es", "fr", "it", "pt"):
         assert f'  "{code}": {{' in bundle, code
+
+
+# --- Settings sheet dismissal on phones -----------------------------------
+
+MOBILE_QUERY = "@media (max-width: 600px)"
+
+
+def _mobile_styles() -> str:
+    """The narrow-layout media block, without the :host([narrow]) overrides."""
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+    return styles.split(MOBILE_QUERY, 1)[1].split(":host([narrow])", 1)[0]
+
+
+def test_settings_sheet_keeps_clear_of_the_safe_areas() -> None:
+    """The full-screen sheet pads its header and body by the device insets."""
+    mobile = _mobile_styles()
+
+    assert (
+        ".settings-panel { width: 100%; max-height: 100vh; max-height: 100dvh; "
+        "border-radius: 0; }" in mobile
+    )
+    assert (
+        ".settings-head { padding-top: max(var(--dp-space-md), "
+        "env(safe-area-inset-top, 0px)); }" in mobile
+    )
+    assert (
+        ".settings-body { padding-bottom: calc(48px + "
+        "env(safe-area-inset-bottom, 0px)); }" in mobile
+    )
+
+
+def test_settings_close_button_has_a_touch_sized_target() -> None:
+    """The settings dialog meets the 44 px minimum; the climate dialog keeps its size."""
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+    base = styles.split("\n.settings-close {", 1)[1].split("}", 1)[0]
+    settings = styles.split(".settings-panel .settings-close {", 1)[1].split("}", 1)[0]
+
+    assert "width: 36px;" in base
+    assert "width: 44px;" in settings
+    assert "height: 44px;" in settings
+
+
+def test_settings_backdrop_taps_reach_the_sheet() -> None:
+    """The stretched host stays transparent so a tap outside lands on the sheet."""
+    styles = (SRC / "30_styles.js").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"\.settings-sheet > deepal-card-settings \{[^}]*pointer-events: none;",
+        styles,
+    )
+    panel = styles.split("\n.settings-panel {", 1)[1].split("}", 1)[0]
+    assert "pointer-events: auto;" in panel
+
+
+def test_settings_sheet_closes_with_the_close_button_escape_and_backdrop() -> None:
+    """All three exits share one close path that persists the changes."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert "else if (this._settingsOpen) this._closeSettings();" in card
+    assert 'classList.contains("settings-sheet")' in card
+    assert 'addEventListener("settings-close", () => this._closeSettings())' in card
+    assert "this._settingsFocusReturn = true;" in card
+    assert "this._commitSettings();" in card.split("_closeSettings() {", 1)[1]
+
+
+def test_settings_sheet_is_a_dialog_and_returns_focus() -> None:
+    """The sheet exposes dialog semantics and moves focus in and back out."""
+    card = (SRC / "70_card.js").read_text(encoding="utf-8")
+
+    assert 'role="dialog" aria-modal="true" aria-label="${title}"' in card
+    assert "this._focusSettingsClose();" in card
+    assert "this._focusSettingsOpener();" in card
+    assert "this._settingsFocusPending = true;" in card
+
+
+BUILD_PANEL = REPO_ROOT / "scripts" / "build_panel.py"
+
+
+@pytest.mark.skipif(
+    not BUILD_PANEL.is_file(),
+    reason="the build script is not published to the GitHub mirror",
+)
+def test_generated_bundle_is_up_to_date() -> None:
+    """The served bundle matches src/ and texts/ (and the manifest version)."""
+    result = subprocess.run(
+        [sys.executable, str(BUILD_PANEL), "--check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (result.stdout + result.stderr).strip()

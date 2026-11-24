@@ -898,7 +898,12 @@ deepal-card-settings { display: block; width: 100%; }
   background: rgba(0, 0, 0, 0.58);
 }
 
-.settings-sheet > deepal-card-settings { width: min(680px, 100%); }
+/* The host stretches over the sheet, so it must stay transparent to taps:
+   a click outside the panel then lands on the settings sheet and closes it. */
+.settings-sheet > deepal-card-settings {
+  width: min(680px, 100%);
+  pointer-events: none;
+}
 
 .settings-panel {
   display: flex;
@@ -912,6 +917,7 @@ deepal-card-settings { display: block; width: 100%; }
   background: var(--dp-surface);
   color: var(--dp-text);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
 }
 
 .settings-panel.embedded {
@@ -947,6 +953,9 @@ deepal-card-settings { display: block; width: 100%; }
   color: var(--dp-text);
   cursor: pointer;
 }
+
+/* The in-card settings dialog is a touch-first surface: 44 px minimum. */
+.settings-panel .settings-close { width: 44px; height: 44px; }
 
 .settings-tabs {
   display: flex;
@@ -1333,8 +1342,9 @@ deepal-card-settings { display: block; width: 100%; }
   .modal-columns { grid-template-columns: minmax(0, 1fr); }
 
 .settings-sheet { padding: 0; align-items: stretch; }
-  .settings-panel { width: 100%; max-height: 100vh; border-radius: 0; }
-  .settings-body { padding-bottom: 48px; }
+  .settings-panel { width: 100%; max-height: 100vh; max-height: 100dvh; border-radius: 0; }
+  .settings-head { padding-top: max(var(--dp-space-md), env(safe-area-inset-top, 0px)); }
+  .settings-body { padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px)); }
 }
 
 :host([narrow]) .vitals { grid-template-columns: repeat(2, minmax(0, 1fr)); }

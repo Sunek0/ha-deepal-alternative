@@ -141,6 +141,8 @@ class DeepalCard extends DeepalCardBase {
     this._settingsTab = "hero";
     this._settingsScroll = 0;
     this._settingsDirty = false;
+    this._settingsFocusPending = false;
+    this._settingsFocusReturn = false;
     this._uiRestored = false;
     this._modal = null;
     this._modalTab = null;
@@ -152,29 +154,32 @@ class DeepalCard extends DeepalCardBase {
     this._toast = null;
     this._saveTimer = null;
     this._onKeyDown = (event) => {
-      if (event.key === "Escape" && this._modal) this._closeModal();
+      if (event.key !== "Escape") return;
+      if (this._modal) this._closeModal();
+      else if (this._settingsOpen) this._closeSettings();
+    };
+    this._onUserIntent = () => {
+      // A restore that has not landed yet must not steal focus back once the
+      // user has moved on to another control.
+      this._settingsFocusReturn = false;
     };
     this.shadowRoot.addEventListener("click", (event) => {
-      if (
-        event.target.classList &&
-        event.target.classList.contains("modal-sheet")
-      ) {
+      if (!event.target.classList) return;
+      if (event.target.classList.contains("modal-sheet")) {
         this._closeModal();
+      } else if (event.target.classList.contains("settings-sheet")) {
+        this._closeSettings();
       }
     });
     this.shadowRoot.addEventListener("settings-change", (event) => this._patch(event.detail || {}));
-    this.shadowRoot.addEventListener("settings-close", () => {
-      this._settingsOpen = false;
-      this._settingsScroll = 0;
-      this._saveUiState();
-      this._render();
-      this._commitSettings();
-    });
+    this.shadowRoot.addEventListener("settings-close", () => this._closeSettings());
   }
 
   connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this._onKeyDown);
+    document.addEventListener("pointerdown", this._onUserIntent, true);
+    document.addEventListener("keydown", this._onUserIntent, true);
   }
 
   static getStubConfig(hass) {
@@ -215,6 +220,8 @@ class DeepalCard extends DeepalCardBase {
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this._onKeyDown);
+    document.removeEventListener("pointerdown", this._onUserIntent, true);
+    document.removeEventListener("keydown", this._onUserIntent, true);
     super.disconnectedCallback();
     if (this._settingsDirty) this._commitSettings();
   }
@@ -275,12 +282,36 @@ class DeepalCard extends DeepalCardBase {
       const value = JSON.parse(sessionStorage.getItem(this._uiKey()) || "null");
       if (value && Date.now() - value.t < 30000) {
         this._settingsOpen = true;
+        this._settingsFocusPending = true;
         this._settingsTab = value.tab || "hero";
         this._settingsScroll = value.scroll || 0;
       }
     } catch (error) {
       // Ignore a malformed or unavailable sessionStorage.
     }
+  }
+
+  /** Dismiss the settings sheet and persist the pending changes. */
+  _closeSettings() {
+    if (!this._settingsOpen) return;
+    this._settingsOpen = false;
+    this._settingsScroll = 0;
+    this._settingsFocusReturn = true;
+    this._saveUiState();
+    this._render();
+    this._commitSettings();
+  }
+
+  /** Move focus into the open settings dialog. */
+  _focusSettingsClose() {
+    const settings = this.shadowRoot.querySelector("deepal-card-settings");
+    if (settings) settings.focusClose();
+  }
+
+  /** Return focus to the control that opened the settings sheet. */
+  _focusSettingsOpener() {
+    const opener = this.shadowRoot.querySelector('[data-action="open-settings"]');
+    if (opener) opener.focus();
   }
 
   _patch(patch) {
@@ -317,6 +348,7 @@ class DeepalCard extends DeepalCardBase {
       }, 5000);
       this._render();
     }
+    this._settingsFocusReturn = false;
   }
 
   async _saveRemote() {
@@ -1117,12 +1149,21 @@ class DeepalCard extends DeepalCardBase {
       settings.hass = this._hass;
       settings.tab = this._settingsTab;
       settings.config = this._config;
+      if (this._settingsFocusPending) {
+        this._settingsFocusPending = false;
+        this._focusSettingsClose();
+      }
       if (this._settingsScroll) {
         requestAnimationFrame(() => {
           const body = settings.shadowRoot && settings.shadowRoot.querySelector(".settings-body");
           if (body) body.scrollTop = this._settingsScroll;
         });
       }
+    } else if (this._settingsFocusReturn) {
+      // Keep the focus on the card through the re-renders a closed sheet causes
+      // (the save toast rebuilds the footer button a moment later).
+      this._focusSettingsOpener();
+      if (!this._settingsDirty) this._settingsFocusReturn = false;
     }
     this._saveUiState();
   }
@@ -1145,11 +1186,13 @@ class DeepalCard extends DeepalCardBase {
       this._settingsOpen = true;
       this._settingsTab = "hero";
       this._settingsScroll = 0;
+      this._settingsFocusReturn = false;
       this._modal = null;
       this._modalTab = null;
       this._modalScroll = 0;
       this._modalScrollReset = true;
       this._saveUiState();
+      this._settingsFocusPending = true;
       this._render();
       return true;
     }
@@ -1228,6 +1271,11 @@ class DeepalCardSettings extends HTMLElement {
 
   get embedded() {
     return this.hasAttribute("embedded");
+  }
+
+  focusClose() {
+    const close = this.shadowRoot.querySelector(".settings-close");
+    if (close) close.focus();
   }
 
   _t(key, values) {
@@ -1402,10 +1450,12 @@ class DeepalCardSettings extends HTMLElement {
 
   _render() {
     if (!this._config) return;
+    const title = escapeHtml(this._t("settings"));
+    const dialog = this.embedded ? "" : ` role="dialog" aria-modal="true" aria-label="${title}"`;
     this.shadowRoot.innerHTML = `<style>${PANEL_CSS}</style>
-      <div class="settings-panel ${this.embedded ? "embedded" : ""}">
+      <div class="settings-panel ${this.embedded ? "embedded" : ""}"${dialog}>
         <div class="settings-head">
-          <h3>${escapeHtml(this._t("settings"))}</h3>
+          <h3>${title}</h3>
           ${this.embedded ? "" : `<button class="settings-close" data-settings-close aria-label="${escapeHtml(this._t("close"))}"><ha-icon icon="${PANEL_ICONS.close}"></ha-icon></button>`}
         </div>
         ${this._tabs()}

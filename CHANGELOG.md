@@ -4,6 +4,22 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.1-b1 - 2026-11-24
+
+### Fixed
+
+- **The card's settings sheet can be closed on phones.** On narrow screens the sheet is full
+  screen: the close button now stays below the device safe areas, the scrollable body clears the
+  home indicator and the sheet uses the dynamic viewport height. The close control has a 44 px
+  target and the panel is announced as a dialog. Escape, a tap outside the panel and the close
+  button all dismiss it through the same path that saves pending changes; focus returns to the
+  settings button.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. No entity ids change. Reload the dashboard (or
+  reopen the Companion app) to load the new card bundle.
+
 ## 1.9.0 - 2026-11-22
 
 ### Added
