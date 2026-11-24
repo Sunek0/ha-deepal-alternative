@@ -152,7 +152,9 @@ class DeepalCard extends DeepalCardBase {
     this._toast = null;
     this._saveTimer = null;
     this._onKeyDown = (event) => {
-      if (event.key === "Escape" && this._modal) this._closeModal();
+      if (event.key !== "Escape") return;
+      if (this._modal) this._closeModal();
+      else if (this._settingsOpen) this.shadowRoot.dispatchEvent(new CustomEvent("settings-close"));
     };
     this.shadowRoot.addEventListener("click", (event) => {
       if (
@@ -160,6 +162,11 @@ class DeepalCard extends DeepalCardBase {
         event.target.classList.contains("modal-sheet")
       ) {
         this._closeModal();
+      } else if (
+        event.target.classList &&
+        event.target.classList.contains("settings-sheet")
+      ) {
+        this.shadowRoot.dispatchEvent(new CustomEvent("settings-close"));
       }
     });
     this.shadowRoot.addEventListener("settings-change", (event) => this._patch(event.detail || {}));

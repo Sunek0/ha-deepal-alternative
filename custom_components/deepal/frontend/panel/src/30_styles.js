@@ -1333,8 +1333,9 @@ deepal-card-settings { display: block; width: 100%; }
   .modal-columns { grid-template-columns: minmax(0, 1fr); }
 
 .settings-sheet { padding: 0; align-items: stretch; }
-  .settings-panel { width: 100%; max-height: 100vh; border-radius: 0; }
-  .settings-body { padding-bottom: 48px; }
+  .settings-panel { width: 100%; max-height: 100vh; max-height: 100dvh; border-radius: 0; }
+  .settings-head { padding-top: max(var(--dp-space-md), env(safe-area-inset-top, 0px)); }
+  .settings-body { padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px)); }
 }
 
 :host([narrow]) .vitals { grid-template-columns: repeat(2, minmax(0, 1fr)); }

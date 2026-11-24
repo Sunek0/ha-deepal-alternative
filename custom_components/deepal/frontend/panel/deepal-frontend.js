@@ -2869,8 +2869,9 @@ deepal-card-settings { display: block; width: 100%; }
   .modal-columns { grid-template-columns: minmax(0, 1fr); }
 
 .settings-sheet { padding: 0; align-items: stretch; }
-  .settings-panel { width: 100%; max-height: 100vh; border-radius: 0; }
-  .settings-body { padding-bottom: 48px; }
+  .settings-panel { width: 100%; max-height: 100vh; max-height: 100dvh; border-radius: 0; }
+  .settings-head { padding-top: max(var(--dp-space-md), env(safe-area-inset-top, 0px)); }
+  .settings-body { padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px)); }
 }
 
 :host([narrow]) .vitals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4820,7 +4821,9 @@ class DeepalCard extends DeepalCardBase {
     this._toast = null;
     this._saveTimer = null;
     this._onKeyDown = (event) => {
-      if (event.key === "Escape" && this._modal) this._closeModal();
+      if (event.key !== "Escape") return;
+      if (this._modal) this._closeModal();
+      else if (this._settingsOpen) this.shadowRoot.dispatchEvent(new CustomEvent("settings-close"));
     };
     this.shadowRoot.addEventListener("click", (event) => {
       if (
@@ -4828,6 +4831,11 @@ class DeepalCard extends DeepalCardBase {
         event.target.classList.contains("modal-sheet")
       ) {
         this._closeModal();
+      } else if (
+        event.target.classList &&
+        event.target.classList.contains("settings-sheet")
+      ) {
+        this.shadowRoot.dispatchEvent(new CustomEvent("settings-close"));
       }
     });
     this.shadowRoot.addEventListener("settings-change", (event) => this._patch(event.detail || {}));
