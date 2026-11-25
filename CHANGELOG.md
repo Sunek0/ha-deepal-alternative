@@ -10,9 +10,15 @@ All notable changes to Deepal Alternative are documented here. The format follow
 
 - **Norway in the login country list.** The sales-country selector of the international login steps
   offers Norway (`NO`, +47), and the phone/SMS step sends `countryCode` `47` with the request.
-  Whether Changan accepts a Norwegian account is still up to their backend, and SMS delivery has
-  the same known limitation as the other countries: the server accepts the request but the code
-  may never arrive, in which case the email login is the supported path.
+  Whether Changan accepts a Norwegian account is still up to their backend.
+
+### Known issue
+
+- **SMS login may not deliver the code.** Changan's gateway accepts the SMS request
+  (`data: "SUC"`) but often does not deliver the code. Failed attempts are documented in September
+  and October 2026, and the official *My Changan* app shows the same behaviour with the same
+  account and number, so this is a delivery problem on Changan's side. Use the **email code**
+  login instead; both methods use the same gateway and the country selector applies to both.
 
 ### Upgrade
 
