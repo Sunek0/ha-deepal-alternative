@@ -4,6 +4,20 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.1-b2 - 2026-11-25
+
+### Added
+
+- **VIN sensor.** Every configured vehicle exposes its Vehicle Identification Number as a
+  diagnostic sensor, read from the account vehicle list and kept available while the car is asleep
+  or a telemetry poll fails.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. No entity ids or unique ids change; the new
+  diagnostic sensor is registered on the next reload. Reload the dashboard (or reopen the
+  Companion app) to load the card bundle with the new version.
+
 ## 1.9.1-b1 - 2026-11-24
 
 ### Fixed

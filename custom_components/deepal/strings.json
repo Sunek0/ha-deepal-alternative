@@ -416,6 +416,9 @@
       "license_plate": {
         "name": "License plate"
       },
+      "vin": {
+        "name": "VIN"
+      },
       "window_opening_front_left": {
         "name": "Window front left opening"
       },

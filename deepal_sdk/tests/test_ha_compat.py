@@ -136,6 +136,7 @@ class FakeCoordinator:
 def _fake_vehicle() -> SimpleNamespace:
     return SimpleNamespace(
         car_id="car-1",
+        vin="test-vin",
         series_name="Deepal S05 Max",
         series_code=None,
         car_name=None,
@@ -155,6 +156,7 @@ def _entities_by_platform() -> dict[str, list]:
             sensor.DeepalBatterySocSensor(coordinator, vehicle),
             sensor.DeepalRemainingRangeSensor(coordinator, vehicle),
             sensor.DeepalOdometerSensor(coordinator, vehicle),
+            sensor.DeepalVinSensor(coordinator, vehicle),
             sensor.DeepalTirePressureSensor(coordinator, vehicle, "front_left"),
             sensor.DeepalSeatLevelSensor(
                 coordinator, vehicle, "front_left", "heating_level"
@@ -1093,6 +1095,67 @@ def test_odometer_sensor_name() -> None:
     assert odometer._attr_has_entity_name is True
     assert odometer._attr_translation_key == "total_odometer"
     assert odometer._attr_unique_id == "deepal_car-1_total_odometer"
+
+
+def test_vin_sensor_reports_the_account_vin() -> None:
+    from homeassistant.const import EntityCategory
+
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    vin = sensor.DeepalVinSensor(coordinator, vehicle)
+
+    assert vin._attr_has_entity_name is True
+    assert vin._attr_translation_key == "vin"
+    assert vin._attr_unique_id == "deepal_car-1_vin"
+    assert vin.entity_category is EntityCategory.DIAGNOSTIC
+    assert vin.native_value == "test-vin"
+
+
+def test_vin_sensor_falls_back_to_the_condition_vin() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    vehicle.vin = ""
+    coordinator.data["car-1"] = VehicleCondition(
+        car_id="car-1", vin="condition-vin"
+    )
+
+    vin = sensor.DeepalVinSensor(coordinator, vehicle)
+
+    assert vin.native_value == "condition-vin"
+
+
+def test_vin_sensor_reports_the_list_value_without_coordinator_data() -> None:
+    coordinator = FakeCoordinator()
+    coordinator.data = None
+
+    vin = sensor.DeepalVinSensor(coordinator, _fake_vehicle())
+
+    assert vin.native_value == "test-vin"
+
+
+def test_vin_sensor_is_unknown_without_a_vin() -> None:
+    coordinator = FakeCoordinator()
+    vehicle = _fake_vehicle()
+    vehicle.vin = " "
+
+    vin = sensor.DeepalVinSensor(coordinator, vehicle)
+
+    assert vin.native_value is None
+    assert vin.available is True
+
+
+def test_vin_sensor_is_built_for_international_and_sda_entries() -> None:
+    for client in (None, object.__new__(DeepalIntlClient)):
+        coordinator = FakeCoordinator()
+        coordinator.client = client
+
+        entities = sensor.build_sensors(coordinator, _fake_vehicle())
+        vin = next(
+            entity for entity in entities if entity.translation_key == "vin"
+        )
+
+        assert vin.unique_id == "deepal_car-1_vin"
+        assert vin.native_value == "test-vin"
 
 
 def test_mileage_sensors_are_retired_for_every_vehicle() -> None:

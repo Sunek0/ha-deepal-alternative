@@ -406,6 +406,9 @@
       "license_plate": {
         "name": "Matrícula"
       },
+      "vin": {
+        "name": "VIN"
+      },
       "window_opening_front_left": {
         "name": "Janela dianteira esquerda abertura"
       },

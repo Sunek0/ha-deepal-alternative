@@ -406,6 +406,9 @@
       "license_plate": {
         "name": "Targa"
       },
+      "vin": {
+        "name": "VIN"
+      },
       "window_opening_front_left": {
         "name": "Finestrino anteriore sinistro apertura"
       },

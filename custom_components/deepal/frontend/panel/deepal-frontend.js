@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit; run scripts/build_panel.py after changing src/ or texts/.
-const PANEL_VERSION = "1.9.1-b1";
+const PANEL_VERSION = "1.9.1-b2";
 
 // ---- 10_constants.js ----
 // Constants shared by the card modules. The build script prepends the

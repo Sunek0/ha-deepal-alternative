@@ -207,6 +207,7 @@ def build_sensors(
         DeepalBatterySocSensor(coordinator, vehicle),
         DeepalRemainingRangeSensor(coordinator, vehicle),
         DeepalOdometerSensor(coordinator, vehicle),
+        DeepalVinSensor(coordinator, vehicle),
     ]
 
     s05 = is_s05(vehicle)
@@ -373,6 +374,41 @@ class DeepalOdometerSensor(DeepalBaseSensor):
         """Return the total odometer in km."""
         cond = self.coordinator.data.get(self._car_id)
         return cond.total_odometer_km if cond else None
+
+
+def _clean_vin(value: Any) -> str | None:
+    """Return a trimmed VIN, or None when the value carries no text."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+class DeepalVinSensor(DeepalBaseSensor):
+    """Vehicle Identification Number (VIN) sensor.
+
+    The VIN is static account data from the vehicle list, so the sensor keeps
+    reporting it while the car is asleep or the telemetry poll fails.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DeepalDataUpdateCoordinator, vehicle: Any) -> None:
+        super().__init__(coordinator, vehicle)
+        self._attr_unique_id = f"deepal_{vehicle.car_id}_vin"
+        self._attr_translation_key = "vin"
+
+    @property
+    def available(self) -> bool:
+        """Return True: the VIN is static account data, not telemetry."""
+        return True
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the account VIN, falling back to the latest condition VIN."""
+        condition = (self.coordinator.data or {}).get(self._car_id)
+        return _clean_vin(getattr(self.vehicle, "vin", None)) or _clean_vin(
+            getattr(condition, "vin", None)
+        )
 
 
 class DeepalTirePressureSensor(DeepalBaseSensor):

@@ -259,6 +259,9 @@
       "license_plate": {
         "default": "mdi:card-text-outline"
       },
+      "vin": {
+        "default": "mdi:identifier"
+      },
       "outside_temperature": {
         "default": "mdi:thermometer-lines"
       },
