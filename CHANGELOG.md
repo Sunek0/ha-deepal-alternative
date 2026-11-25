@@ -4,6 +4,21 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.1-b3 - 2026-11-26
+
+### Added
+
+- **Norway in the login country list.** The sales-country selector of the international login steps
+  offers Norway (`NO`, +47), and the phone/SMS step sends `countryCode` `47` with the request.
+  Whether Changan accepts a Norwegian account is still up to their backend, and SMS delivery has
+  the same known limitation as the other countries: the server accepts the request but the code
+  may never arrive, in which case the email login is the supported path.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. Existing entries keep their stored country; the
+  new option only shows up when configuring a new account or reauthenticating.
+
 ## 1.9.1-b2 - 2026-11-25
 
 ### Added

@@ -110,6 +110,7 @@ COUNTRY_OPTIONS = {
     "AT": "Austria (+43)",
     "IL": "Israel (+972)",
     "AU": "Australia (+61)",
+    "NO": "Norway (+47)",
 }
 
 COUNTRY_DIAL_CODES = {
@@ -128,6 +129,7 @@ COUNTRY_DIAL_CODES = {
     "AT": "43",
     "IL": "972",
     "AU": "61",
+    "NO": "47",
 }
 
 

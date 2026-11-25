@@ -381,6 +381,8 @@ def test_country_options_have_dial_codes() -> None:
     assert set(config_flow.COUNTRY_OPTIONS) == set(config_flow.COUNTRY_DIAL_CODES)
     assert config_flow.COUNTRY_OPTIONS["GR"] == "Greece (+30)"
     assert config_flow.COUNTRY_DIAL_CODES["GR"] == "30"
+    assert config_flow.COUNTRY_OPTIONS["NO"] == "Norway (+47)"
+    assert config_flow.COUNTRY_DIAL_CODES["NO"] == "47"
 
 
 def test_build_client_injects_the_shared_httpx_client(monkeypatch) -> None:
