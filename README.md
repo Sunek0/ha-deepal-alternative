@@ -1,6 +1,6 @@
 # Changan Deepal vehicles integration for Home Assistant
 
-Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, E07) over the official international and chinese API.
+Home Assistant custom integration for **My Changan / Deepal** connected vehicles (S05, S07, E07) over the official international and chinese SDA API.
 
 The integration provides the connection, the telemetry and the remote controls; the look comes from a dashboard card. It ships a built-in card for every model, and **Deepal S05 owners get the best result with the community Deepal Companion dashboard** (see [Dashboards and cards](#dashboards-and-cards)).
 
