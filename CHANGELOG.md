@@ -4,6 +4,41 @@ All notable changes to Deepal Alternative are documented here. The format follow
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.9.1 - 2026-11-27
+
+### Added
+
+- **VIN sensor.** Every configured vehicle exposes its Vehicle Identification Number as a
+  diagnostic sensor, read from the account vehicle list and kept available while the car is asleep
+  or a telemetry poll fails.
+- **Norway in the login country list.** The sales-country selector of the international login steps
+  offers Norway (`NO`, +47), and the phone/SMS step sends `countryCode` `47` with the request.
+  Whether Changan accepts a Norwegian account is still up to their backend.
+
+### Fixed
+
+- **The card's settings sheet can be closed on phones.** On narrow screens the sheet is full
+  screen: the close button now stays below the device safe areas, the scrollable body clears the
+  home indicator and the sheet uses the dynamic viewport height. The close control has a 44 px
+  target and the panel is announced as a dialog. Escape, a tap outside the panel and the close
+  button all dismiss it through the same path that saves pending changes; focus returns to the
+  settings button.
+
+### Known issue
+
+- **SMS login may not deliver the code.** Changan's gateway accepts the SMS request
+  (`data: "SUC"`) but often does not deliver the code. Failed attempts are documented in September
+  and October 2026, and the official *My Changan* app shows the same behaviour with the same
+  account and number, so this is a delivery problem on Changan's side. Use the **email code**
+  login instead; both methods use the same gateway and the country selector applies to both.
+
+### Upgrade
+
+- Update through HACS and restart Home Assistant. No entity ids or unique ids change; the new VIN
+  diagnostic sensor is registered on the next reload. Existing entries keep their stored country,
+  so the Norway option only shows up when configuring a new account or reauthenticating. Reload
+  the dashboard (or reopen the Companion app) to load the card bundle with the new version.
+
 ## 1.9.1-b3 - 2026-11-26
 
 ### Added
